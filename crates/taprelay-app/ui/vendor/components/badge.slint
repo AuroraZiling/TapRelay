@@ -1,0 +1,55 @@
+import { Tokens } from "../theme/tokens.slint";
+
+export enum BadgeVariant { default, secondary, outline, destructive, ghost, link }
+export enum BadgeSize    { sm, default }
+
+export component Badge inherits Rectangle {
+    // Visual style — default, secondary, outline, destructive, ghost, link.
+    in property <BadgeVariant> variant: BadgeVariant.default;
+    // Height + padding — sm, default, lg.
+    in property <BadgeSize>    size:    BadgeSize.default;
+    // Label rendered inside the badge.
+    in property <string> text;
+
+    property <length> hpad: size == BadgeSize.sm ? 6px : 8px;   // px-2
+
+    height: size == BadgeSize.sm ? 18px : 22px;
+    width: label.preferred-width + 2 * hpad;
+    border-radius: Tokens.radius-md;   // shadcn badge rounded-md
+
+    background:
+        variant == BadgeVariant.secondary ? Tokens.color-secondary :
+        variant == BadgeVariant.outline ? transparent :
+        variant == BadgeVariant.ghost ? transparent :
+        variant == BadgeVariant.link ? transparent :
+        variant == BadgeVariant.destructive ? Tokens.color-destructive.with-alpha(0.2) :
+        Tokens.color-primary;
+
+    border-width: variant == BadgeVariant.outline ? 1px : 0px;
+    border-color: Tokens.color-border-hairline;
+
+    label := Text {
+        x: (parent.width - self.preferred-width) / 2;
+        y: (parent.height - self.preferred-height) / 2;
+        text: root.text;
+        font-size:
+            size == BadgeSize.sm ? 11px : Tokens.typography-label-size;
+        font-weight: Tokens.typography-weight-medium;
+        color:
+            variant == BadgeVariant.destructive ? Tokens.color-destructive :
+            variant == BadgeVariant.outline ? Tokens.color-foreground :
+            variant == BadgeVariant.secondary ? Tokens.color-foreground :
+            variant == BadgeVariant.ghost ? Tokens.color-muted-foreground :
+            variant == BadgeVariant.link ? Tokens.color-primary :
+            Tokens.color-primary-foreground;
+    }
+
+    // link variant: underline to read as a link.
+    if variant == BadgeVariant.link: Rectangle {
+        x: label.x;
+        y: label.y + label.preferred-height - 1px;
+        width: label.preferred-width;
+        height: 1px;
+        background: Tokens.color-primary;
+    }
+}

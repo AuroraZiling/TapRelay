@@ -1,0 +1,86 @@
+import { Button } from "../vendor/components/button.slint";
+import { Tokens } from "../vendor/theme/tokens.slint";
+import { I18n } from "@i18n";
+
+export component Heading inherits Text {
+    font-size: 24px;
+    font-weight: 600;
+    color: Tokens.color-foreground;
+}
+export component Caption inherits Text {
+    font-size: 13px;
+    color: Tokens.color-muted-foreground;
+    wrap: word-wrap;
+}
+export component Label inherits Text {
+    font-size: 14px;
+    color: Tokens.color-foreground;
+    wrap: word-wrap;
+}
+export component StatusDot inherits Rectangle {
+    in property <color> signal;
+    in property <length> dot-size: 8px;
+    width: 16px;
+    height: 16px;
+    background: transparent;
+    Rectangle {
+        x: (parent.width - root.dot-size) / 2;
+        y: (parent.height - root.dot-size) / 2;
+        width: root.dot-size;
+        height: root.dot-size;
+        border-radius: root.dot-size / 2;
+        background: root.signal;
+    }
+}
+export component Panel inherits Rectangle {
+    background: Tokens.color-card;
+    border-color: Tokens.color-border-hairline;
+    border-width: 1px;
+    border-radius: 10px;
+    @children
+}
+export component Spinner inherits Rectangle {
+    width: 16px;
+    height: 16px;
+    background: transparent;
+    property <float> phase: 0;
+    Timer {
+        interval: 650ms;
+        running: true;
+        triggered => {
+            root.phase = 1 - root.phase;
+        }
+    }
+    Rectangle {
+        x: 2px;
+        y: 2px;
+        width: 12px;
+        height: 12px;
+        border-radius: 6px;
+        border-width: 2px;
+        border-color: Tokens.color-muted-foreground;
+        opacity: root.phase == 0 ? 0.35: 1;
+        animate opacity {
+            duration: 650ms;
+        }
+    }
+}
+export component ErrorBanner inherits Panel {
+    in property <string> problem;
+    callback action(string, int, string);
+    min-height: 62px;
+    VerticalLayout {
+        padding: 12px;
+        Label {
+            text: root.problem;
+            color: #e64f55;
+        }
+        Button {
+            text: I18n.text.common-retry;
+            variant: outline;
+            clicked=> {
+                root.action("retry",0,"");
+            }
+        }
+    }
+}

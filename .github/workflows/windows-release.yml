@@ -1,0 +1,129 @@
+name: Windows Release
+
+on:
+  push:
+    tags: ['v*']
+  delete:
+
+concurrency:
+  group: windows-release-${{ github.event_name == 'delete' && github.event.ref || github.ref_name }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  release:
+    if: github.event_name == 'push'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.94.0
+        with:
+          components: rustfmt, clippy
+      - name: Validate release version
+        id: version
+        shell: pwsh
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:TAG_NAME -cnotmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+            throw 'Release tags must use vX.Y.Z.'
+          }
+          $metadata = cargo metadata --no-deps --locked --format-version 1
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot read Cargo metadata.' }
+          $packages = @(($metadata | ConvertFrom-Json).packages | Where-Object name -eq 'taprelay-app')
+          if ($packages.Count -ne 1) { throw 'Expected one taprelay-app package.' }
+          $version = $packages[0].version
+          if ($env:TAG_NAME -cne "v$version") {
+            throw "Tag '$env:TAG_NAME' must match Cargo version 'v$version'."
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - run: cargo rustc --release --locked -p taprelay-app -- -C target-feature=+crt-static
+      - name: Stage single executable
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          New-Item -ItemType Directory -Path release-assets -Force | Out-Null
+          Copy-Item -LiteralPath target/release/taprelay.exe -Destination "release-assets/TapRelay_$($env:VERSION)_windows_x64.exe"
+      - name: Publish GitHub Release
+        uses: actions/github-script@v7
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+          VERSION: ${{ steps.version.outputs.version }}
+        with:
+          script: |
+            const fs = require('node:fs');
+            const repo = context.repo;
+            const tag = process.env.TAG_NAME;
+            // Never recreate a tag removed while the build was running.
+            let { data: ref } = await github.rest.git.getRef({ ...repo, ref: `tags/${tag}` });
+            let object = ref.object;
+            while (object.type === 'tag') {
+              const { data } = await github.rest.git.getTag({ ...repo, tag_sha: object.sha });
+              object = data.object;
+            }
+            if (object.type !== 'commit' || object.sha !== context.sha) {
+              throw new Error('The tag no longer points to the commit that was built.');
+            }
+            const name = `TapRelay_${process.env.VERSION}_windows_x64.exe`;
+            const asset = fs.readFileSync(`release-assets/${name}`);
+            if (!asset.length) throw new Error('Release executable is empty.');
+            let release;
+            try {
+              ({ data: release } = await github.rest.repos.getReleaseByTag({ ...repo, tag }));
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              ({ data: release } = await github.rest.repos.createRelease({
+                ...repo, tag_name: tag, name: `TapRelay ${tag}`,
+                draft: false, prerelease: false, generate_release_notes: true,
+              }));
+            }
+            const assets = await github.paginate(github.rest.repos.listReleaseAssets, {
+              ...repo, release_id: release.id, per_page: 100,
+            });
+            for (const existing of assets.filter(asset => asset.name === name)) {
+              await github.rest.repos.deleteReleaseAsset({ ...repo, asset_id: existing.id });
+            }
+            await github.rest.repos.uploadReleaseAsset({
+              ...repo, release_id: release.id, name,
+              headers: { 'content-type': 'application/octet-stream', 'content-length': asset.length },
+              data: asset,
+            });
+            core.info(`Published ${name} to ${release.html_url}`);
+
+  delete-release:
+    if: github.event_name == 'delete' && github.event.ref_type == 'tag' && startsWith(github.event.ref, 'v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Delete release for removed tag
+        uses: actions/github-script@v7
+        env:
+          TAG_NAME: ${{ github.event.ref }}
+        with:
+          script: |
+            const tag = process.env.TAG_NAME;
+            if (!/^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(tag)) {
+              core.notice('Ignoring a non-stable release tag.');
+              return;
+            }
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              ...context.repo, per_page: 100,
+            });
+            for (const release of releases.filter(release => release.tag_name === tag)) {
+              await github.rest.repos.deleteRelease({ ...context.repo, release_id: release.id });
+              core.info(`Deleted ${tag}`);
+            }

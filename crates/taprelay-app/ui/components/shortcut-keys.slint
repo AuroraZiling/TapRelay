@@ -1,0 +1,49 @@
+import { Badge } from "../vendor/components/badge.slint";
+import { Tokens } from "../vendor/theme/tokens.slint";
+
+// Read-only shortcut surface used outside the bindings editor. It deliberately
+// has no TouchArea, so it keeps the wizard's pill geometry without suggesting
+// that the shortcut can be edited from the overview.
+export component ShortcutPill inherits Rectangle {
+    in property <string> text;
+
+    width: label.preferred-width + 2 * Tokens.spacing-sm;
+    height: Tokens.density-button-sm;
+    preferred-width: label.preferred-width + 2 * Tokens.spacing-sm;
+    horizontal-stretch: 0;
+    background: Tokens.color-card;
+    border-width: 1px;
+    border-color: Tokens.color-border-hairline;
+    border-radius: Tokens.radius-md;
+
+    label := Text {
+        x: Tokens.spacing-sm;
+        y: (parent.height - self.preferred-height) / 2;
+        text: root.text;
+        color: Tokens.color-foreground;
+        font-size: Tokens.typography-body-sm-size;
+        font-weight: Tokens.typography-weight-medium;
+        overflow: elide;
+    }
+}
+
+// Each key is a separate label, so punctuation such as '+' remains a real key.
+export component ShortcutKeys inherits HorizontalLayout {
+    in property <[string]> keys;
+    height: 22px;
+    spacing: 6px;
+    alignment: start;
+    for key[i] in root.keys: HorizontalLayout {
+        spacing: 6px;
+        horizontal-stretch: 0;
+        if i > 0: Text {
+            text: "+";
+            color: Tokens.color-muted-foreground;
+            vertical-alignment: center;
+        }
+        Badge {
+            text: key;
+            variant: outline;
+        }
+    }
+}

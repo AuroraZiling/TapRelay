@@ -1,0 +1,102 @@
+import { Button } from "../vendor/components/button.slint";
+import { ListView } from "std-widgets.slint";
+import { Input } from "../vendor/components/input.slint";
+import { Tokens } from "../vendor/theme/tokens.slint";
+import { I18n } from "@i18n";
+import { Panel } from "../components/primitives.slint";
+
+export component LogsPage inherits VerticalLayout {
+    in-out property <int> log-filter: 0;
+    in-out property <string> log-search;
+    in property <string> log-text;
+    in property <[string]> log-lines;
+    in-out property <bool> logs-paused: false;
+    callback action(string, int, string);
+    spacing: 12px;
+    Input {
+        placeholder: I18n.text.logs-search;
+        text <=> root.log-search;
+        edited(value)=> {
+            root.action("logs",0,"");
+        }
+    }
+    HorizontalLayout {
+        spacing: 6px;
+        for title[i] in ["INFO+","ALL","ERROR","WARN","INFO","DEBUG","TRACE"]: Button {
+            text: title;
+            size: sm;
+            variant: root.log-filter == i ? secondary: ghost;
+            clicked=> {
+                root.log-filter=i;
+                root.action("logs",0,"");
+            }
+        }
+    }
+    Panel {
+        property <string> displayed-log: root.log-text;
+        log-view := ListView {
+            x: 12px;
+            y: 12px;
+            width: parent.width - 24px;
+            height: parent.height - 24px;
+            changed viewport-height => {
+                if !root.logs-paused {
+                    self.viewport-y = min(0px, self.height - self.viewport-height);
+                }
+            }
+            for line in root.log-lines: Text {
+                width: parent.width;
+                text: line;
+                color: Tokens.color-foreground;
+                font-family: "Consolas";
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+        }
+        changed displayed-log => {
+            if !root.logs-paused {
+                log-view.viewport-y=min(0px,log-view.height - log-view.viewport-height);
+            }
+        }
+    }
+    HorizontalLayout {
+        alignment: start;
+        spacing: 8px;
+        Button {
+            text: root.logs-paused ? I18n.text.logs-resume : I18n.text.logs-pause;
+            variant: outline;
+            clicked=> {
+                root.logs-paused=!root.logs-paused;
+                root.action("logs",0,"");
+            }
+        }
+        Button {
+            text: I18n.text.common-copy;
+            variant: outline;
+            clicked=> {
+                root.action("copy-logs",0,"");
+            }
+        }
+        Button {
+            text: I18n.text.common-export;
+            variant: outline;
+            clicked=> {
+                root.action("export-logs",0,"");
+            }
+        }
+        Button {
+            text: I18n.text.common-clear;
+            variant: ghost;
+            clicked=> {
+                root.action("clear-logs",0,"");
+            }
+        }
+        Button {
+            text: I18n.text.logs-folder;
+            variant: ghost;
+            clicked=> {
+                root.action("logs-folder",0,"");
+            }
+        }
+    }
+}

@@ -1,0 +1,230 @@
+import { Tokens, Theme, ThemeMode } from "vendor/theme/tokens.slint";
+import { BluetoothStatus } from "components/bluetooth-status.slint";
+import { I18n, TranslationText } from "@i18n";
+import { BindingRow, DeviceRow, CheckRow } from "types.slint";
+import { Heading, ErrorBanner } from "components/primitives.slint";
+import { Sidebar } from "components/sidebar.slint";
+import { Toast } from "components/toast.slint";
+import { EnvironmentPage } from "pages/environment.slint";
+import { WizardPage } from "pages/wizard.slint";
+import { OverviewPage } from "pages/overview.slint";
+import { BindingsPage } from "pages/bindings.slint";
+import { DevicesPage } from "pages/devices.slint";
+import { LogsPage } from "pages/logs.slint";
+import { SettingsPage } from "pages/settings.slint";
+export { Theme, ThemeMode, I18n, TranslationText, BindingRow, DeviceRow, CheckRow }
+
+// Window shell: public Rust interface, navigation and page composition only.
+export component AppWindow inherits Window {
+    title: "TapRelay";
+    preferred-width: 900px;
+    preferred-height: 560px;
+    min-width: 900px;
+    min-height: 560px;
+    background: Tokens.color-background;
+    default-font-family: "Segoe UI";
+    default-font-size: 14px;
+    // Set after native window creation so Windows receives both icon sizes.
+    out property <image> app-icon-artwork: @image-url("../resources/taprelay-128.png");
+    in property <image> app-icon;
+    icon: root.app-icon;
+    in property <string> binding-summary;
+    in-out property <int> mode: 0;
+    in-out property <int> page: 0;
+    in-out property <int> wizard-page: 0;
+    in property <[BindingRow]> bindings;
+    in property <[CheckRow]> checks;
+    in property <bool> listening;
+    in property <bool> ready;
+    in property <bool> receiver-next-allowed;
+    in property <string> discovery-status;
+    in property <string> adapter-label;
+    in property <bool> scanning;
+    in property <[DeviceRow]> paired-devices;
+    in property <[DeviceRow]> nearby-devices;
+    in property <bool> bluetooth-available;
+    in property <bool> busy;
+    in property <bool> elevated;
+    in property <bool> account-admin;
+    in property <string> device-name;
+    in property <bool> device-selected;
+    in property <string> stage;
+    in property <string> stage-detail;
+    in property <string> diagnostics;
+    in property <string> problem;
+    in property <string> capture-text;
+    in property <[string]> capture-keys;
+    in property <string> capture-error;
+    in property <int> capture-index: -1;
+    in property <string> test-result;
+    in property <int> input-count;
+    in property <string> toast;
+    in property <int> state-color: 2;
+    in property <string> data-directory;
+    in property <string> app-version;
+    in-out property <bool> auto-listen;
+    in-out property <bool> auto-start;
+    in-out property <bool> start-hidden;
+    in-out property <bool> close-to-tray;
+    in-out property <bool> always-admin;
+    in-out property <bool> notifications;
+    in-out property <bool> connection-wait-warning;
+    in property <int> theme-choice;
+    in property <int> language-choice;
+    in-out property <bool> details-open: false;
+    in-out property <bool> logs-paused: false;
+    in-out property <string> log-search;
+    in-out property <int> log-filter: 0;
+    in property <string> log-text;
+    in property <[string]> log-lines;
+    callback action(string, int, string);
+    property <color> signal: root.state-color == 0 ? #2eb470: root.state-color == 1 ? #8b919a: root.state-color == 2 ? #e8ae36: #e64f55;
+    HorizontalLayout {
+        spacing: 0px;
+        if root.mode == 2: Sidebar {
+            page <=> root.page;
+            action(name, index, value) => {
+                root.action(name, index, value);
+            }
+        }
+        VerticalLayout {
+            padding: 28px;
+            spacing: 20px;
+            if root.mode == 0 || root.mode == 3: EnvironmentPage {
+                busy: root.busy;
+                checks: root.checks;
+                fatal: root.mode == 3;
+                problem: root.problem;
+                action(name, index, value) => {
+                    root.action(name, index, value);
+                }
+            }
+            if root.mode == 1: WizardPage {
+                adapter-label: root.adapter-label;
+                bluetooth-available: root.bluetooth-available;
+                busy: root.busy;
+                bindings: root.bindings;
+                capture-error: root.capture-error;
+                capture-index: root.capture-index;
+                capture-text: root.capture-text;
+                capture-keys: root.capture-keys;
+                details-open <=> root.details-open;
+                device-name: root.device-name;
+                device-selected: root.device-selected;
+                discovery-status: root.discovery-status;
+                scanning: root.scanning;
+                paired-devices: root.paired-devices;
+                nearby-devices: root.nearby-devices;
+                diagnostics: root.diagnostics;
+                elevated: root.elevated;
+                input-count: root.input-count;
+                listening: root.listening;
+                problem: root.problem;
+                ready: root.ready;
+                receiver-next-allowed: root.receiver-next-allowed;
+                signal: root.signal;
+                stage: root.stage;
+                stage-detail: root.stage-detail;
+                step: root.wizard-page;
+                test-result: root.test-result;
+                action(name, index, value) => {
+                    root.action(name, index, value);
+                }
+            }
+            if root.mode == 2: VerticalLayout {
+                spacing: 18px;
+                HorizontalLayout {
+                    alignment: start;
+                    spacing: 12px;
+                    Heading {
+                        horizontal-stretch: 0;
+                        text: [I18n.text.nav-overview,I18n.text.nav-bindings,I18n.text.nav-receiver,I18n.text.nav-logs,I18n.text.nav-settings][root.page];
+                    }
+                    if root.page == 2: BluetoothStatus {
+                        available: root.bluetooth-available;
+                        busy: root.busy;
+                        status-label: root.adapter-label;
+                    }
+                }
+                if root.problem != "" && root.page != 2: ErrorBanner {
+                    problem: root.problem;
+                    action(name,index,value)=> {
+                        root.action(name,index,value);
+                    }
+                }
+                if root.page == 0: OverviewPage {
+                    bindings: root.bindings;
+                    binding-count: root.bindings.length;
+                    binding-summary: root.binding-summary;
+                    details-open <=> root.details-open;
+                    device-name: root.device-name;
+                    device-selected: root.device-selected;
+                    diagnostics: root.diagnostics;
+                    elevated: root.elevated;
+                    listening: root.listening;
+                    ready: root.ready;
+                    signal: root.signal;
+                    stage: root.stage;
+                    stage-detail: root.stage-detail;
+                    test-result: root.test-result;
+                    action(name, index, value) => {
+                        root.action(name, index, value);
+                    }
+                }
+                if root.page == 1: BindingsPage {
+                    bindings: root.bindings;
+                    capture-error: root.capture-error;
+                    capture-index: root.capture-index;
+                    capture-text: root.capture-text;
+                    capture-keys: root.capture-keys;
+                    action(name, index, value) => {
+                        root.action(name, index, value);
+                    }
+                }
+                if root.page == 2: DevicesPage {
+                    discovery-status: root.discovery-status;
+                    scanning: root.scanning;
+                    paired-devices: root.paired-devices;
+                    nearby-devices: root.nearby-devices;
+                    action(name, index, value) => {
+                        root.action(name, index, value);
+                    }
+                }
+                if root.page == 3: LogsPage {
+                    log-filter <=> root.log-filter;
+                    log-search <=> root.log-search;
+                    log-text: root.log-text;
+                    log-lines: root.log-lines;
+                    logs-paused <=> root.logs-paused;
+                    action(name, index, value) => {
+                        root.action(name, index, value);
+                    }
+                }
+                if root.page == 4: SettingsPage {
+                    account-admin: root.account-admin;
+                    always-admin <=> root.always-admin;
+                    app-version: root.app-version;
+                    auto-listen <=> root.auto-listen;
+                    auto-start <=> root.auto-start;
+                    close-to-tray <=> root.close-to-tray;
+                    data-directory: root.data-directory;
+                    elevated: root.elevated;
+                    language-choice: root.language-choice;
+                    notifications <=> root.notifications;
+                    connection-wait-warning <=> root.connection-wait-warning;
+                    start-hidden <=> root.start-hidden;
+                    theme-choice: root.theme-choice;
+                    action(name, index, value) => {
+                        root.action(name, index, value);
+                    }
+                }
+            }
+        }
+    }
+    if root.toast != "": Toast {
+        message: root.toast;
+        x: max(20px, root.width - 460px);
+        y: root.height - self.height - 20px;
+        width: min(440px, root.width - 40px);
+    }
+}

@@ -1,0 +1,102 @@
+import { Button } from "../vendor/components/button.slint";
+import { Input } from "../vendor/components/input.slint";
+import { I18n } from "@i18n";
+import { Heading, Caption, Label, Panel, Spinner, StatusDot } from "../components/primitives.slint";
+
+export component RelayStatusCard inherits Panel {
+    in property <string> device-name;
+    in property <bool> device-selected;
+    in property <bool> listening;
+    in property <bool> ready;
+    in property <color> signal;
+    in property <string> stage;
+    in property <string> stage-detail;
+    in property <string> test-result;
+    callback action(string, int, string);
+    VerticalLayout {
+        padding: 24px;
+        spacing: 14px;
+        Caption {
+            text: I18n.text.receiver-current;
+        }
+        Heading {
+            text: root.device-name;
+        }
+        HorizontalLayout {
+            spacing: 10px;
+            cross-axis-alignment: center;
+            if root.device-selected && !root.ready: Spinner {
+            }
+            StatusDot {
+                signal: root.signal;
+                dot-size: 10px;
+            }
+            Label {
+                text: root.stage;
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+            }
+        }
+        if root.device-selected && root.stage-detail != "": Caption {
+            text: root.stage-detail;
+        }
+        HorizontalLayout {
+            alignment: start;
+            spacing: 12px;
+            Button {
+                text: root.listening ? I18n.text.listening-stop : I18n.text.listening-start;
+                clicked=> {
+                    root.action("listen",0,"");
+                }
+            }
+            Button {
+                text: I18n.text.receiver-test;
+                variant: outline;
+                disabled: !root.ready;
+                clicked=> {
+                    root.action("test",0,"");
+                }
+            }
+            Button {
+                text: I18n.text.common-retry;
+                variant: ghost;
+                clicked=> {
+                    root.action("retry",0,"");
+                }
+            }
+        }
+        if root.test-result != "": Caption {
+            text: root.test-result;
+        }
+    }
+}
+export component RuntimeDetails inherits VerticalLayout {
+    in-out property <bool> details-open: false;
+    in property <string> diagnostics;
+    in property <bool> elevated;
+    callback action(string, int, string);
+    spacing: 16px;
+    Button {
+        text: root.details-open ? I18n.text.details-hide : I18n.text.details-show;
+        variant: ghost;
+        clicked=> {
+            root.details-open=!root.details-open;
+        }
+    }
+    if root.details-open: Caption {
+        text: root.diagnostics;
+    }
+    if !root.elevated: HorizontalLayout {
+        spacing: 12px;
+        Caption {
+            text: I18n.text.permissions-warning;
+        }
+        Button {
+            text: I18n.text.permissions-restart-short;
+            variant: outline;
+            clicked=> {
+                root.action("elevate",0,"");
+            }
+        }
+    }
+}

@@ -1,0 +1,17 @@
+import { Tokens } from "../vendor/theme/tokens.slint";
+
+export component Toast inherits Rectangle {
+    in property <string> message;
+    height: toast-label.preferred-height + 28px;
+    background: Tokens.color-foreground;
+    border-radius: 8px;
+    toast-label := Text {
+        x: 14px;
+        y: 14px;
+        width: parent.width - 28px;
+        text: root.message;
+        color: Tokens.color-background;
+        wrap: word-wrap;
+        font-size: 13px;
+    }
+}

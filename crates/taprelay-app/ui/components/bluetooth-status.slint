@@ -1,0 +1,34 @@
+import { Tokens } from "../vendor/theme/tokens.slint";
+import { IconDisplay, IconSet } from "@lucide";
+
+export component BluetoothStatus inherits Rectangle {
+    in property <bool> available;
+    in property <bool> busy;
+    in property <string> status-label;
+    height: 32px;
+    width: content.preferred-width;
+    horizontal-stretch: 0;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: root.available ? #2eb470 : #e64f55;
+    content := HorizontalLayout {
+        padding-left: 9px;
+        padding-right: 9px;
+        spacing: 6px;
+        Rectangle {
+            width: 16px;
+            IconDisplay {
+                icon: root.available ? IconSet.Bluetooth : IconSet.BluetoothOff;
+                stroke: Tokens.color-foreground;
+                stroke-width: 1.5;
+                size: 16px;
+            }
+        }
+        Text {
+            text: root.status-label;
+            color: Tokens.color-foreground;
+            font-size: 12px;
+            vertical-alignment: center;
+        }
+    }
+}

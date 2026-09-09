@@ -1,0 +1,111 @@
+import { Button } from "../vendor/components/button.slint";
+import { ScrollArea } from "../vendor/components/scroll-area.slint";
+import { Tokens } from "../vendor/theme/tokens.slint";
+import { I18n } from "@i18n";
+import { BindingRow } from "../types.slint";
+import { Caption, Label, Panel } from "../components/primitives.slint";
+import { RelayStatusCard, RuntimeDetails } from "../components/runtime-panels.slint";
+import { IconDisplay, IconSet } from "@lucide";
+import { ShortcutPill } from "../components/shortcut-keys.slint";
+
+export component OverviewPage inherits ScrollArea {
+    in property <[BindingRow]> bindings;
+    in property <int> binding-count;
+    in property <string> binding-summary;
+    in-out property <bool> details-open: false;
+    in property <string> device-name;
+    in property <bool> device-selected;
+    in property <string> diagnostics;
+    in property <bool> elevated;
+    in property <bool> listening;
+    in property <bool> ready;
+    in property <color> signal;
+    in property <string> stage;
+    in property <string> stage-detail;
+    in property <string> test-result;
+    callback action(string, int, string);
+    content-height: max(self.height, content.preferred-height);
+    content := VerticalLayout {
+        width: parent.width;
+        height: self.preferred-height;
+        spacing: 16px;
+        RelayStatusCard {
+            device-name: root.device-name;
+            device-selected: root.device-selected;
+            listening: root.listening;
+            ready: root.ready;
+            signal: root.signal;
+            stage: root.stage;
+            stage-detail: root.stage-detail;
+            test-result: root.test-result;
+            action(name, index, value) => {
+                root.action(name, index, value);
+            }
+        }
+        Panel {
+            VerticalLayout {
+                padding: 20px;
+                spacing: 12px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    Label {
+                        text: I18n.text.overview-bindings;
+                    }
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+                    Button {
+                        size: icon;
+                        width: 36px;
+                        horizontal-stretch: 0;
+                        text: "";
+                        variant: ghost;
+                        accessible-role: button;
+                        accessible-label: I18n.text.overview-manage;
+                        accessible-enabled: true;
+                        clicked=> {
+                            root.action("navigate",1,"");
+                        }
+                        settings-icon := Rectangle {
+                            width: parent.width;
+                            height: parent.height;
+                            IconDisplay {
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                icon: IconSet.Settings;
+                                size: 16px;
+                                stroke: Tokens.color-muted-foreground;
+                                stroke-width: 1.75;
+                            }
+                        }
+                    }
+                }
+                Caption {
+                    text: root.binding-count == 0 ? I18n.text.overview-empty : I18n.text.overview-bindings-hint;
+                }
+                if root.binding-count > 0: FlexboxLayout {
+                    width: parent.width;
+                    spacing-horizontal: Tokens.spacing-sm;
+                    spacing-vertical: Tokens.spacing-sm;
+                    flex-direction: row;
+                    flex-wrap: wrap;
+                    alignment: start;
+                    align-content: start;
+                    cross-axis-alignment: center;
+                    for binding in root.bindings: ShortcutPill {
+                        text: binding.text;
+                        visible: binding.enabled;
+                    }
+                }
+            }
+        }
+        RuntimeDetails {
+            details-open <=> root.details-open;
+            diagnostics: root.diagnostics;
+            elevated: root.elevated;
+            action(name, index, value) => {
+                root.action(name, index, value);
+            }
+        }
+    }
+}

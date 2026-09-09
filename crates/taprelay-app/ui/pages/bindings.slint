@@ -1,0 +1,379 @@
+import { Button } from "../vendor/components/button.slint";
+import { FocusRing } from "../vendor/components/focus-ring.slint";
+import { ScrollArea } from "../vendor/components/scroll-area.slint";
+import { Tokens } from "../vendor/theme/tokens.slint";
+import { I18n } from "@i18n";
+import { BindingRow } from "../types.slint";
+import { IconDisplay, IconSet } from "@lucide";
+import { Caption, Label } from "../components/primitives.slint";
+
+// Borderless, content-sized capture surface. BindingChip owns the visible
+// surface so the capture interaction never adds a second input border.
+component ShortcutCapture inherits Rectangle {
+    in property <string> text;
+    in property <bool> recording;
+    callback begin();
+    callback cancel();
+    callback key-input(string, bool);
+    out property <bool> hovered: touch.has-hover;
+    property <bool> pointer-focus: false;
+
+    width: label.preferred-width;
+    height: Tokens.density-button-sm;
+    horizontal-stretch: 0;
+    background: transparent;
+    forward-focus: focus;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: true;
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        pointer-event(ev) => {
+            if ev.button == PointerEventButton.left && ev.kind == PointerEventKind.down {
+                root.pointer-focus = true;
+            }
+        }
+        clicked => {
+            focus.focus();
+            if !root.recording {
+                root.begin();
+            }
+        }
+    }
+    label := Text {
+        width: parent.width;
+        height: parent.height;
+        text: root.text;
+        color: root.recording ? Tokens.color-foreground : Tokens.color-muted-foreground;
+        font-size: Tokens.typography-body-sm-size;
+        font-weight: Tokens.typography-weight-medium;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    focus := FocusScope {
+        width: 0px;
+        height: 0px;
+        init => {
+            if root.recording {
+                self.focus();
+            }
+        }
+        key-pressed(event) => {
+            root.pointer-focus = false;
+            if root.recording {
+                if event.text == Key.Escape {
+                    root.cancel();
+                } else {
+                    root.key-input(event.text, true);
+                }
+                return accept;
+            }
+            if event.text == Key.Return || event.text == " " {
+                root.begin();
+                return accept;
+            }
+            return reject;
+        }
+        key-released(event) => {
+            if root.recording {
+                root.key-input(event.text, false);
+                return accept;
+            }
+            return reject;
+        }
+    }
+    changed recording => {
+        if self.recording {
+            focus.focus();
+        }
+    }
+    // The recording chip already has its own active visual treatment. Keep
+    // the focus ring for normal keyboard navigation, but avoid stacking it
+    // around the temporary recording control.
+    if focus.has-focus && !root.pointer-focus && !root.recording: FocusRing {
+        host-width: parent.width;
+        host-height: parent.height;
+    }
+}
+
+component BindingChip inherits Rectangle {
+    in property <string> label;
+    in property <bool> recording: false;
+    in property <bool> removable: true;
+    in property <bool> remove-disabled: false;
+    callback begin();
+    callback cancel();
+    callback remove();
+    callback key-input(string, bool);
+    out property <bool> hovered:
+        capture.hovered || cancel_button.hovered || remove_button.hovered;
+
+    width: content.preferred-width;
+    height: Tokens.density-button-sm;
+    preferred-width: content.preferred-width;
+    horizontal-stretch: 0;
+    flex-shrink: 0;
+    background: root.recording
+        ? Tokens.color-surface-3
+        : root.hovered ? Tokens.color-accent : Tokens.color-card;
+    border-width: 1px;
+    border-color: Tokens.color-border-hairline;
+    border-radius: Tokens.radius-md;
+    animate background {
+        duration: Tokens.motion-fast;
+        easing: Tokens.motion-easing-standard;
+    }
+    accessible-role: none;
+
+    content := HorizontalLayout {
+        x: 0px;
+        width: self.preferred-width;
+        height: parent.height;
+        padding-left: Tokens.spacing-sm;
+        padding-right: 2px;
+        spacing: Tokens.spacing-xs;
+        cross-axis-alignment: center;
+
+        capture := ShortcutCapture {
+            text: root.label;
+            recording: root.recording;
+            begin => { root.begin(); }
+            cancel => { root.cancel(); }
+            key-input(text, down) => { root.key-input(text, down); }
+        }
+        cancel_button := Button {
+            width: root.recording ? 24px : 0px;
+            visible: root.recording;
+            size: icon-xs;
+            text: "";
+            variant: ghost;
+            accessible-role: button;
+            accessible-label: I18n.text.bindings-cancel;
+            accessible-enabled: root.recording;
+            clicked => { root.cancel(); }
+            cancel-icon := Rectangle {
+                width: 24px;
+                height: parent.height;
+                IconDisplay {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    icon: IconSet.X;
+                    size: 14px;
+                    stroke: Tokens.color-muted-foreground;
+                    stroke-width: 1.75;
+                }
+            }
+        }
+        remove_button := Button {
+            width: !root.recording && root.removable ? 24px : 0px;
+            visible: !root.recording && root.removable;
+            size: icon-xs;
+            text: "";
+            variant: ghost;
+            disabled: root.remove-disabled;
+            accessible-role: button;
+            accessible-label: I18n.text.common-delete + ": " + root.label;
+            accessible-enabled: !root.recording && root.removable && !root.remove-disabled;
+            clicked => { root.remove(); }
+            remove-icon := Rectangle {
+                width: 24px;
+                height: parent.height;
+                IconDisplay {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    icon: IconSet.X;
+                    size: 14px;
+                    stroke: Tokens.color-muted-foreground;
+                    stroke-width: 1.75;
+                }
+            }
+        }
+    }
+}
+
+// Button is the right primitive for the interaction, but its outline is
+// intentionally solid. This small local control adds only the dashed outline
+// needed by the inline add affordance while keeping the same button behavior.
+component AddBindingButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> disabled: false;
+    callback clicked();
+    out property <bool> hovered: touch.has-hover;
+    property <bool> pointer-focus: false;
+    property <bool> pressed-down: touch.pressed && !root.disabled;
+
+    width: content.preferred-width + 2 * Tokens.spacing-sm;
+    height: Tokens.density-button-sm;
+    preferred-width: content.preferred-width + 2 * Tokens.spacing-sm;
+    horizontal-stretch: 0;
+    flex-shrink: 0;
+    opacity: root.disabled ? 0.5 : 1.0;
+    background: root.hovered && !root.disabled ? Tokens.color-accent : Tokens.color-background;
+    property <color> dash-color: root.hovered && !root.disabled
+        ? Tokens.color-border-hairline-strong
+        : Tokens.color-border-hairline;
+    border-radius: Tokens.radius-md;
+    animate background, dash-color, opacity {
+        duration: Tokens.motion-fast;
+        easing: Tokens.motion-easing-standard;
+    }
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: !root.disabled;
+
+    content := HorizontalLayout {
+        x: Tokens.spacing-sm;
+        y: root.pressed-down ? 1px : 0px;
+        width: self.preferred-width;
+        height: parent.height;
+        spacing: Tokens.spacing-xs;
+        alignment: center;
+        cross-axis-alignment: center;
+        animate y {
+            duration: Tokens.motion-fast;
+            easing: Tokens.motion-easing-standard;
+        }
+        IconDisplay {
+            icon: IconSet.Plus;
+            size: 14px;
+            stroke: root.hovered ? Tokens.color-foreground : Tokens.color-muted-foreground;
+            stroke-width: 1.75;
+        }
+        Text {
+            text: root.text;
+            color: root.hovered ? Tokens.color-foreground : Tokens.color-muted-foreground;
+            font-size: Tokens.typography-body-sm-size;
+            font-weight: Tokens.typography-weight-medium;
+            vertical-alignment: center;
+        }
+    }
+
+    // Slint's Rectangle has no border-style property. Draw the short segments
+    // directly so translucent hover backgrounds cannot reveal a solid border.
+    for i in 32: Rectangle {
+        x: 4px + i * 8px;
+        y: 0px;
+        width: 4px;
+        height: 1px;
+        background: root.dash-color;
+        visible: self.x + self.width <= parent.width - 2px;
+    }
+    for i in 32: Rectangle {
+        x: 4px + i * 8px;
+        y: parent.height - 1px;
+        width: 4px;
+        height: 1px;
+        background: root.dash-color;
+        visible: self.x + self.width <= parent.width - 2px;
+    }
+    for i in 4: Rectangle {
+        x: 0px;
+        y: 4px + i * 8px;
+        width: 1px;
+        height: 4px;
+        background: root.dash-color;
+        visible: self.y + self.height <= parent.height - 2px;
+    }
+    for i in 4: Rectangle {
+        x: parent.width - 1px;
+        y: 4px + i * 8px;
+        width: 1px;
+        height: 4px;
+        background: root.dash-color;
+        visible: self.y + self.height <= parent.height - 2px;
+    }
+
+    touch := TouchArea {
+        enabled: !root.disabled;
+        mouse-cursor: root.disabled ? default : pointer;
+        pointer-event(ev) => {
+            if !root.disabled
+                    && ev.button == PointerEventButton.left
+                    && ev.kind == PointerEventKind.down {
+                root.pointer-focus = true;
+            }
+        }
+        clicked => {
+            if !root.disabled {
+                focus-scope.focus();
+                root.clicked();
+            }
+        }
+    }
+    forward-focus: focus-scope;
+    focus-scope := FocusScope {
+        width: 0px;
+        height: 0px;
+        enabled: !root.disabled;
+        key-pressed(event) => {
+            root.pointer-focus = false;
+            if event.text == Key.Return || event.text == " " {
+                if !root.disabled { root.clicked(); }
+                return accept;
+            }
+            return reject;
+        }
+    }
+    if focus-scope.has-focus && !root.pointer-focus: FocusRing {
+        host-width: parent.width;
+        host-height: parent.height;
+    }
+}
+
+export component BindingsPage inherits VerticalLayout {
+    in property <[BindingRow]> bindings;
+    in property <string> capture-error;
+    in property <int> capture-index: -1;
+    in property <string> capture-text;
+    in property <[string]> capture-keys;
+    callback action(string, int, string);
+    spacing: Tokens.spacing-xl;
+    Caption {
+        text: I18n.text.bindings-help;
+    }
+    ScrollArea {
+        content-height: max(self.height, content.preferred-height);
+        content := VerticalLayout {
+            width: parent.width;
+            spacing: Tokens.spacing-sm;
+            alignment: start;
+            flow := FlexboxLayout {
+                width: parent.width;
+                spacing-horizontal: Tokens.spacing-sm;
+                spacing-vertical: Tokens.spacing-sm;
+                flex-direction: row;
+                flex-wrap: wrap;
+                alignment: start;
+                align-content: start;
+                cross-axis-alignment: center;
+
+                for binding[i] in root.bindings: BindingChip {
+                    label: root.capture-index == i ? root.capture-text : binding.text;
+                    recording: root.capture-index == i;
+                    removable: root.capture-index != i;
+                    remove-disabled: root.capture-index != -1;
+                    key-input(text, down) => { root.action("capture-key", down ? 1 : 0, text); }
+                    begin => { root.action("capture", i, ""); }
+                    cancel => { root.action("cancel-capture", 0, ""); }
+                    remove => { root.action("delete", i, ""); }
+                }
+                if root.capture-index == -2: BindingChip {
+                    label: root.capture-text;
+                    recording: true;
+                    removable: false;
+                    cancel => { root.action("cancel-capture", 0, ""); }
+                    key-input(text, down) => { root.action("capture-key", down ? 1 : 0, text); }
+                }
+                if root.capture-index == -1: AddBindingButton {
+                    text: I18n.text.bindings-add;
+                    clicked => { root.action("capture", -2, ""); }
+                }
+            }
+            if root.capture-error != "": Label {
+                text: root.capture-error;
+                color: Tokens.color-destructive;
+            }
+        }
+    }
+}

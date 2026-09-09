@@ -1,0 +1,20 @@
+[workspace]
+members = [
+    "crates/taprelay-core",
+    "crates/taprelay-windows",
+    "crates/taprelay-app",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+license = "MIT"
+
+[workspace.dependencies]
+taprelay-core = { path = "crates/taprelay-core" }
+serde = { version = "1.0.229", features = ["derive"] }
+thiserror = "2.0.20"
+tokio = { version = "1.53.1", features = ["sync"] }
+tracing = "0.1.44"

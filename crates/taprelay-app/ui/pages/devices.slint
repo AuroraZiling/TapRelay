@@ -1,0 +1,80 @@
+import { Button } from "../vendor/components/button.slint";
+import { ScrollArea } from "../vendor/components/scroll-area.slint";
+import { I18n } from "@i18n";
+import { DeviceRow } from "../types.slint";
+import { Caption, Label, Panel, Spinner } from "../components/primitives.slint";
+
+component ReceiverCard inherits Panel {
+    in property <DeviceRow> device;
+    callback action(string, int, string);
+    min-height: 86px;
+    HorizontalLayout {
+        padding: 16px;
+        spacing: 18px;
+        VerticalLayout {
+            spacing: 6px;
+            Label { text: root.device.name; }
+            Caption { text: root.device.detail; }
+        }
+        if root.device.action != "" : Button {
+            horizontal-stretch: 0;
+            text: root.device.action-label;
+            disabled: !root.device.enabled;
+            variant: outline;
+            clicked => { root.action(root.device.action, 0, root.device.id); }
+        }
+        if root.device.action == "" : Caption {
+            horizontal-stretch: 0;
+            text: root.device.action-label;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component DevicesPage inherits VerticalLayout {
+    in property <[DeviceRow]> paired-devices;
+    in property <[DeviceRow]> nearby-devices;
+    in property <bool> scanning;
+    in property <string> discovery-status;
+    callback action(string, int, string);
+    spacing: 14px;
+    HorizontalLayout {
+        alignment: start;
+        spacing: 8px;
+        if root.scanning: Spinner { }
+        Caption { text: root.discovery-status; }
+    }
+    ScrollArea {
+        content-height: max(self.height, device-list.preferred-height);
+        device-list := VerticalLayout {
+            width: parent.width;
+            spacing: 12px;
+            alignment: start;
+            if root.paired-devices.length > 0: Label { text: I18n.text.receiver-paired; }
+            for device in root.paired-devices: ReceiverCard {
+                device: device;
+                action(name,index,value) => { root.action(name,index,value); }
+            }
+            if root.nearby-devices.length > 0: Label { text: I18n.text.receiver-nearby; }
+            for device in root.nearby-devices: ReceiverCard {
+                device: device;
+                action(name,index,value) => { root.action(name,index,value); }
+            }
+        }
+    }
+    HorizontalLayout {
+        alignment: start;
+        spacing: 12px;
+        Button {
+            text: I18n.text.receiver-refresh;
+            variant: outline;
+            clicked => { root.action("refresh",0,""); }
+        }
+        Button {
+            text: I18n.text.receiver-open-settings;
+            variant: ghost;
+            clicked => { root.action("bluetooth-settings",0,""); }
+        }
+    }
+}

@@ -1,0 +1,78 @@
+import { Button } from "../vendor/components/button.slint";
+import { Tokens } from "../vendor/theme/tokens.slint";
+import { I18n } from "@i18n";
+import { CheckRow } from "../types.slint";
+import { Heading, Caption, Label, Panel, Spinner } from "../components/primitives.slint";
+
+export component EnvironmentPage inherits VerticalLayout {
+    in property <bool> busy;
+    in property <[CheckRow]> checks;
+    in property <bool> fatal;
+    in property <string> problem;
+    callback action(string, int, string);
+    spacing: 22px;
+    Heading {
+        text: root.fatal ? I18n.text.startup-error : I18n.text.startup-preparing;
+    }
+    Caption {
+        text: I18n.text.startup-description;
+    }
+    Panel {
+        VerticalLayout {
+            padding: 24px;
+            spacing: 22px;
+            for check in root.checks: HorizontalLayout {
+                spacing: 14px;
+                if check.state == 1: Spinner {
+                }
+                if check.state != 1: Text {
+                    width: 16px;
+                    text: check.state == 2 ? "✓" : check.state == 3 ? "!" : "·";
+                    color: check.state == 3 ? #e64f55: check.state == 2 ? #2eb470: Tokens.color-muted-foreground;
+                }
+                Label {
+                    text: check.title;
+                    horizontal-stretch: 1;
+                }
+                Caption {
+                    text: check.state == 2 ? I18n.text.check-passed : check.state == 3 ? I18n.text.check-failed : check.state == 1 ? I18n.text.check-running : I18n.text.check-waiting;
+                }
+            }
+        }
+    }
+    Label {
+        text: root.problem;
+        color: #e64f55;
+    }
+    if root.problem != "": Caption {
+        text: I18n.text.startup-troubleshooting;
+    }
+    HorizontalLayout {
+        alignment: start;
+        spacing: 12px;
+        Button {
+            text: I18n.text.startup-retry;
+            disabled: root.busy || root.fatal;
+            clicked=> {
+                root.action("retry",0,"");
+            }
+        }
+        Button {
+            text: I18n.text.startup-bluetooth-settings;
+            variant: outline;
+            clicked=> {
+                root.action("bluetooth-settings",0,"");
+            }
+        }
+        Button {
+            text: I18n.text.common-quit;
+            variant: ghost;
+            clicked=> {
+                root.action("quit",0,"");
+            }
+        }
+    }
+    Rectangle {
+        vertical-stretch: 1;
+    }
+}

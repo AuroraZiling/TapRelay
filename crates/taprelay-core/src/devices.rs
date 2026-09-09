@@ -151,14 +151,8 @@ impl Coordinator {
         if self.suppressed {
             state.ready = false;
         }
-        if self.was_ready && !state.ready && !self.suppressed {
-            self.clear_selection();
-            state.selected = None;
-            state.target_status = None;
-            if state.adapter_state == AdapterState::Available {
-                state.device_error = None;
-            }
-        }
+        // Readiness is transient (including HID suspension). Keep the user's
+        // target so a returning subscription can synchronize automatically.
         if state.ready {
             self.deadline = None;
             state.device_error = None;
@@ -339,7 +333,7 @@ mod tests {
         assert!(receiver_next_allowed(&state));
     }
     #[test]
-    fn disconnected_selected_target_is_cleared_instead_of_waiting_again() {
+    fn interrupted_selected_target_recovers_without_reselection() {
         let now = Instant::now();
         let target = Target {
             id: "ipad".into(),
@@ -367,12 +361,21 @@ mod tests {
         state.targets[0].subscribed = Knowledge::No;
         manager.reconcile(&mut state, now + Duration::from_secs(1));
 
-        assert!(state.selected.is_none());
-        assert!(state.target_status.is_none());
-        assert_eq!(state.targets[0].connection, Connection::Disconnected);
+        assert_eq!(state.selected.as_deref(), Some("ipad"));
+        assert!(!receiver_next_allowed(&state));
+        assert_eq!(
+            state.targets[0].connection,
+            Connection::AwaitingHostSubscription
+        );
         manager.reconcile(&mut state, now + Duration::from_secs(60));
-        assert!(state.selected.is_none());
-        assert!(state.target_status.is_none());
+        assert_eq!(state.selected.as_deref(), Some("ipad"));
+        state.targets[0].link = Knowledge::Yes;
+        state.targets[0].subscribed = Knowledge::Yes;
+        manager.reconcile(&mut state, now + Duration::from_secs(61));
+        assert_eq!(state.targets[0].connection, Connection::Synchronizing);
+        state.ready = true;
+        manager.reconcile(&mut state, now + Duration::from_secs(62));
+        assert!(receiver_next_allowed(&state));
     }
     #[test]
     fn live_subscription_is_enough_when_pairing_metadata_is_unknown() {

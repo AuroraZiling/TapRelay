@@ -1,4 +1,5 @@
 mod discovery;
+mod maintenance;
 use std::{
     sync::{
         Arc, Mutex,
@@ -420,6 +421,10 @@ fn callback(f: impl FnOnce() -> windows::core::Result<()>) -> windows::core::Res
     }
 }
 
+fn active_subscriber(target: Option<&Target>) -> bool {
+    target.is_some_and(|t| t.link == Knowledge::Yes && t.subscribed == Knowledge::Yes)
+}
+
 fn selected_subscriber_index(
     selected: &str,
     targets: &[Target],
@@ -442,6 +447,8 @@ struct Server {
     protocol_token: Option<i64>,
     subscription_token: Option<i64>,
     session: Option<(GattSession, i64)>,
+    maintained_session: Option<GattSession>,
+    session_active: bool,
     radio: Radio,
     radio_token: Option<i64>,
     advertisement_tokens: Vec<i64>,
@@ -454,6 +461,7 @@ struct Server {
     synced: bool,
     generation_started: Instant,
     retry_at: Instant,
+    maintenance: maintenance::Maintenance,
     connected: Vec<Target>,
     metadata: MetadataCache,
 }
@@ -491,6 +499,8 @@ impl Server {
             protocol_token: None,
             subscription_token: None,
             session: None,
+            maintained_session: None,
+            session_active: false,
             radio,
             radio_token: None,
             advertisement_tokens: vec![],
@@ -510,6 +520,7 @@ impl Server {
             synced: false,
             generation_started: Instant::now(),
             retry_at: Instant::now(),
+            maintenance: maintenance::Maintenance::new(Instant::now()),
             connected: vec![],
             metadata: MetadataCache::default(),
         };
@@ -714,12 +725,25 @@ impl Server {
         }
     }
     fn fail(&mut self, e: &BackendError) {
+        self.maintenance.failure(Instant::now());
         self.synced = false;
         self.state.ready = false;
-        self.state.last_error = Some(e.to_string());
+        self.state.last_error = Some(if self.maintenance.failures >= 6 {
+            format!(
+                "Automatic recovery stopped after repeated failures; disconnect and connect again: {e}"
+            )
+        } else {
+            e.to_string()
+        });
         self.state.device_error = Some(DeviceError::ConnectionFailed);
         self.retry_at = Instant::now() + Duration::from_secs(3);
-        tracing::error!("{e}");
+        if self.maintenance.failures == 1 {
+            tracing::error!("{e}; retrying with backoff");
+        } else if self.maintenance.failures == 6 {
+            tracing::error!(
+                "Automatic recovery stopped after 6 failures; disconnect and connect again: {e}"
+            );
+        }
         self.publish();
     }
     fn refresh(&mut self) -> Result<(), BackendError> {
@@ -848,32 +872,53 @@ impl Server {
         let selected_client = selected_index
             .and_then(|index| subscribers.get(index))
             .map(|(_, client)| client.clone());
-        let selected_link_lost = self.selected_client.is_some()
-            && selected_index.is_none_or(|index| {
-                subscriber_targets
-                    .get(index)
-                    .is_none_or(|target| target.link != Knowledge::Yes)
-            });
+        // Discovery's generic Bluetooth link must not override the live HID session.
+        let selected_session_active =
+            active_subscriber(selected_index.and_then(|index| subscriber_targets.get(index)));
+        let selected_link_lost = self.session_active && !selected_session_active;
         let selected_client_replaced = self.selected_client.is_some()
             && selected_client.is_some()
             && self.selected_client != selected_client;
         let selected_client_lost = self.selected_client.is_some()
             && (selected_client.is_none() || selected_link_lost || selected_client_replaced);
-        let next_selected_client = if selected_client_lost {
-            None
-        } else {
-            selected_client
-        };
+        // Keep the session and its connection request alive while inactive.
+        // Sending remains gated separately by the live session status.
+        let next_selected_client = selected_client;
         let client_changed = self.selected_client != next_selected_client;
-        if client_changed {
+        if client_changed || self.session_active != selected_session_active {
             self.synced = false;
             self.state.generation = self.revision.fetch_add(1, Ordering::AcqRel) + 1;
             self.generation_started = Instant::now();
+        }
+        self.session_active = selected_session_active;
+        if client_changed {
+            self.release_maintenance();
             if let Some((s, token)) = self.session.take() {
                 s.RemoveSessionStatusChanged(token)?;
             }
             if let Some(client) = &next_selected_client {
                 let session = client.Session()?;
+                match session.CanMaintainConnection() {
+                    Ok(true) => match session.MaintainConnection() {
+                        Ok(false) => match session.SetMaintainConnection(true) {
+                            Ok(()) => {
+                                self.maintained_session = Some(session.clone());
+                                tracing::info!("Native GATT connection maintenance enabled");
+                            }
+                            Err(e) => {
+                                tracing::warn!("Native GATT connection maintenance failed: {e}")
+                            }
+                        },
+                        Ok(true) => {
+                            tracing::info!("Native GATT connection maintenance already enabled")
+                        }
+                        Err(e) => tracing::warn!("Read native connection maintenance: {e}"),
+                    },
+                    Ok(false) => tracing::info!(
+                        "Native GATT connection maintenance unsupported for this session"
+                    ),
+                    Err(e) => tracing::warn!("Inspect native connection maintenance: {e}"),
+                }
                 let rev = self.revision.clone();
                 let token =
                     session.SessionStatusChanged(&TypedEventHandler::new(move |_, _| {
@@ -889,12 +934,15 @@ impl Server {
         self.selected_client = next_selected_client;
         if selected_client_lost {
             tracing::info!(
-                "Selected HID subscriber disappeared or changed; clearing session selection"
+                subscriber_missing = selected_index.is_none(),
+                session_inactive = selected_link_lost,
+                client_replaced = selected_client_replaced,
+                "Selected HID transport interrupted; retaining target for resynchronization"
             );
-            self.state.selected = None;
-            self.state.target_status = None;
             self.state.ready = false;
-            self.state.device_error = None;
+            if self.maintenance.failures == 0 {
+                self.state.device_error = None;
+            }
         }
 
         targets.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
@@ -954,32 +1002,40 @@ impl Server {
         });
         let available = radio_on
             && !self.state.hid_suspended
-            && self.state.targets.iter().any(|t| {
-                self.state
-                    .selected
-                    .as_ref()
-                    .is_some_and(|id| t.matches_id(id))
-                    && t.link == Knowledge::Yes
-                    && t.subscribed == Knowledge::Yes
-            });
+            && selected_session_active
+            && self.selected_client.is_some();
         if !available {
             self.synced = false;
         }
         self.state.ready = available && self.synced;
         self.state.activity = TransportActivity::Idle;
         self.publish();
-        if available && !self.synced && Instant::now() >= self.retry_at {
-            let client = self.selected_client.clone().expect("available client");
+        if available
+            && self.maintenance.due(Instant::now())
+            && Instant::now() >= self.retry_at
+            && let Some(client) = self.selected_client.clone()
+        {
             let revision = self.revision.load(Ordering::Acquire);
             match self.notify(&client, &hid::NEUTRAL) {
                 Ok(()) => {
+                    let recovering = !self.synced || self.maintenance.failures > 0;
                     self.synced = revision == self.revision.load(Ordering::Acquire);
                     self.state.ready = self.synced;
-                    self.state.last_error = None;
-                    tracing::info!(
-                        "Neutral notification completed; transport ready={}",
-                        self.synced
-                    );
+                    if self.synced {
+                        self.maintenance.success(Instant::now());
+                        self.state.last_error = None;
+                        self.state.device_error = None;
+                    } else {
+                        self.fail(&BackendError::Unavailable(
+                            "Session changed during synchronization".into(),
+                        ));
+                    }
+                    if recovering {
+                        tracing::info!(
+                            "Neutral notification completed; transport ready={}",
+                            self.synced
+                        );
+                    }
                 }
                 Err(e) => self.fail(&e),
             }
@@ -1015,13 +1071,17 @@ impl Server {
                     Some("Notification pending >5s; waiting for Windows before release".into());
                 self.state.device_error = Some(DeviceError::ConnectionFailed);
                 self.publish();
-                tracing::error!("Notification pending >5s; queue expires, no press retry");
+                if self.maintenance.failures == 0 {
+                    tracing::warn!(
+                        "Notification pending >5s; waiting for Windows, no overlapping send"
+                    );
+                }
             }
             thread::sleep(Duration::from_millis(10));
         }
         let result = api("Notification.GetResults", pending.GetResults())?;
         let status = api("Notification.Status result", result.Status())?;
-        tracing::info!(
+        tracing::debug!(
             report = bytes[0],
             elapsed_ms = start.elapsed().as_millis(),
             "HID notification completed: {status:?}"
@@ -1036,7 +1096,16 @@ impl Server {
     }
 }
 impl Server {
+    fn release_maintenance(&mut self) {
+        if let Some(session) = self.maintained_session.take()
+            && let Err(e) = session.SetMaintainConnection(false)
+        {
+            tracing::warn!("Release native GATT connection maintenance: {e}");
+        }
+    }
     fn select(&mut self, target: Option<String>) -> Result<(), BackendError> {
+        self.release_maintenance();
+        self.session_active = false;
         self.metadata.clear();
         if let Some((session, token)) = self.session.take() {
             api(
@@ -1045,6 +1114,7 @@ impl Server {
             )?;
         }
         self.selected_client = None;
+        self.maintenance = maintenance::Maintenance::new(Instant::now());
         self.state.selected = target;
         self.state.target_status = None;
         self.synced = false;
@@ -1077,11 +1147,15 @@ impl Server {
             || thread::sleep(Duration::from_millis(40)),
         );
         self.current.store(0, Ordering::Release);
+        if result.is_ok() {
+            self.maintenance.success(Instant::now());
+        }
         result
     }
 }
 impl Drop for Server {
     fn drop(&mut self) {
+        self.release_maintenance();
         if let Some((s, t)) = self.session.take()
             && let Err(e) = s.RemoveSessionStatusChanged(t)
         {
@@ -1162,6 +1236,34 @@ fn characteristic(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discovery_link_cannot_make_inactive_hid_session_sendable() {
+        let discovery = Target {
+            id: "discovery".into(),
+            identity: vec!["same-device".into()],
+            link: Knowledge::Yes,
+            ..Default::default()
+        };
+        let mut subscriber = Target {
+            id: "session".into(),
+            identity: discovery.identity.clone(),
+            link: Knowledge::No,
+            subscribed: Knowledge::Yes,
+            ..Default::default()
+        };
+        let mut merged = vec![discovery];
+        taprelay_core::state::upsert_target(&mut merged, subscriber.clone());
+        let index = selected_subscriber_index("discovery", &merged, &[subscriber.clone()]);
+        assert_eq!(index, Some(0));
+        assert_eq!(merged[0].link, Knowledge::Yes);
+        assert!(!active_subscriber(index.map(|_| &subscriber)));
+        // Repeated inactive polls must remain blocked even without an old client.
+        assert!(!active_subscriber(Some(&subscriber)));
+        assert!(!active_subscriber(None));
+        subscriber.link = Knowledge::Yes;
+        assert!(active_subscriber(Some(&subscriber)));
+    }
 
     #[test]
     fn selected_subscriber_can_be_reached_through_an_endpoint_alias() {

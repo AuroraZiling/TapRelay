@@ -79,7 +79,7 @@ pub fn row(target: &Target, state: &Snapshot, tr: impl Fn(&'static str) -> Strin
         .selected
         .as_ref()
         .is_some_and(|id| target.matches_id(id));
-    let (action, label) = if selected && target.connection == Connection::Connected {
+    let (action, label) = if selected {
         ("disconnect-device", keys::RECEIVER_DISCONNECT)
     } else if target.subscribed == Knowledge::Yes
         || state.connection_capability == ConnectionCapability::Native
@@ -118,13 +118,14 @@ pub fn row(target: &Target, state: &Snapshot, tr: impl Fn(&'static str) -> Strin
         selected,
         action: action.into(),
         action_label: tr(label).into(),
-        enabled: !action.is_empty()
-            && state.adapter_state == AdapterState::Available
-            && target.availability != Availability::Unavailable
-            && !matches!(
-                target.connection,
-                Connection::Connecting | Connection::Synchronizing | Connection::Disconnecting
-            ),
+        enabled: selected
+            || (!action.is_empty()
+                && state.adapter_state == AdapterState::Available
+                && target.availability != Availability::Unavailable
+                && !matches!(
+                    target.connection,
+                    Connection::Connecting | Connection::Synchronizing | Connection::Disconnecting
+                )),
         paired: target.pairing == Knowledge::Yes,
     }
 }
@@ -163,9 +164,9 @@ mod tests {
         target.connection = Connection::Connected;
         assert_eq!(project(&target, &state).action, "disconnect-device");
         target.connection = Connection::Connecting;
-        assert!(!project(&target, &state).enabled);
+        assert!(project(&target, &state).enabled);
         state.adapter_state = AdapterState::Disabled;
-        assert!(!project(&target, &state).enabled);
+        assert!(project(&target, &state).enabled);
     }
     #[test]
     fn a_device_is_not_hidden_or_rejected_before_subscription() {
@@ -183,8 +184,8 @@ mod tests {
             ..Default::default()
         };
         let device = row(&target, &state, |key| crate::i18n::text(false, key).into());
-        assert_eq!(device.action, "");
-        assert!(!device.enabled);
+        assert_eq!(device.action, "disconnect-device");
+        assert!(device.enabled);
         assert!(!device.detail.contains("Compatibility"));
         assert!(!device.detail.contains("不兼容"));
     }

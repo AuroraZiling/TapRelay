@@ -9,7 +9,7 @@ use crate::{
     platform::desktop::{self, Desktop, DesktopEvent},
     runtime::Runtime,
 };
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::{
     cell::RefCell,
@@ -24,13 +24,9 @@ use taprelay_core::{
 };
 
 pub fn run() -> Result<()> {
-    // Only a private process handoff token is accepted; there are no user CLI commands.
     let args: Vec<_> = std::env::args().skip(1).collect();
-    let handoff = if args.len() == 2 && args[0] == "--handoff" {
-        Some(args[1].parse::<u32>()?)
-    } else {
-        None
-    };
+    let startup = parse_startup_options(&args)?;
+    let handoff = startup.handoff;
     if let Some(pid) = handoff {
         administrator::wait_for_parent(pid)?;
     } else if desktop::activate_existing() {
@@ -39,12 +35,16 @@ pub fn run() -> Result<()> {
     let path = config::path()?;
     let loaded = Config::load(&path);
     let status = administrator::status()?;
-    if handoff.is_none()
-        && loaded.as_ref().is_ok_and(|c| c.options.always_admin)
-        && !status.elevated
-    {
+    let needs_admin = should_request_admin(
+        startup.privilege,
+        loaded.as_ref().is_ok_and(|c| c.options.always_admin),
+    );
+    if handoff.is_none() && needs_admin && !status.elevated {
         match administrator::restart() {
             Ok(true) => return Ok(()),
+            Ok(false) if startup.privilege == PrivilegeMode::Admin => {
+                bail!("Administrator privileges are required when starting with --admin")
+            }
             Ok(false) => {}
             Err(e) => desktop::show_error(&format!(
                 "Administrator request failed; continuing normally.\n{e:#}"
@@ -87,10 +87,6 @@ pub fn run() -> Result<()> {
     };
     let desktop = Desktop::new(i18n::tray_labels(chinese))?;
     let size = &config.window;
-    ui.window().set_size(slint::LogicalSize::new(
-        size.width.max(800.),
-        size.height.max(560.),
-    ));
     if let (Some(x), Some(y)) = (size.x, size.y)
         && desktop::visible_position(x, y)
     {
@@ -180,6 +176,124 @@ pub fn run() -> Result<()> {
     c.flush(true);
     Ok(())
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PrivilegeMode {
+    Config,
+    User,
+    Admin,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StartupOptions {
+    handoff: Option<u32>,
+    privilege: PrivilegeMode,
+}
+
+fn parse_startup_options(args: &[String]) -> Result<StartupOptions> {
+    let mut options = StartupOptions {
+        handoff: None,
+        privilege: PrivilegeMode::Config,
+    };
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--user" => {
+                if options.privilege == PrivilegeMode::Admin {
+                    bail!("--user and --admin cannot be used together");
+                }
+                options.privilege = PrivilegeMode::User;
+            }
+            "--admin" => {
+                if options.privilege == PrivilegeMode::User {
+                    bail!("--user and --admin cannot be used together");
+                }
+                options.privilege = PrivilegeMode::Admin;
+            }
+            "--handoff" => {
+                let value = args
+                    .get(index + 1)
+                    .context("--handoff requires a process id")?;
+                options.handoff = Some(
+                    value
+                        .parse::<u32>()
+                        .with_context(|| format!("Invalid --handoff process id `{value}`"))?,
+                );
+                index += 1;
+            }
+            argument => {
+                bail!("Unknown argument `{argument}`. Supported arguments: --user, --admin.")
+            }
+        }
+        index += 1;
+    }
+    Ok(options)
+}
+
+fn should_request_admin(privilege: PrivilegeMode, configured_always_admin: bool) -> bool {
+    match privilege {
+        PrivilegeMode::User => false,
+        PrivilegeMode::Admin => true,
+        PrivilegeMode::Config => configured_always_admin,
+    }
+}
+
+#[cfg(test)]
+mod startup_option_tests {
+    use super::*;
+
+    fn args(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    #[test]
+    fn defaults_to_configured_privilege_mode() {
+        assert_eq!(
+            parse_startup_options(&args(&[])).unwrap(),
+            StartupOptions {
+                handoff: None,
+                privilege: PrivilegeMode::Config,
+            }
+        );
+    }
+
+    #[test]
+    fn explicit_user_and_admin_modes_override_config() {
+        assert_eq!(
+            parse_startup_options(&args(&["--user"])).unwrap().privilege,
+            PrivilegeMode::User
+        );
+        assert_eq!(
+            parse_startup_options(&args(&["--admin"]))
+                .unwrap()
+                .privilege,
+            PrivilegeMode::Admin
+        );
+        assert!(!should_request_admin(PrivilegeMode::User, true));
+        assert!(should_request_admin(PrivilegeMode::Admin, false));
+        assert!(should_request_admin(PrivilegeMode::Config, true));
+        assert!(!should_request_admin(PrivilegeMode::Config, false));
+    }
+
+    #[test]
+    fn parses_private_handoff_argument() {
+        assert_eq!(
+            parse_startup_options(&args(&["--handoff", "1234"])).unwrap(),
+            StartupOptions {
+                handoff: Some(1234),
+                privilege: PrivilegeMode::Config,
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_conflicting_or_unknown_arguments() {
+        assert!(parse_startup_options(&args(&["--user", "--admin"])).is_err());
+        assert!(parse_startup_options(&args(&["--unexpected"])).is_err());
+        assert!(parse_startup_options(&args(&["--handoff"])).is_err());
+    }
+}
+
 struct Controller {
     runtime: Runtime,
     path: PathBuf,

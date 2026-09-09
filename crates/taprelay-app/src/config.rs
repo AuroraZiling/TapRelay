@@ -94,8 +94,8 @@ pub struct Geometry {
 impl Default for Geometry {
     fn default() -> Self {
         Self {
-            width: 1000.,
-            height: 700.,
+            width: 900.,
+            height: 500.,
             x: None,
             y: None,
             maximized: false,

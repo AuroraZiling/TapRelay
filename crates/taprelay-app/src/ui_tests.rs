@@ -301,7 +301,7 @@ fn render_all_views_without_hardware() {
     let a = actions.clone();
     ui.on_action(move |name, index, _| a.borrow_mut().push((name.to_string(), index)));
     use slint::platform::{PointerEventButton, WindowEvent};
-    let position = slint::LogicalPosition::new(34., 290.);
+    let position = slint::LogicalPosition::new(30., 214.);
     ui.window().dispatch_event(WindowEvent::PointerMoved {
         position: slint::LogicalPosition::new(70., 500.),
     });

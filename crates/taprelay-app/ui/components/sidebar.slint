@@ -43,9 +43,9 @@ export component Sidebar inherits Rectangle {
     VerticalLayout {
         padding: 12px;
         spacing: 10px;
-        for item[i] in [I18n.text.nav-overview,I18n.text.nav-bindings,I18n.text.nav-receiver,I18n.text.nav-logs,I18n.text.nav-settings]: NavButton {
+        for item[i] in [I18n.text.nav-overview,I18n.text.nav-bindings,I18n.text.nav-receiver,I18n.text.nav-logs]: NavButton {
             hint: item;
-            icon: [IconSet.LayoutDashboard, IconSet.Keyboard, IconSet.Bluetooth, IconSet.ScrollText, IconSet.Settings][i];
+            icon: [IconSet.LayoutDashboard, IconSet.Keyboard, IconSet.Bluetooth, IconSet.ScrollText][i];
             size: icon;
             width: 36px;
             horizontal-stretch: 0;
@@ -58,5 +58,19 @@ export component Sidebar inherits Rectangle {
             accessible-label: item;
         }
         Rectangle { vertical-stretch: 1; }
+        NavButton {
+            hint: I18n.text.nav-settings;
+            icon: IconSet.Settings;
+            size: icon;
+            width: 36px;
+            horizontal-stretch: 0;
+            text: "";
+            variant: root.page == 4 ? ButtonVariant.default: ButtonVariant.ghost;
+            clicked => {
+                root.action("navigate", 4, "");
+            }
+            accessible-role: button;
+            accessible-label: I18n.text.nav-settings;
+        }
     }
 }

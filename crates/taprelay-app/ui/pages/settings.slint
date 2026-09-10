@@ -4,15 +4,31 @@ import { Switch } from "../vendor/components/switch.slint";
 import { Tokens } from "../vendor/theme/tokens.slint";
 import { I18n } from "@i18n";
 import { Caption, Label } from "../components/primitives.slint";
+import { Badge, BadgeVariant } from "../vendor/components/badge.slint";
 
 component Section inherits VerticalLayout {
     in property <string> title;
+    in property <string> badge;
+    in property <BadgeVariant> badge-variant: BadgeVariant.default;
     spacing: 16px;
-    Text {
-        text: root.title;
-        color: Tokens.color-foreground;
-        font-size: 16px;
-        font-weight: 600;
+    cross-axis-alignment: start;
+    HorizontalLayout {
+        spacing: 8px;
+        alignment: start;
+        cross-axis-alignment: center;
+        Text {
+            horizontal-stretch: 0;
+            text: root.title;
+            color: Tokens.color-foreground;
+            font-size: 16px;
+            font-weight: 600;
+        }
+        if root.badge != "": Badge {
+            horizontal-stretch: 0;
+            text: root.badge;
+            size: sm;
+            variant: root.badge-variant;
+        }
     }
     @children
 }
@@ -22,6 +38,7 @@ component SettingSwitch inherits HorizontalLayout {
     in-out property <bool> checked;
     callback toggled(bool);
     spacing: 20px;
+    cross-axis-alignment: center;
     VerticalLayout {
         spacing: 4px;
         Label {
@@ -39,7 +56,6 @@ component SettingSwitch inherits HorizontalLayout {
     }
 }
 export component SettingsPage inherits ScrollArea {
-    in property <bool> account-admin;
     in-out property <bool> always-admin;
     in property <string> app-version;
     in-out property <bool> auto-listen;
@@ -117,10 +133,9 @@ export component SettingsPage inherits ScrollArea {
             }
         }
         Section {
-            title: I18n.text.settings-administrator;
-            Caption {
-                text: (root.elevated ? I18n.text.permissions-process-elevated : I18n.text.permissions-process-standard) + " · " + (root.account-admin ? I18n.text.permissions-account-admin : I18n.text.permissions-account-standard);
-            }
+            title: I18n.text.settings-app-permissions;
+            badge: root.elevated ? I18n.text.permissions-badge-administrator : I18n.text.permissions-badge-user;
+            badge-variant: root.elevated ? BadgeVariant.info : BadgeVariant.success;
             SettingSwitch {
                 label: I18n.text.settings-always-admin;
                 description: I18n.text.settings-always-admin-hint;
@@ -132,6 +147,7 @@ export component SettingsPage inherits ScrollArea {
             Button {
                 text: I18n.text.permissions-restart;
                 variant: outline;
+                horizontal-stretch: 0;
                 disabled: root.elevated;
                 clicked=> {
                     root.action("elevate",0,"");

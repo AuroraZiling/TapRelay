@@ -127,6 +127,26 @@ fn render_all_views_without_hardware() {
                 let shot = ui.window().take_snapshot().unwrap();
                 assert_eq!(shot.width(), width as u32);
                 assert_eq!(shot.height(), height as u32);
+                if mode == 2 && page == 4 && dark {
+                    let width = shot.width() as usize;
+                    let background = shot.as_slice()[300 * width + 70];
+                    let mut longest = 0;
+                    for y in 400..shot.height() as usize {
+                        let mut run = 0;
+                        for x in 60..width.saturating_sub(20) {
+                            if shot.as_slice()[y * width + x] != background {
+                                run += 1;
+                                longest = longest.max(run);
+                            } else {
+                                run = 0;
+                            }
+                        }
+                    }
+                    assert!(
+                        longest < 500,
+                        "The administrator restart button must size to its content, not span {longest}px"
+                    );
+                }
                 let mut bytes =
                     format!("P6\n{} {}\n255\n", shot.width(), shot.height()).into_bytes();
                 for pixel in shot.as_slice() {

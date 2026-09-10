@@ -20,7 +20,7 @@ actions! {
     Wizard => "wizard", WizardNext => "wizard-next", WizardBack => "wizard-back",
     WizardFinish => "wizard-finish", Theme => "theme", Language => "language",
     Setting => "setting", Elevate => "elevate", Logs => "logs", ClearLogs => "clear-logs",
-    CopyLogs => "copy-logs", ExportLogs => "export-logs",
+    CopyLogs => "copy-logs",
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum CaptureTarget {

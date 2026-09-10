@@ -1,11 +1,11 @@
 use crate::{
-    AppWindow, BindingRow, CheckRow, Theme, ThemeMode,
+    AppWindow, BindingRow, CheckRow, LogLine, Theme, ThemeMode,
     action::{Action, CaptureTarget},
     administrator,
     config::{self, Config, Language, SaveQueue, Theme as ThemeSetting},
     feedback::{TestStatus, WaitWarning},
     i18n::{self, keys},
-    logging::{self, Logs},
+    logging::{self, Filter, Logs},
     platform::desktop::{self, Desktop, DesktopEvent},
     runtime::Runtime,
 };
@@ -308,6 +308,16 @@ mod startup_option_tests {
     }
 }
 
+/// Log severity toggles as selected on the log page title bar.
+fn log_filter(ui: &AppWindow) -> Filter {
+    Filter {
+        debug: ui.get_log_debug(),
+        info: ui.get_log_info(),
+        warning: ui.get_log_warning(),
+        error: ui.get_log_error(),
+    }
+}
+
 struct Controller {
     runtime: Runtime,
     path: PathBuf,
@@ -330,7 +340,6 @@ struct Controller {
     capture_error: String,
     last_error: String,
     last_notification: Instant,
-    export: Option<std::sync::mpsc::Receiver<Result<Option<PathBuf>, String>>>,
     shutdown: bool,
     hidden: bool,
     previous_devices: Option<(
@@ -347,9 +356,9 @@ struct Controller {
     last_system_poll: Instant,
     last_ui_sync: Instant,
     last_log_revision: u64,
-    last_log_filter: String,
+    last_log_filter: Filter,
     last_dropped_logs: usize,
-    log_model: Rc<VecModel<slint::SharedString>>,
+    log_model: Rc<VecModel<LogLine>>,
 }
 impl Controller {
     fn new(
@@ -384,7 +393,6 @@ impl Controller {
             capture_error: String::new(),
             last_error: String::new(),
             last_notification: now - Duration::from_secs(120),
-            export: None,
             shutdown: false,
             hidden: false,
             previous_devices: None,
@@ -396,7 +404,7 @@ impl Controller {
             last_system_poll: now,
             last_ui_sync: now,
             last_log_revision: 0,
-            last_log_filter: String::new(),
+            last_log_filter: Filter::default(),
             last_dropped_logs: 0,
             log_model: Rc::new(VecModel::default()),
         }
@@ -638,27 +646,25 @@ impl Controller {
                     slint::quit_event_loop()?;
                 }
             }
-            Action::Logs => self.last_log_filter.clear(),
+            Action::Logs => self.update_logs(ui),
             Action::ClearLogs => {
                 self.logs.clear();
-                self.log_model.set_vec(vec![]);
-                ui.set_log_text("".into());
-                self.last_log_filter.clear();
+                self.log_model.set_vec(Vec::new());
+                self.last_log_revision = self
+                    .logs
+                    .revision
+                    .load(std::sync::atomic::Ordering::Acquire);
             }
             Action::CopyLogs => {
-                self.desktop.copy_text(&ui.get_log_text())?;
+                let text = self
+                    .logs
+                    .filtered(log_filter(ui))
+                    .iter()
+                    .map(|line| line.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                self.desktop.copy_text(&text)?;
                 self.say(self.tr(keys::LOGS_COPIED).into());
-            }
-            Action::ExportLogs => {
-                if self.export.is_none() {
-                    self.export = Some(desktop::export_logs(
-                        self.path
-                            .parent()
-                            .context("Missing data folder")?
-                            .join("taprelay-export.log"),
-                        ui.get_log_text().to_string(),
-                    )?);
-                }
             }
         }
         self.sync(ui);
@@ -759,24 +765,6 @@ impl Controller {
         ) {
             self.error(self.tr(keys::RECEIVER_TIMEOUT));
         }
-        if let Some(result) = self.export.as_ref().and_then(|rx| match rx.try_recv() {
-            Ok(result) => Some(result),
-            Err(std::sync::mpsc::TryRecvError::Empty) => None,
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                Some(Err("Log export worker stopped".into()))
-            }
-        }) {
-            self.export = None;
-            match result {
-                Ok(Some(path)) => self.say(format!(
-                    "{} {}",
-                    self.tr(keys::LOGS_EXPORTED),
-                    path.display()
-                )),
-                Ok(None) => {}
-                Err(e) => self.error(&e),
-            }
-        }
         self.flush(false);
         if !self.hidden || self.last_ui_sync.elapsed() >= Duration::from_secs(1) {
             self.sync(ui);
@@ -843,7 +831,6 @@ impl Controller {
         ui.set_notifications(o.notifications);
         ui.set_connection_wait_warning(o.connection_wait_warning);
         ui.set_elevated(self.status.elevated);
-        ui.set_account_admin(self.status.account_admin);
         ui.set_app_version(env!("CARGO_PKG_VERSION").into());
         ui.set_data_directory(
             self.path
@@ -1046,23 +1033,27 @@ impl Controller {
             .logs
             .revision
             .load(std::sync::atomic::Ordering::Acquire);
-        let filter = format!("{}:{}", ui.get_log_filter(), ui.get_log_search());
-        if ui.get_logs_paused() && filter == self.last_log_filter {
-            return;
-        }
+        let filter = log_filter(ui);
         if revision == self.last_log_revision && filter == self.last_log_filter {
             return;
         }
         self.last_log_revision = revision;
         self.last_log_filter = filter;
-        let lines = self
-            .logs
-            .filtered(ui.get_log_filter(), &ui.get_log_search());
+        let lines = self.logs.filtered(filter);
+        // A full ring evicts its oldest line, which shifts every remaining row.
+        // Replaying that as a removal keeps the update proportional to the new
+        // lines instead of re-laying out the whole log on every refresh.
+        if self.log_model.row_count() == lines.len()
+            && let (Some(line), Some(first)) = (lines.first(), self.log_model.row_data(0))
+            && (line.text != first.text || line.level != first.level)
+        {
+            self.log_model.remove(0);
+        }
         for (index, line) in lines.iter().enumerate() {
             match self.log_model.row_data(index) {
-                None => self.log_model.push(line.as_str().into()),
-                Some(previous) if previous.as_str() != line => {
-                    self.log_model.set_row_data(index, line.as_str().into())
+                None => self.log_model.push(line.clone()),
+                Some(previous) if previous.text != line.text || previous.level != line.level => {
+                    self.log_model.set_row_data(index, line.clone());
                 }
                 _ => {}
             }
@@ -1070,8 +1061,6 @@ impl Controller {
         while self.log_model.row_count() > lines.len() {
             self.log_model.remove(self.log_model.row_count() - 1);
         }
-        let text = lines.join("\n");
-        ui.set_log_text(text.into());
     }
     fn save_geometry(&mut self, ui: &AppWindow) {
         if self.hidden || self.fatal.is_some() {

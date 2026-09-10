@@ -40,6 +40,9 @@ export global Tokens {
         Theme.mode == ThemeMode.light ? Palette.neutral-500 : Palette.neutral-400;
     out property <color> color-destructive:        Palette.red-400;
     out property <color> color-affirm:             Palette.green-400;
+    out property <color> color-info:               Palette.blue-400;
+    // Severity accent for warnings; errors reuse color-destructive.
+    out property <color> color-warning:            Palette.amber-400;
     // Subtle hover surface for outline/ghost controls — shadcn's "accent".
     out property <color> color-accent:
         Theme.mode == ThemeMode.light ? Palette.alpha-b-08-on-light : Palette.alpha-w-08;

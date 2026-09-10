@@ -1,0 +1,118 @@
+import { Button, ButtonVariant } from "../vendor/components/button.slint";
+import { IconDisplay, IconSet, Icon } from "@lucide";
+import { I18n } from "@i18n";
+import { Tokens } from "../vendor/theme/tokens.slint";
+
+// One severity as a color-coded icon toggle: color alone carries the level, so
+// the group stays readable at icon size.
+component LevelToggle inherits Button {
+    in property <Icon> icon;
+    in property <color> tint;
+    in property <string> hint;
+    in property <bool> show-dot: false;
+    in-out property <bool> active;
+    callback toggled();
+
+    text: "";
+    size: icon-sm;
+    variant: root.active ? ButtonVariant.secondary: ButtonVariant.ghost;
+    accessible-role: checkbox;
+    accessible-label: root.hint;
+    accessible-checked: root.active;
+    Tooltip {
+        text: @markdown("\{root.hint}");
+    }
+    icon-display := IconDisplay {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        icon: root.icon;
+        size: 16px;
+        stroke: root.active ? root.tint: Tokens.color-subtle-foreground;
+    }
+    if root.show-dot: Rectangle {
+        x: icon-display.x + (icon-display.width - self.width) / 2;
+        y: icon-display.y + icon-display.height / 3 - self.height / 2;
+        width: 1.5px;
+        height: self.width;
+        border-radius: self.width / 2;
+        background: root.active ? root.tint : Tokens.color-subtle-foreground;
+    }
+    clicked => {
+        root.active = !root.active;
+        root.toggled();
+    }
+}
+
+// Ghost action for removing the in-memory log view without taking space from
+// the severity filters on the opposite side of the page header.
+export component LogClearButton inherits Button {
+    callback cleared();
+
+    horizontal-stretch: 0;
+    text: "";
+    size: icon-sm;
+    variant: ButtonVariant.ghost;
+    accessible-role: button;
+    accessible-label: I18n.text.common-clear;
+    IconDisplay {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        icon: IconSet.Broom;
+        size: 18px;
+        stroke: root.hovered ? Tokens.color-foreground : Tokens.color-muted-foreground;
+    }
+    clicked => {
+        root.cleared();
+    }
+}
+
+// Severity filter for the log page, anchored to the right of the page title.
+// INFO/WARNING/ERROR stay on so the page is useful by default; DEBUG (which also
+// covers TRACE) is opt-in because it is by far the noisiest level.
+export component LogLevelFilters inherits HorizontalLayout {
+    in-out property <bool> debug: false;
+    in-out property <bool> info: true;
+    in-out property <bool> warning: true;
+    in-out property <bool> error: true;
+    callback toggled();
+
+    horizontal-stretch: 0;
+    spacing: Tokens.spacing-xs;
+    LevelToggle {
+        icon: IconSet.Bug;
+        tint: Tokens.color-muted-foreground;
+        hint: I18n.text.logs-level-debug;
+        active <=> root.debug;
+        toggled => {
+            root.toggled();
+        }
+    }
+    LevelToggle {
+        icon: IconSet.Info;
+        tint: Tokens.color-foreground;
+        hint: I18n.text.logs-level-info;
+        show-dot: true;
+        active <=> root.info;
+        toggled => {
+            root.toggled();
+        }
+    }
+    LevelToggle {
+        icon: IconSet.TriangleAlert;
+        tint: Tokens.color-warning;
+        hint: I18n.text.logs-level-warning;
+        active <=> root.warning;
+        toggled => {
+            root.toggled();
+        }
+    }
+    LevelToggle {
+        icon: IconSet.CircleX;
+        tint: Tokens.color-destructive;
+        hint: I18n.text.logs-level-error;
+        active <=> root.error;
+        toggled => {
+            root.toggled();
+        }
+    }
+}

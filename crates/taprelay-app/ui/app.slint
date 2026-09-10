@@ -1,7 +1,7 @@
 import { Tokens, Theme, ThemeMode } from "vendor/theme/tokens.slint";
 import { BluetoothStatus } from "components/bluetooth-status.slint";
 import { I18n, TranslationText } from "@i18n";
-import { BindingRow, DeviceRow, CheckRow, RelayStatus } from "types.slint";
+import { BindingRow, DeviceRow, CheckRow, RelayStatus, LogLevel, LogLine } from "types.slint";
 import { Heading, ErrorBanner } from "components/primitives.slint";
 import { Sidebar } from "components/sidebar.slint";
 import { Toast } from "components/toast.slint";
@@ -11,9 +11,10 @@ import { OverviewPage } from "pages/overview.slint";
 import { BindingsPage } from "pages/bindings.slint";
 import { DevicesPage } from "pages/devices.slint";
 import { ReceiverActions } from "components/receiver-actions.slint";
+import { LogClearButton, LogLevelFilters } from "components/log-level-filters.slint";
 import { LogsPage } from "pages/logs.slint";
 import { SettingsPage } from "pages/settings.slint";
-export { Theme, ThemeMode, I18n, TranslationText, BindingRow, DeviceRow, CheckRow, RelayStatus }
+export { Theme, ThemeMode, I18n, TranslationText, BindingRow, DeviceRow, CheckRow, RelayStatus, LogLevel, LogLine }
 
 // Window shell: public Rust interface, navigation and page composition only.
 export component AppWindow inherits Window {
@@ -44,7 +45,6 @@ export component AppWindow inherits Window {
     in property <bool> bluetooth-available;
     in property <bool> busy;
     in property <bool> elevated;
-    in property <bool> account-admin;
     in property <string> device-name;
     in property <bool> device-selected;
     in property <string> stage;
@@ -69,11 +69,13 @@ export component AppWindow inherits Window {
     in-out property <bool> connection-wait-warning;
     in property <int> theme-choice;
     in property <int> language-choice;
-    in-out property <bool> logs-paused: false;
-    in-out property <string> log-search;
-    in-out property <int> log-filter: 0;
-    in property <string> log-text;
-    in property <[string]> log-lines;
+    in property <[LogLine]> log-lines;
+    in-out property <length> log-viewport-y;
+    // Log severity toggles; DEBUG also covers TRACE and stays off by default.
+    in-out property <bool> log-debug: false;
+    in-out property <bool> log-info: true;
+    in-out property <bool> log-warning: true;
+    in-out property <bool> log-error: true;
     callback action(string, int, string);
     property <color> signal: root.state-color == 0 ? #2eb470: root.state-color == 1 ? #8b919a: root.state-color == 2 ? #e8ae36: #e64f55;
     property <RelayStatus> relay-status: {
@@ -135,6 +137,9 @@ export component AppWindow inherits Window {
                         horizontal-stretch: 0;
                         text: [I18n.text.nav-overview,I18n.text.nav-bindings,I18n.text.nav-receiver,I18n.text.nav-logs,I18n.text.nav-settings][root.page];
                     }
+                    if root.page == 3: LogClearButton {
+                        cleared => { root.action("clear-logs", 0, ""); }
+                    }
                     if root.page == 2: BluetoothStatus {
                         available: root.bluetooth-available;
                         busy: root.busy;
@@ -143,6 +148,14 @@ export component AppWindow inherits Window {
                     if root.page == 2: Rectangle { horizontal-stretch: 1; }
                     if root.page == 2: ReceiverActions {
                         action(name, index, value) => { root.action(name, index, value); }
+                    }
+                    if root.page == 3: Rectangle { horizontal-stretch: 1; }
+                    if root.page == 3: LogLevelFilters {
+                        debug <=> root.log-debug;
+                        info <=> root.log-info;
+                        warning <=> root.log-warning;
+                        error <=> root.log-error;
+                        toggled => { root.action("logs", 0, ""); }
                     }
                 }
                 if root.problem != "" && root.page != 2: ErrorBanner {
@@ -179,17 +192,13 @@ export component AppWindow inherits Window {
                     }
                 }
                 if root.page == 3: LogsPage {
-                    log-filter <=> root.log-filter;
-                    log-search <=> root.log-search;
-                    log-text: root.log-text;
                     log-lines: root.log-lines;
-                    logs-paused <=> root.logs-paused;
+                    viewport-y <=> root.log-viewport-y;
                     action(name, index, value) => {
                         root.action(name, index, value);
                     }
                 }
                 if root.page == 4: SettingsPage {
-                    account-admin: root.account-admin;
                     always-admin <=> root.always-admin;
                     app-version: root.app-version;
                     auto-listen <=> root.auto-listen;

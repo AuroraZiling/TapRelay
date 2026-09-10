@@ -1,10 +1,11 @@
 import { Tokens } from "../theme/tokens.slint";
 
-export enum BadgeVariant { default, secondary, outline, destructive, ghost, link }
+export enum BadgeVariant { default, secondary, outline, destructive, ghost, link, success, info }
 export enum BadgeSize    { sm, default }
 
 export component Badge inherits Rectangle {
-    // Visual style — default, secondary, outline, destructive, ghost, link.
+    // Visual style — default, secondary, outline, destructive, ghost, link,
+    // success, info.
     in property <BadgeVariant> variant: BadgeVariant.default;
     // Height + padding — sm, default, lg.
     in property <BadgeSize>    size:    BadgeSize.default;
@@ -18,6 +19,8 @@ export component Badge inherits Rectangle {
     border-radius: Tokens.radius-md;   // shadcn badge rounded-md
 
     background:
+        variant == BadgeVariant.success ? Tokens.color-affirm.with-alpha(0.2) :
+        variant == BadgeVariant.info ? Tokens.color-info.with-alpha(0.2) :
         variant == BadgeVariant.secondary ? Tokens.color-secondary :
         variant == BadgeVariant.outline ? transparent :
         variant == BadgeVariant.ghost ? transparent :
@@ -36,6 +39,8 @@ export component Badge inherits Rectangle {
             size == BadgeSize.sm ? 11px : Tokens.typography-label-size;
         font-weight: Tokens.typography-weight-medium;
         color:
+            variant == BadgeVariant.success ? Tokens.color-affirm :
+            variant == BadgeVariant.info ? Tokens.color-info :
             variant == BadgeVariant.destructive ? Tokens.color-destructive :
             variant == BadgeVariant.outline ? Tokens.color-foreground :
             variant == BadgeVariant.secondary ? Tokens.color-foreground :

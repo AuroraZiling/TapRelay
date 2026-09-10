@@ -1,101 +1,92 @@
-import { Button } from "../vendor/components/button.slint";
-import { ListView } from "std-widgets.slint";
-import { Input } from "../vendor/components/input.slint";
+import { ScrollArea } from "../vendor/components/scroll-area.slint";
 import { Tokens } from "../vendor/theme/tokens.slint";
 import { I18n } from "@i18n";
+import { LogLevel, LogLine } from "../types.slint";
 import { Panel } from "../components/primitives.slint";
 
+// A log line is a read-only text input: selection and Ctrl+C come from the
+// text input itself, and each row carries its own severity color.
+component LogRow inherits TextInput {
+    in property <LogLevel> level;
+    read-only: true;
+    single-line: false;
+    wrap: word-wrap;
+    vertical-alignment: top;
+    font-family: "Consolas";
+    font-size: Tokens.typography-label-size;
+    color: root.level == LogLevel.error
+        ? Tokens.color-destructive :
+        root.level == LogLevel.warning
+        ? Tokens.color-warning :
+        root.level == LogLevel.debug ? Tokens.color-muted-foreground :
+        Tokens.color-foreground;
+    selection-background-color: Tokens.color-foreground.with-alpha(0.25);
+    selection-foreground-color: Tokens.color-foreground;
+}
+
 export component LogsPage inherits VerticalLayout {
-    in-out property <int> log-filter: 0;
-    in-out property <string> log-search;
-    in property <string> log-text;
-    in property <[string]> log-lines;
-    in-out property <bool> logs-paused: false;
+    in property <[LogLine]> log-lines;
+    // Scroll offset of the log viewport; kept on the window so follow-tail is
+    // observable from the outside.
+    in-out property <length> viewport-y;
     callback action(string, int, string);
-    spacing: 12px;
-    Input {
-        placeholder: I18n.text.logs-search;
-        text <=> root.log-search;
-        edited(value)=> {
-            root.action("logs",0,"");
-        }
+    spacing: 0;
+    // Bottom of the scroll range. A log shorter than the panel stays at the top.
+    property <length> tail-y: min(0px, log-view.height - log-view.viewport-height);
+    // Tail-follow latch: only a reader parked at the bottom is carried along by
+    // new lines, so scrolling up survives any amount of later log traffic.
+    property <bool> following: true;
+    // Opening the page must land on the newest lines, whether or not the first
+    // layout already reported the content height.
+    init => {
+        root.viewport-y = root.tail-y;
     }
-    HorizontalLayout {
-        spacing: 6px;
-        for title[i] in ["INFO+","ALL","ERROR","WARN","INFO","DEBUG","TRACE"]: Button {
-            text: title;
-            size: sm;
-            variant: root.log-filter == i ? secondary: ghost;
-            clicked=> {
-                root.log-filter=i;
-                root.action("logs",0,"");
-            }
-        }
+    changed viewport-y => {
+        // viewport-y runs from tail-y (bottom) up to 0 (top).
+        root.following = root.viewport-y <= root.tail-y + 2px;
+    }
+    changed tail-y => {
+        // Applying the tail also recovers when a level toggle shortens the log
+        // under the viewport, which would otherwise leave it out of range.
+        root.viewport-y = root.following ? root.tail-y : max(root.viewport-y, root.tail-y);
     }
     Panel {
-        property <string> displayed-log: root.log-text;
-        log-view := ListView {
-            x: 12px;
-            y: 12px;
-            width: parent.width - 24px;
-            height: parent.height - 24px;
-            changed viewport-height => {
-                if !root.logs-paused {
-                    self.viewport-y = min(0px, self.height - self.viewport-height);
+        ContextMenuArea {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: parent.height;
+            Menu {
+                MenuItem {
+                    title: I18n.text.logs-copy-all;
+                    enabled: root.log-lines.length > 0;
+                    activated => {
+                        root.action("copy-logs", 0, "");
+                    }
                 }
             }
-            for line in root.log-lines: Text {
+            log-view := ScrollArea {
+                // Drag recognition would race text selection and delay row presses.
+                drag-to-scroll: false;
                 width: parent.width;
-                text: line;
-                color: Tokens.color-foreground;
-                font-family: "Consolas";
-                font-size: 12px;
-                wrap: word-wrap;
-            }
-        }
-        changed displayed-log => {
-            if !root.logs-paused {
-                log-view.viewport-y=min(0px,log-view.height - log-view.viewport-height);
-            }
-        }
-    }
-    HorizontalLayout {
-        alignment: start;
-        spacing: 8px;
-        Button {
-            text: root.logs-paused ? I18n.text.logs-resume : I18n.text.logs-pause;
-            variant: outline;
-            clicked=> {
-                root.logs-paused=!root.logs-paused;
-                root.action("logs",0,"");
-            }
-        }
-        Button {
-            text: I18n.text.common-copy;
-            variant: outline;
-            clicked=> {
-                root.action("copy-logs",0,"");
-            }
-        }
-        Button {
-            text: I18n.text.common-export;
-            variant: outline;
-            clicked=> {
-                root.action("export-logs",0,"");
-            }
-        }
-        Button {
-            text: I18n.text.common-clear;
-            variant: ghost;
-            clicked=> {
-                root.action("clear-logs",0,"");
-            }
-        }
-        Button {
-            text: I18n.text.logs-folder;
-            variant: ghost;
-            clicked=> {
-                root.action("logs-folder",0,"");
+                height: parent.height;
+                content-height: max(self.height, log-rows.preferred-height);
+                viewport-y <=> root.viewport-y;
+                log-rows := VerticalLayout {
+                    // Leave the right edge free for the slim scrollbar.
+                    width: parent.width - 10px;
+                    padding-left: 12px;
+                    padding-top: 6px;
+                    padding-bottom: 6px;
+                    spacing: 2px;
+                    // Rows keep their text height instead of stretching to the
+                    // panel when the log is shorter than the viewport.
+                    alignment: start;
+                    for line in root.log-lines: LogRow {
+                        text: line.text;
+                        level: line.level;
+                    }
+                }
             }
         }
     }

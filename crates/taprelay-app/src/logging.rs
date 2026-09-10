@@ -1,3 +1,4 @@
+use crate::{LogLevel, LogLine};
 use std::{
     collections::VecDeque,
     fmt,
@@ -13,11 +14,47 @@ use tracing::{
 };
 use tracing_subscriber::{Layer, layer::SubscriberExt, util::SubscriberInitExt};
 const LIMIT: usize = 1000;
+/// Severity toggles of the log page. TRACE follows DEBUG because the page
+/// exposes four levels only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Filter {
+    pub debug: bool,
+    pub info: bool,
+    pub warning: bool,
+    pub error: bool,
+}
+impl Default for Filter {
+    fn default() -> Self {
+        Self {
+            debug: false,
+            info: true,
+            warning: true,
+            error: true,
+        }
+    }
+}
+impl Filter {
+    fn accepts(self, level: tracing::Level) -> bool {
+        match level {
+            tracing::Level::ERROR => self.error,
+            tracing::Level::WARN => self.warning,
+            tracing::Level::INFO => self.info,
+            _ => self.debug,
+        }
+    }
+}
+fn severity(level: tracing::Level) -> LogLevel {
+    match level {
+        tracing::Level::ERROR => LogLevel::Error,
+        tracing::Level::WARN => LogLevel::Warning,
+        tracing::Level::INFO => LogLevel::Info,
+        _ => LogLevel::Debug,
+    }
+}
 #[derive(Clone, Debug)]
 pub struct Entry {
     pub level: tracing::Level,
     line: String,
-    search: String,
 }
 #[derive(Clone, Default)]
 pub struct Logs {
@@ -31,10 +68,6 @@ impl Logs {
             .as_ref()
             .map_or(0, |counter| counter.dropped_lines())
     }
-    pub fn clear(&self) {
-        self.lines.lock().unwrap_or_else(|e| e.into_inner()).clear();
-        self.revision.fetch_add(1, Ordering::Release);
-    }
     #[cfg(test)]
     pub fn entries(&self) -> Vec<Entry> {
         self.lines
@@ -44,25 +77,21 @@ impl Logs {
             .cloned()
             .collect()
     }
-    pub fn filtered(&self, level: i32, query: &str) -> Vec<String> {
-        let query = query.to_lowercase();
+    pub fn filtered(&self, filter: Filter) -> Vec<LogLine> {
         self.lines
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .iter()
-            .filter(|entry| {
-                let rank = match entry.level {
-                    tracing::Level::ERROR => 2,
-                    tracing::Level::WARN => 3,
-                    tracing::Level::INFO => 4,
-                    tracing::Level::DEBUG => 5,
-                    _ => 6,
-                };
-                (level == 1 || (level == 0 && rank <= 4) || level == rank)
-                    && (query.is_empty() || entry.search.contains(&query))
+            .filter(|entry| filter.accepts(entry.level))
+            .map(|entry| LogLine {
+                text: entry.line.as_str().into(),
+                level: severity(entry.level),
             })
-            .map(|e| e.line.clone())
             .collect()
+    }
+    pub fn clear(&self) {
+        self.lines.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        self.revision.fetch_add(1, Ordering::Release);
     }
 }
 fn timestamp() -> String {
@@ -99,7 +128,6 @@ impl<S: Subscriber> Layer<S> for Logs {
         let entry = Entry {
             level: *event.metadata().level(),
             line: format!("{} {:5} {}", timestamp(), event.metadata().level(), message),
-            search: message.to_lowercase(),
         };
         let mut lines = self.lines.lock().unwrap_or_else(|e| e.into_inner());
         if lines.len() == LIMIT {
@@ -280,19 +308,38 @@ mod tests {
         let logs = Logs::default();
         let subscriber = tracing_subscriber::registry().with(logs.clone());
         tracing::subscriber::with_default(subscriber, || {
-            for _ in 0..1002 {
+            for _ in 0..1001 {
                 tracing::info!("ERROR is just text");
             }
+            tracing::debug!("noise");
+            tracing::error!("failure");
         });
         let entries = logs.entries();
         assert_eq!(entries.len(), LIMIT);
-        assert!(entries.iter().all(|e| e.level == tracing::Level::INFO));
-        assert_eq!(logs.filtered(4, "error IS").len(), LIMIT);
+        assert!(entries.iter().any(|e| e.level == tracing::Level::DEBUG));
+        let lines = logs.filtered(Filter::default());
+        assert_eq!(lines.len(), LIMIT - 1);
         assert!(
-            logs.filtered(2, "error").is_empty(),
+            lines
+                .iter()
+                .all(|line| line.level == LogLevel::Info || line.level == LogLevel::Error),
             "Text containing ERROR must not change its severity"
+        );
+        assert_eq!(
+            lines.last().map(|line| line.level),
+            Some(LogLevel::Error),
+            "Error entries stay visible with the default toggles"
+        );
+        assert_eq!(
+            logs.filtered(Filter {
+                debug: true,
+                ..Filter::default()
+            })
+            .len(),
+            LIMIT
         );
         logs.clear();
         assert!(logs.entries().is_empty());
+        assert!(logs.filtered(Filter::default()).is_empty());
     }
 }

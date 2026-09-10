@@ -2,7 +2,7 @@ import { Button } from "../vendor/components/button.slint";
 import { Tokens } from "../vendor/theme/tokens.slint";
 import { ScrollArea } from "../vendor/components/scroll-area.slint";
 import { I18n } from "@i18n";
-import { BindingRow, DeviceRow } from "../types.slint";
+import { BindingRow, DeviceRow, RelayStatus } from "../types.slint";
 import { Heading, Label, ErrorBanner } from "../components/primitives.slint";
 import { RelayStatusCard, AdminAlert } from "../components/runtime-panels.slint";
 import { BindingsPage } from "bindings.slint";
@@ -16,13 +16,9 @@ export component WizardPage inherits VerticalLayout {
     in property <int> capture-index: -1;
     in property <string> capture-text;
     in property <[string]> capture-keys;
-    in property <string> device-name;
-    in property <bool> device-selected;
     in property <bool> elevated;
-    in property <int> input-count;
-    in property <bool> listening;
     in property <string> problem;
-    in property <bool> ready;
+    in property <RelayStatus> relay-status;
     in property <bool> receiver-next-allowed;
     in property <string> discovery-status;
     in property <string> adapter-label;
@@ -102,17 +98,9 @@ export component WizardPage inherits VerticalLayout {
             width: parent.width;
             height: self.preferred-height;
             spacing: 16px;
-            Label { text: I18n.text.wizard-input-count + root.input-count; }
+            Label { text: I18n.text.wizard-input-count + root.relay-status.input-count; }
             RelayStatusCard {
-                input-count: root.input-count;
-                device-name: root.device-name;
-                device-selected: root.device-selected;
-                listening: root.listening;
-                ready: root.ready;
-                signal: root.signal;
-                stage: root.stage;
-                stage-detail: root.stage-detail;
-                test-result: root.test-result;
+                relay-status: root.relay-status;
                 action(name, index, value) => {
                     root.action(name, index, value);
                 }

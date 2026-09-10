@@ -1,6 +1,7 @@
 import { Button } from "../vendor/components/button.slint";
 import { Alert } from "../vendor/components/alert.slint";
 import { I18n } from "@i18n";
+import { RelayStatus } from "../types.slint";
 import { Heading, Caption, Label, Panel, StatusDot } from "../components/primitives.slint";
 
 component TapRipple inherits Rectangle {
@@ -37,20 +38,12 @@ component TapRipple inherits Rectangle {
 }
 
 export component RelayStatusCard inherits Panel {
-    in property <string> device-name;
-    in property <bool> device-selected;
-    in property <bool> listening;
-    in property <bool> ready;
-    in property <color> signal;
-    in property <string> stage;
-    in property <string> stage-detail;
-    in property <string> test-result;
-    in property <int> input-count;
+    in property <RelayStatus> relay-status;
     clip: true;
     callback action(string, int, string);
     for slot in 16: TapRipple {
-        sequence: floor((root.input-count + 15 - slot) / 16);
-        signal: root.signal;
+        sequence: floor((root.relay-status.input-count + 15 - slot) / 16);
+        signal: root.relay-status.signal;
         center-x: status-row.x + status-dot.x + status-dot.width / 2;
         center-y: status-row.y + status-dot.y + status-dot.height / 2;
         radius: sqrt((root.width / 1px) * (root.width / 1px) + (root.height / 1px) * (root.height / 1px)) * 1px;
@@ -62,29 +55,29 @@ export component RelayStatusCard inherits Panel {
             text: I18n.text.receiver-current;
         }
         Heading {
-            text: root.device-name;
+            text: root.relay-status.device-name;
         }
         status-row := HorizontalLayout {
             spacing: 10px;
             cross-axis-alignment: center;
             status-dot := StatusDot {
-                signal: root.signal;
+                signal: root.relay-status.signal;
                 dot-size: 10px;
             }
             Label {
-                text: root.stage;
+                text: root.relay-status.stage;
                 horizontal-stretch: 1;
                 vertical-alignment: center;
             }
         }
-        if root.device-selected && root.stage-detail != "": Caption {
-            text: root.stage-detail;
+        if root.relay-status.device-selected && root.relay-status.stage-detail != "": Caption {
+            text: root.relay-status.stage-detail;
         }
         HorizontalLayout {
             alignment: start;
             spacing: 12px;
             Button {
-                text: root.listening ? I18n.text.listening-stop : I18n.text.listening-start;
+                text: root.relay-status.listening ? I18n.text.listening-stop : I18n.text.listening-start;
                 clicked=> {
                     root.action("listen",0,"");
                 }
@@ -92,12 +85,12 @@ export component RelayStatusCard inherits Panel {
             Button {
                 text: I18n.text.receiver-test;
                 variant: outline;
-                disabled: !root.ready;
+                disabled: !root.relay-status.ready;
                 clicked=> {
                     root.action("test",0,"");
                 }
             }
-            Button {
+            if root.relay-status.show-retry: Button {
                 text: I18n.text.common-retry;
                 variant: ghost;
                 clicked=> {
@@ -105,8 +98,8 @@ export component RelayStatusCard inherits Panel {
                 }
             }
         }
-        if root.test-result != "": Caption {
-            text: root.test-result;
+        if root.relay-status.test-result != "": Caption {
+            text: root.relay-status.test-result;
         }
     }
 }

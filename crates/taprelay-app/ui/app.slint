@@ -1,7 +1,7 @@
 import { Tokens, Theme, ThemeMode } from "vendor/theme/tokens.slint";
 import { BluetoothStatus } from "components/bluetooth-status.slint";
 import { I18n, TranslationText } from "@i18n";
-import { BindingRow, DeviceRow, CheckRow } from "types.slint";
+import { BindingRow, DeviceRow, CheckRow, RelayStatus } from "types.slint";
 import { Heading, ErrorBanner } from "components/primitives.slint";
 import { Sidebar } from "components/sidebar.slint";
 import { Toast } from "components/toast.slint";
@@ -13,7 +13,7 @@ import { DevicesPage } from "pages/devices.slint";
 import { ReceiverActions } from "components/receiver-actions.slint";
 import { LogsPage } from "pages/logs.slint";
 import { SettingsPage } from "pages/settings.slint";
-export { Theme, ThemeMode, I18n, TranslationText, BindingRow, DeviceRow, CheckRow }
+export { Theme, ThemeMode, I18n, TranslationText, BindingRow, DeviceRow, CheckRow, RelayStatus }
 
 // Window shell: public Rust interface, navigation and page composition only.
 export component AppWindow inherits Window {
@@ -78,6 +78,18 @@ export component AppWindow inherits Window {
     in property <[string]> log-lines;
     callback action(string, int, string);
     property <color> signal: root.state-color == 0 ? #2eb470: root.state-color == 1 ? #8b919a: root.state-color == 2 ? #e8ae36: #e64f55;
+    property <RelayStatus> relay-status: {
+        device-name: root.device-name,
+        device-selected: root.device-selected,
+        listening: root.listening,
+        ready: root.ready,
+        show-retry: root.state-color != 0,
+        signal: root.signal,
+        stage: root.stage,
+        stage-detail: root.stage-detail,
+        test-result: root.test-result,
+        input-count: root.input-count
+    };
     HorizontalLayout {
         spacing: 0px;
         if root.mode == 2: Sidebar {
@@ -107,22 +119,14 @@ export component AppWindow inherits Window {
                 capture-index: root.capture-index;
                 capture-text: root.capture-text;
                 capture-keys: root.capture-keys;
-                device-name: root.device-name;
-                device-selected: root.device-selected;
                 discovery-status: root.discovery-status;
                 scanning: root.scanning;
                 paired-devices: root.paired-devices;
                 elevated: root.elevated;
-                input-count: root.input-count;
-                listening: root.listening;
                 problem: root.problem;
-                ready: root.ready;
+                relay-status: root.relay-status;
                 receiver-next-allowed: root.receiver-next-allowed;
-                signal: root.signal;
-                stage: root.stage;
-                stage-detail: root.stage-detail;
                 step: root.wizard-page;
-                test-result: root.test-result;
                 action(name, index, value) => {
                     root.action(name, index, value);
                 }
@@ -154,17 +158,9 @@ export component AppWindow inherits Window {
                 if root.page == 0: OverviewPage {
                     bindings: root.bindings;
                     binding-count: root.bindings.length;
-                    input-count: root.input-count;
                     binding-summary: root.binding-summary;
-                    device-name: root.device-name;
-                    device-selected: root.device-selected;
                     elevated: root.elevated;
-                    listening: root.listening;
-                    ready: root.ready;
-                    signal: root.signal;
-                    stage: root.stage;
-                    stage-detail: root.stage-detail;
-                    test-result: root.test-result;
+                    relay-status: root.relay-status;
                     action(name, index, value) => {
                         root.action(name, index, value);
                     }

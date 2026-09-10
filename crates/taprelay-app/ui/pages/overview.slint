@@ -2,7 +2,7 @@ import { Button } from "../vendor/components/button.slint";
 import { ScrollArea } from "../vendor/components/scroll-area.slint";
 import { Tokens } from "../vendor/theme/tokens.slint";
 import { I18n } from "@i18n";
-import { BindingRow } from "../types.slint";
+import { BindingRow, RelayStatus } from "../types.slint";
 import { Caption, Label, Panel } from "../components/primitives.slint";
 import { RelayStatusCard, AdminAlert } from "../components/runtime-panels.slint";
 import { IconDisplay, IconSet } from "@lucide";
@@ -12,16 +12,8 @@ export component OverviewPage inherits ScrollArea {
     in property <[BindingRow]> bindings;
     in property <int> binding-count;
     in property <string> binding-summary;
-    in property <string> device-name;
-    in property <bool> device-selected;
     in property <bool> elevated;
-    in property <int> input-count;
-    in property <bool> listening;
-    in property <bool> ready;
-    in property <color> signal;
-    in property <string> stage;
-    in property <string> stage-detail;
-    in property <string> test-result;
+    in property <RelayStatus> relay-status;
     callback action(string, int, string);
     content-height: max(self.height, content.preferred-height);
     content := VerticalLayout {
@@ -32,15 +24,7 @@ export component OverviewPage inherits ScrollArea {
             action(name, index, value) => { root.action(name, index, value); }
         }
         RelayStatusCard {
-            input-count: root.input-count;
-            device-name: root.device-name;
-            device-selected: root.device-selected;
-            listening: root.listening;
-            ready: root.ready;
-            signal: root.signal;
-            stage: root.stage;
-            stage-detail: root.stage-detail;
-            test-result: root.test-result;
+            relay-status: root.relay-status;
             action(name, index, value) => {
                 root.action(name, index, value);
             }

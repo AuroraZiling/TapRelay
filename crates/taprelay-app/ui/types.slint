@@ -1,3 +1,15 @@
 export struct BindingRow { text: string, keys: [string], enabled: bool }
 export struct DeviceRow { id: string, name: string, detail: string, selected: bool, action: string, action-label: string, enabled: bool, paired: bool, device-kind: string, status: string }
 export struct CheckRow { title: string, state: int }
+export struct RelayStatus {
+    device-name: string,
+    device-selected: bool,
+    listening: bool,
+    ready: bool,
+    show-retry: bool,
+    signal: color,
+    stage: string,
+    stage-detail: string,
+    test-result: string,
+    input-count: int
+}

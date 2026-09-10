@@ -38,6 +38,9 @@ export component Button inherits Rectangle {
     in property <bool>   haspopup: false;
     // Fired on press release while enabled.
     callback clicked();
+    // Immediate commands (capture cancel/delete) own the press, not its release.
+    in property <bool> activate-on-press: false;
+    in property <bool> foreground-only: false;
     // TapRelay integration: expose hover without overlaying an input-consuming TouchArea.
     out property <bool> hovered: touch.has-hover;
 
@@ -138,7 +141,7 @@ export component Button inherits Rectangle {
         height: parent.height;
         border-radius: Tokens.radius-md;
 
-        background:        interactive-hover ? bg-hover            : bg-rest;
+        background:        root.foreground-only ? transparent : interactive-hover ? bg-hover : bg-rest;
         border-width:      border-w;
         border-color:      interactive-hover ? border-hover        : border-rest;
         drop-shadow-blur:  interactive-hover ? shadow-hover-blur   : shadow-rest-blur;
@@ -180,10 +183,13 @@ export component Button inherits Rectangle {
                     && ev.button == PointerEventButton.left
                     && ev.kind == PointerEventKind.down) {
                 root.pointer-focus = true;
+                if root.activate-on-press {
+                    root.clicked();
+                }
             }
         }
         clicked => {
-            if (!root.disabled) {
+            if (!root.disabled && !root.activate-on-press) {
                 focus-scope.focus();
                 root.clicked();
             }

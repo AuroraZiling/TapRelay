@@ -1,6 +1,6 @@
 //! Headless view validation only: no native window, permissions, input hooks or Bluetooth.
 use crate::*;
-use slint::{ComponentHandle, ModelRc, VecModel, platform::WindowAdapter};
+use slint::{ComponentHandle, Model, ModelRc, VecModel, platform::WindowAdapter};
 
 struct SoftwareTestPlatform {
     window: std::rc::Rc<slint::platform::software_renderer::MinimalSoftwareWindow>,
@@ -271,6 +271,39 @@ fn render_all_views_without_hardware() {
     });
     ui.set_capture_index(-2);
     let _ = ui.window().take_snapshot().unwrap();
+    // A capture-control press must cancel before raw mouse input can be previewed.
+    let cancel_position = slint::LogicalPosition::new(195., 158.);
+    ui.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerMoved {
+            position: cancel_position,
+        });
+    ui.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerPressed {
+            position: cancel_position,
+            button: slint::platform::PointerEventButton::Left,
+        });
+    assert!(
+        capture_actions
+            .borrow()
+            .iter()
+            .any(|(name, _, _)| name == "cancel-capture"),
+        "Cancel must be dispatched on mouse down, before a held left button becomes a capture preview: {:?}",
+        capture_actions.borrow()
+    );
+    ui.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerReleased {
+            position: cancel_position,
+            button: slint::platform::PointerEventButton::Left,
+        });
+    assert_eq!(
+        capture_actions
+            .borrow()
+            .iter()
+            .filter(|(name, _, _)| name == "cancel-capture")
+            .count(),
+        1
+    );
+    capture_actions.borrow_mut().clear();
     for key in [
         slint::platform::Key::F8.into(),
         slint::SharedString::from("k"),
@@ -307,6 +340,58 @@ fn render_all_views_without_hardware() {
         "A newly inserted recording row must receive Escape without an extra click"
     );
     ui.set_capture_index(-1);
+    // Cover the chip padding, label-to-X gap and X with one hover surface.
+    ui.set_bindings(ModelRc::new(VecModel::from(vec![BindingRow {
+        text: "F8".into(),
+        keys: ModelRc::new(VecModel::from(vec!["F8".into()])),
+        enabled: true,
+    }])));
+    let mut hover_background = None;
+    for x in [29., 40., 55., 70., 81.] {
+        ui.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerMoved {
+                position: slint::LogicalPosition::new(x, 158.),
+            });
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+        let shot = ui.window().take_snapshot().unwrap();
+        let pixel = shot.as_slice()[148 * shot.width() as usize + 40];
+        let rgb = (pixel.r, pixel.g, pixel.b);
+        assert_eq!(
+            *hover_background.get_or_insert(rgb),
+            rgb,
+            "Hover must not disappear in chip padding or gaps at x={x}"
+        );
+    }
+    // Mutate the model during the press, as the real controller does. Release
+    // must not activate the add button that moves into the deleted chip's slot.
+    let delete_actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let observed = delete_actions.clone();
+    let weak = ui.as_weak();
+    ui.on_action(move |name, _, _| {
+        observed.borrow_mut().push(name.to_string());
+        if name == "delete" {
+            weak.upgrade()
+                .unwrap()
+                .set_bindings(ModelRc::new(VecModel::<BindingRow>::default()));
+        }
+    });
+    let position = slint::LogicalPosition::new(70., 158.);
+    ui.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerMoved { position });
+    ui.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerPressed {
+            position,
+            button: slint::platform::PointerEventButton::Left,
+        });
+    assert_eq!(delete_actions.borrow().as_slice(), &["delete"]);
+    assert_eq!(ui.get_bindings().row_count(), 0);
+    let _ = ui.window().take_snapshot().unwrap();
+    ui.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerReleased {
+            position,
+            button: slint::platform::PointerEventButton::Left,
+        });
+    assert_eq!(delete_actions.borrow().as_slice(), &["delete"]);
     // Exercise real pointer routing through the tooltip wrapper, not just callback invocation.
     i18n::apply(&ui, false);
     ui.set_mode(2);

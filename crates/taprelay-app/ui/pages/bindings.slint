@@ -107,7 +107,7 @@ component BindingChip inherits Rectangle {
     callback remove();
     callback key-input(string, bool);
     out property <bool> hovered:
-        capture.hovered || cancel_button.hovered || remove_button.hovered;
+        surface-touch.has-hover || capture.hovered || cancel_button.hovered || remove_button.hovered;
 
     width: content.preferred-width;
     height: Tokens.density-button-sm;
@@ -126,6 +126,12 @@ component BindingChip inherits Rectangle {
     }
     accessible-role: none;
 
+    // Cover padding and layout gaps as well as the child controls.
+    surface-touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { if !root.recording { root.begin(); } }
+    }
+
     content := HorizontalLayout {
         x: 0px;
         width: self.preferred-width;
@@ -143,6 +149,8 @@ component BindingChip inherits Rectangle {
             key-input(text, down) => { root.key-input(text, down); }
         }
         cancel_button := Button {
+            activate-on-press: true;
+            foreground-only: true;
             width: root.recording ? 24px : 0px;
             visible: root.recording;
             size: icon-xs;
@@ -160,12 +168,14 @@ component BindingChip inherits Rectangle {
                     y: (parent.height - self.height) / 2;
                     icon: IconSet.X;
                     size: 14px;
-                    stroke: Tokens.color-muted-foreground;
+                    stroke: cancel_button.hovered ? Tokens.color-foreground : Tokens.color-muted-foreground;
                     stroke-width: 1.75;
                 }
             }
         }
         remove_button := Button {
+            activate-on-press: true;
+            foreground-only: true;
             width: !root.recording && root.removable ? 24px : 0px;
             visible: !root.recording && root.removable;
             size: icon-xs;
@@ -184,7 +194,7 @@ component BindingChip inherits Rectangle {
                     y: (parent.height - self.height) / 2;
                     icon: IconSet.X;
                     size: 14px;
-                    stroke: Tokens.color-muted-foreground;
+                    stroke: remove_button.hovered && !root.remove-disabled ? Tokens.color-destructive : Tokens.color-muted-foreground;
                     stroke-width: 1.75;
                 }
             }
@@ -192,9 +202,7 @@ component BindingChip inherits Rectangle {
     }
 }
 
-// Button is the right primitive for the interaction, but its outline is
-// intentionally solid. This small local control adds only the dashed outline
-// needed by the inline add affordance while keeping the same button behavior.
+// Use the renderer's native rounded border at every scale factor.
 component AddBindingButton inherits Rectangle {
     in property <string> text;
     in property <bool> disabled: false;
@@ -210,11 +218,12 @@ component AddBindingButton inherits Rectangle {
     flex-shrink: 0;
     opacity: root.disabled ? 0.5 : 1.0;
     background: root.hovered && !root.disabled ? Tokens.color-accent : Tokens.color-background;
-    property <color> dash-color: root.hovered && !root.disabled
+    border-width: 1px;
+    border-color: root.hovered && !root.disabled
         ? Tokens.color-border-hairline-strong
         : Tokens.color-border-hairline;
     border-radius: Tokens.radius-md;
-    animate background, dash-color, opacity {
+    animate background, border-color, opacity {
         duration: Tokens.motion-fast;
         easing: Tokens.motion-easing-standard;
     }
@@ -247,41 +256,6 @@ component AddBindingButton inherits Rectangle {
             font-weight: Tokens.typography-weight-medium;
             vertical-alignment: center;
         }
-    }
-
-    // Slint's Rectangle has no border-style property. Draw the short segments
-    // directly so translucent hover backgrounds cannot reveal a solid border.
-    for i in 32: Rectangle {
-        x: 4px + i * 8px;
-        y: 0px;
-        width: 4px;
-        height: 1px;
-        background: root.dash-color;
-        visible: self.x + self.width <= parent.width - 2px;
-    }
-    for i in 32: Rectangle {
-        x: 4px + i * 8px;
-        y: parent.height - 1px;
-        width: 4px;
-        height: 1px;
-        background: root.dash-color;
-        visible: self.x + self.width <= parent.width - 2px;
-    }
-    for i in 4: Rectangle {
-        x: 0px;
-        y: 4px + i * 8px;
-        width: 1px;
-        height: 4px;
-        background: root.dash-color;
-        visible: self.y + self.height <= parent.height - 2px;
-    }
-    for i in 4: Rectangle {
-        x: parent.width - 1px;
-        y: 4px + i * 8px;
-        width: 1px;
-        height: 4px;
-        background: root.dash-color;
-        visible: self.y + self.height <= parent.height - 2px;
     }
 
     touch := TouchArea {
@@ -333,6 +307,8 @@ export component BindingsPage inherits VerticalLayout {
         text: I18n.text.bindings-help;
     }
     ScrollArea {
+        // Drag recognition delays child presses and races the native recorder.
+        drag-to-scroll: false;
         content-height: max(self.height, content.preferred-height);
         content := VerticalLayout {
             width: parent.width;

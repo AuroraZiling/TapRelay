@@ -97,26 +97,6 @@ pub fn run() -> Result<()> {
     ui.window().set_maximized(size.maximized);
     let actions = Rc::new(RefCell::new(Vec::<(Action, i32, String)>::new()));
     let window_keys = Rc::new(RefCell::new(Vec::new()));
-    let keys = window_keys.clone();
-    let a = actions.clone();
-    ui.on_action(move |name, index, value| {
-        if name == "capture-key" {
-            if !desktop::ui_input_is_injected()
-                && let Some(key) = crate::capture_key::virtual_key(&value)
-            {
-                keys.borrow_mut().push(taprelay_core::input::InputEvent {
-                    code: taprelay_core::input::InputCode::Key(key),
-                    down: index != 0,
-                    captured: Instant::now(),
-                });
-            }
-            return;
-        }
-        match Action::try_from(name.as_str()) {
-            Ok(action) => a.borrow_mut().push((action, index, value.to_string())),
-            Err(e) => tracing::error!("{e}"),
-        }
-    });
     let a = actions.clone();
     ui.window().on_close_requested(move || {
         a.borrow_mut().push((Action::Close, 0, String::new()));
@@ -138,6 +118,38 @@ pub fn run() -> Result<()> {
         }
     });
     let controller = Rc::new(RefCell::new(controller));
+    let keys = window_keys.clone();
+    let action_controller = controller.clone();
+    let action_window = ui.as_weak();
+    ui.on_action(move |name, index, value| {
+        if name == "capture-key" {
+            if !desktop::ui_input_is_injected()
+                && let Some(key) = crate::capture_key::virtual_key(&value)
+            {
+                keys.borrow_mut().push(taprelay_core::input::InputEvent {
+                    code: taprelay_core::input::InputCode::Key(key),
+                    down: index != 0,
+                    captured: Instant::now(),
+                });
+            }
+            return;
+        }
+        match Action::try_from(name.as_str()) {
+            Ok(action) => {
+                let Some(ui) = action_window.upgrade() else {
+                    return;
+                };
+                // UI commands take effect in their input dispatch, before the next
+                // raw-input drain can publish a recording preview.
+                let mut controller = action_controller.borrow_mut();
+                if let Err(e) = controller.action(&ui, action, index, &value) {
+                    controller.error(&format!("{e:#}"));
+                    controller.sync(&ui);
+                }
+            }
+            Err(e) => tracing::error!("{e}"),
+        }
+    });
     let weak = ui.as_weak();
     let c = controller.clone();
     let timer = slint::Timer::default();
@@ -982,7 +994,7 @@ impl Controller {
                     .bindings
                     .iter()
                     .map(|b| BindingRow {
-                        text: b.tap.to_string().into(),
+                        text: b.tap.key_labels().join(" + ").into(),
                         keys: ModelRc::new(VecModel::from(
                             b.tap
                                 .key_labels()

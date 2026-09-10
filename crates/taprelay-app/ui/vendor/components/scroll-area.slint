@@ -6,6 +6,8 @@ import { Tokens } from "../theme/tokens.slint";
 export component ScrollArea inherits Rectangle {
     // Logical height of the scrollable content; scrolls when this exceeds the visible height.
     in property <length> content-height;
+    // Capture editors need immediate presses; wheel scrolling remains available.
+    in property <bool> drag-to-scroll: true;
     // TapRelay integration: allow log follow-tail without replacing the scrollbar.
     in-out property <length> viewport-y <=> flick.viewport-y;
     out property <length> viewport-height: flick.viewport-height;
@@ -14,6 +16,7 @@ export component ScrollArea inherits Rectangle {
     background: transparent;
 
     flick := Flickable {
+        interactive: root.drag-to-scroll;
         width: parent.width;
         height: parent.height;
         viewport-width: parent.width;

@@ -1,4 +1,4 @@
-import { Button } from "../vendor/components/button.slint";
+import { Alert } from "../vendor/components/alert.slint";
 import { Tokens } from "../vendor/theme/tokens.slint";
 import { I18n } from "@i18n";
 
@@ -65,22 +65,11 @@ export component Spinner inherits Rectangle {
         }
     }
 }
-export component ErrorBanner inherits Panel {
+export component ErrorBanner inherits Alert {
     in property <string> problem;
     callback action(string, int, string);
-    min-height: 62px;
-    VerticalLayout {
-        padding: 12px;
-        Label {
-            text: root.problem;
-            color: #e64f55;
-        }
-        Button {
-            text: I18n.text.common-retry;
-            variant: outline;
-            clicked=> {
-                root.action("retry",0,"");
-            }
-        }
-    }
+    variant: destructive;
+    title: root.problem;
+    action-label: I18n.text.common-retry;
+    action-clicked => { root.action("retry", 0, ""); }
 }

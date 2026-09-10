@@ -1,7 +1,40 @@
 import { Button } from "../vendor/components/button.slint";
-import { Input } from "../vendor/components/input.slint";
+import { Alert } from "../vendor/components/alert.slint";
 import { I18n } from "@i18n";
-import { Heading, Caption, Label, Panel, Spinner, StatusDot } from "../components/primitives.slint";
+import { Heading, Caption, Label, Panel, StatusDot } from "../components/primitives.slint";
+
+component TapRipple inherits Rectangle {
+    in property <int> sequence;
+    in property <color> signal;
+    in property <length> radius;
+    in property <length> center-x;
+    in property <length> center-y;
+    private property <int> previous;
+    private property <float> progress: 1;
+    private property <color> wave-color;
+    init => { root.previous = root.sequence; }
+    changed sequence => {
+        if root.sequence > root.previous {
+            root.wave-color = root.signal;
+            root.progress = 0;
+        }
+        root.previous = root.sequence;
+    }
+    Timer {
+        interval: 16ms;
+        running: root.progress < 1;
+        triggered => { root.progress = min(1, root.progress + 0.02); }
+    }
+    x: root.center-x - self.width / 2;
+    y: root.center-y - self.height / 2;
+    width: 10px + 2 * root.radius * root.progress;
+    height: self.width;
+    border-radius: self.width / 2;
+    border-width: 2px;
+    border-color: root.wave-color.with-alpha(0.45 * (1 - root.progress));
+    background: transparent;
+    visible: root.progress < 1;
+}
 
 export component RelayStatusCard inherits Panel {
     in property <string> device-name;
@@ -12,22 +45,29 @@ export component RelayStatusCard inherits Panel {
     in property <string> stage;
     in property <string> stage-detail;
     in property <string> test-result;
+    in property <int> input-count;
+    clip: true;
     callback action(string, int, string);
+    for slot in 16: TapRipple {
+        sequence: floor((root.input-count + 15 - slot) / 16);
+        signal: root.signal;
+        center-x: status-row.x + status-dot.x + status-dot.width / 2;
+        center-y: status-row.y + status-dot.y + status-dot.height / 2;
+        radius: sqrt((root.width / 1px) * (root.width / 1px) + (root.height / 1px) * (root.height / 1px)) * 1px;
+    }
     VerticalLayout {
-        padding: 24px;
-        spacing: 14px;
+        padding: 20px;
+        spacing: 10px;
         Caption {
             text: I18n.text.receiver-current;
         }
         Heading {
             text: root.device-name;
         }
-        HorizontalLayout {
+        status-row := HorizontalLayout {
             spacing: 10px;
             cross-axis-alignment: center;
-            if root.device-selected && !root.ready: Spinner {
-            }
-            StatusDot {
+            status-dot := StatusDot {
                 signal: root.signal;
                 dot-size: 10px;
             }
@@ -70,33 +110,11 @@ export component RelayStatusCard inherits Panel {
         }
     }
 }
-export component RuntimeDetails inherits VerticalLayout {
-    in-out property <bool> details-open: false;
-    in property <string> diagnostics;
-    in property <bool> elevated;
+// Business-specific content only; layout and actions belong to Alert.
+export component AdminAlert inherits Alert {
     callback action(string, int, string);
-    spacing: 16px;
-    Button {
-        text: root.details-open ? I18n.text.details-hide : I18n.text.details-show;
-        variant: ghost;
-        clicked=> {
-            root.details-open=!root.details-open;
-        }
-    }
-    if root.details-open: Caption {
-        text: root.diagnostics;
-    }
-    if !root.elevated: HorizontalLayout {
-        spacing: 12px;
-        Caption {
-            text: I18n.text.permissions-warning;
-        }
-        Button {
-            text: I18n.text.permissions-restart-short;
-            variant: outline;
-            clicked=> {
-                root.action("elevate",0,"");
-            }
-        }
-    }
+    variant: destructive;
+    title: I18n.text.permissions-warning;
+    action-label: I18n.text.permissions-restart-short;
+    action-clicked => { root.action("elevate", 0, ""); }
 }

@@ -1,0 +1,88 @@
+// Source: https://zero-sq.github.io/slintcn/r/alert.json (2026-09-10).
+// TapRelay additions: compact spacing, wrapping titles, optional ghost action.
+import { Tokens } from "../theme/tokens.slint";
+import { Icon } from "icon.slint";
+import { Button } from "button.slint";
+
+// Bordered callout with an icon, title, and description. `icon` takes a
+// LucidePaths command string (empty = no icon). Destructive variant tints
+// the border/text red.
+export enum AlertVariant { default, destructive }
+
+export component Alert inherits Rectangle {
+    // Bold heading at the top of the alert.
+    in property <string> title;
+    // Body text below the title.
+    in property <string> description;
+    // SVG path commands for the leading icon — pass a `LucidePaths.*` value.
+    in property <string> icon: root.variant == AlertVariant.destructive
+        ? "M18 6 6 18 M6 6 18 18" : "";
+    // Tone — `default` or `destructive`.
+    in property <AlertVariant> variant: AlertVariant.default;
+    // Empty label leaves a plain informational callout.
+    in property <string> action-label;
+    in property <bool> action-disabled: false;
+    callback action-clicked();
+    vertical-stretch: 0;
+
+    property <color> accent:
+        variant == AlertVariant.destructive
+            ? Tokens.color-destructive
+            : Tokens.color-foreground;
+
+    background: variant == AlertVariant.destructive
+        ? Tokens.color-destructive.with-alpha(0.08)
+        : Tokens.color-card;
+    border-width: 1px;
+    border-color: variant == AlertVariant.destructive
+        ? Tokens.color-destructive.with-alpha(0.4)
+        : Tokens.color-border-hairline;
+    border-radius: Tokens.radius-lg;
+
+    HorizontalLayout {
+        padding-top: Tokens.spacing-sm;
+        padding-bottom: Tokens.spacing-sm;
+        padding-left: Tokens.spacing-md;
+        padding-right: Tokens.spacing-sm;
+        spacing: Tokens.spacing-sm;
+        cross-axis-alignment: center;
+
+        if root.icon != "": VerticalLayout {
+            alignment: start;
+            horizontal-stretch: 0;
+            padding-top: 1px;   // optical nudge onto the title's first line
+            Icon {
+                commands: root.icon;
+                tint: root.accent;
+                size: 16px;
+            }
+        }
+
+        VerticalLayout {
+            spacing: 4px;
+            alignment: start;
+            horizontal-stretch: 1;
+            if root.title != "": Text {
+                text: root.title;
+                color: root.accent;
+                font-size: Tokens.typography-body-size;
+                font-weight: Tokens.typography-weight-medium;
+                wrap: word-wrap;
+            }
+            if root.description != "": Text {
+                text: root.description;
+                color: Tokens.color-muted-foreground;
+                font-size: Tokens.typography-body-size;
+                wrap: word-wrap;
+            }
+        }
+        if root.action-label != "": Button {
+            text: root.action-label;
+            disabled: root.action-disabled;
+            variant: ghost;
+            size: xs;
+            horizontal-stretch: 0;
+            clicked => { root.action-clicked(); }
+        }
+    }
+}

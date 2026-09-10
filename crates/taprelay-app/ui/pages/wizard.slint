@@ -3,8 +3,8 @@ import { Tokens } from "../vendor/theme/tokens.slint";
 import { ScrollArea } from "../vendor/components/scroll-area.slint";
 import { I18n } from "@i18n";
 import { BindingRow, DeviceRow } from "../types.slint";
-import { Heading, Caption, Label, ErrorBanner } from "../components/primitives.slint";
-import { RelayStatusCard, RuntimeDetails } from "../components/runtime-panels.slint";
+import { Heading, Label, ErrorBanner } from "../components/primitives.slint";
+import { RelayStatusCard, AdminAlert } from "../components/runtime-panels.slint";
 import { BindingsPage } from "bindings.slint";
 import { DevicesPage } from "devices.slint";
 import { BluetoothStatus } from "../components/bluetooth-status.slint";
@@ -16,10 +16,8 @@ export component WizardPage inherits VerticalLayout {
     in property <int> capture-index: -1;
     in property <string> capture-text;
     in property <[string]> capture-keys;
-    in-out property <bool> details-open: false;
     in property <string> device-name;
     in property <bool> device-selected;
-    in property <string> diagnostics;
     in property <bool> elevated;
     in property <int> input-count;
     in property <bool> listening;
@@ -39,7 +37,7 @@ export component WizardPage inherits VerticalLayout {
     in property <int> step;
     in property <string> test-result;
     callback action(string, int, string);
-    spacing: 18px;
+    spacing: 16px;
     Rectangle {
         height: 4px;
         vertical-stretch: 0;
@@ -70,6 +68,9 @@ export component WizardPage inherits VerticalLayout {
             action(name, index, value) => { root.action(name, index, value); }
         }
     }
+    if root.step == 2 && !root.elevated: AdminAlert {
+        action(name, index, value) => { root.action(name, index, value); }
+    }
     if root.problem != "" && root.step != 1: ErrorBanner {
         problem: root.problem;
         action(name,index,value) => {
@@ -98,10 +99,14 @@ export component WizardPage inherits VerticalLayout {
     if root.step == 2: ScrollArea {
         content-height: max(self.height, content.preferred-height);
         content := VerticalLayout {
+            x: 0;
+            y: 0;
             width: parent.width;
             height: self.preferred-height;
             spacing: 16px;
+            Label { text: I18n.text.wizard-input-count + root.input-count; }
             RelayStatusCard {
+                input-count: root.input-count;
                 device-name: root.device-name;
                 device-selected: root.device-selected;
                 listening: root.listening;
@@ -110,20 +115,6 @@ export component WizardPage inherits VerticalLayout {
                 stage: root.stage;
                 stage-detail: root.stage-detail;
                 test-result: root.test-result;
-                action(name, index, value) => {
-                    root.action(name, index, value);
-                }
-            }
-            Caption {
-                text: I18n.text.wizard-test-hint;
-            }
-            Label {
-                text: I18n.text.wizard-input-count + root.input-count;
-            }
-            RuntimeDetails {
-                details-open <=> root.details-open;
-                diagnostics: root.diagnostics;
-                elevated: root.elevated;
                 action(name, index, value) => {
                     root.action(name, index, value);
                 }

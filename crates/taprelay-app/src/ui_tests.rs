@@ -129,6 +129,48 @@ fn render_all_views_without_hardware() {
             }
         }
     }
+    // Tap waves must change pixels beyond the counter, then disappear completely.
+    ui.set_mode(1);
+    ui.set_wizard_page(2);
+    ui.set_input_count(0);
+    ui.window().set_size(slint::LogicalSize::new(900., 500.));
+    let idle = ui.window().take_snapshot().unwrap();
+    ui.set_input_count(1);
+    slint::platform::update_timers_and_animations();
+    let _ = ui.window().take_snapshot().unwrap();
+    for _ in 0..10 {
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(16));
+        slint::platform::update_timers_and_animations();
+    }
+    let wave = ui.window().take_snapshot().unwrap();
+    let mut bytes = format!("P6\n{} {}\n255\n", wave.width(), wave.height()).into_bytes();
+    for pixel in wave.as_slice() {
+        bytes.extend_from_slice(&[pixel.r, pixel.g, pixel.b]);
+    }
+    std::fs::write(out.join("wizard-tap-wave.ppm"), bytes).unwrap();
+    let changed = idle
+        .as_slice()
+        .iter()
+        .zip(wave.as_slice())
+        .filter(|(a, b)| a != b)
+        .count();
+    assert!(
+        changed > 300,
+        "Tap must animate beyond the counter: {changed}"
+    );
+    ui.set_input_count(2);
+    let _ = ui.window().take_snapshot().unwrap();
+    for _ in 0..60 {
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(16));
+        slint::platform::update_timers_and_animations();
+    }
+    ui.set_input_count(0);
+    let reset = ui.window().take_snapshot().unwrap();
+    assert_eq!(
+        idle.as_slice(),
+        reset.as_slice(),
+        "Waves must settle; counter reset must not emit a wave"
+    );
     // Exercise the shared receiver page with real typed view projections.
     use taprelay_core::{
         devices::*,

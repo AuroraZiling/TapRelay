@@ -72,7 +72,6 @@ export component AppWindow inherits Window {
     in-out property <bool> connection-wait-warning;
     in property <int> theme-choice;
     in property <int> language-choice;
-    in-out property <bool> details-open: false;
     in-out property <bool> logs-paused: false;
     in-out property <string> log-search;
     in-out property <int> log-filter: 0;
@@ -109,14 +108,12 @@ export component AppWindow inherits Window {
                 capture-index: root.capture-index;
                 capture-text: root.capture-text;
                 capture-keys: root.capture-keys;
-                details-open <=> root.details-open;
                 device-name: root.device-name;
                 device-selected: root.device-selected;
                 discovery-status: root.discovery-status;
                 scanning: root.scanning;
                 paired-devices: root.paired-devices;
                 nearby-devices: root.nearby-devices;
-                diagnostics: root.diagnostics;
                 elevated: root.elevated;
                 input-count: root.input-count;
                 listening: root.listening;
@@ -159,11 +156,10 @@ export component AppWindow inherits Window {
                 if root.page == 0: OverviewPage {
                     bindings: root.bindings;
                     binding-count: root.bindings.length;
+                    input-count: root.input-count;
                     binding-summary: root.binding-summary;
-                    details-open <=> root.details-open;
                     device-name: root.device-name;
                     device-selected: root.device-selected;
-                    diagnostics: root.diagnostics;
                     elevated: root.elevated;
                     listening: root.listening;
                     ready: root.ready;

@@ -43,8 +43,6 @@
   "nav.receiver": "Receiver",
   "nav.settings": "Settings",
   "overview.bindings": "Enabled shortcuts",
-  "overview.bindings.hint": "Manage shortcuts on the Bindings page.",
-  "overview.empty": "No shortcuts yet. Listening can stay on while you add one.",
   "overview.manage": "Manage bindings",
   "permissions.account.admin": "Account: administrator",
   "permissions.account.standard": "Account: standard",

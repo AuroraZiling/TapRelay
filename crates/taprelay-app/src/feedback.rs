@@ -1,7 +1,7 @@
 //! User-visible asynchronous states, independent of GUI widgets and wall-clock time.
 use std::time::{Duration, Instant};
 
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum TestStatus {
     #[default]
     Idle,

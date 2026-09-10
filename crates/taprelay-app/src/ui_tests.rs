@@ -43,7 +43,6 @@ fn render_all_views_without_hardware() {
             enabled: true,
         },
     ])));
-    ui.set_binding_summary("F8 · LCtrl + mouse.side1".into());
     ui.set_paired_devices(ModelRc::new(VecModel::from(vec![DeviceRow {
         name: "Living room tablet".into(),
         detail: "Connected; preparing media controls".into(),

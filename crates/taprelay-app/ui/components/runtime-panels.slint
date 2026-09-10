@@ -1,6 +1,7 @@
 import { Button } from "../vendor/components/button.slint";
 import { Alert } from "../vendor/components/alert.slint";
 import { I18n } from "@i18n";
+import { Tokens } from "../vendor/theme/tokens.slint";
 import { RelayStatus } from "../types.slint";
 import { Heading, Caption, Label, Panel, StatusDot } from "../components/primitives.slint";
 
@@ -72,6 +73,7 @@ export component RelayStatusCard inherits Panel {
         }
         HorizontalLayout {
             alignment: start;
+            padding-top: Tokens.spacing-xs;
             spacing: 12px;
             Button {
                 text: root.relay-status.listening ? I18n.text.listening-stop : I18n.text.listening-start;
@@ -94,9 +96,6 @@ export component RelayStatusCard inherits Panel {
                     root.action("retry",0,"");
                 }
             }
-        }
-        if root.relay-status.test-result != "": Caption {
-            text: root.relay-status.test-result;
         }
     }
 }

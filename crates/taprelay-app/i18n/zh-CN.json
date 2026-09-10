@@ -43,8 +43,6 @@
   "nav.receiver": "接收设备",
   "nav.settings": "设置",
   "overview.bindings": "启用的绑定",
-  "overview.bindings.hint": "在按键绑定页面管理快捷键。",
-  "overview.empty": "还没有绑定。监听可以保持开启，添加后即可使用。",
   "overview.manage": "管理绑定",
   "permissions.account.admin": "账户：管理员",
   "permissions.account.standard": "账户：标准用户",

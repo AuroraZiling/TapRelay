@@ -325,6 +325,7 @@ struct Controller {
     stage_since: Instant,
     toast: String,
     toast_until: Instant,
+    previous_test: TestStatus,
     capture: Option<CaptureTarget>,
     capture_error: String,
     last_error: String,
@@ -378,6 +379,7 @@ impl Controller {
             stage_since: now,
             toast: String::new(),
             toast_until: now,
+            previous_test: TestStatus::Idle,
             capture: None,
             capture_error: String::new(),
             last_error: String::new(),
@@ -810,20 +812,6 @@ impl Controller {
             self.system_language = desktop::system_chinese();
             self.last_system_poll = Instant::now();
         }
-        if self.previous_bindings != Some(self.runtime.bindings_revision) {
-            ui.set_binding_summary(
-                self.runtime
-                    .config
-                    .bindings
-                    .iter()
-                    .filter(|b| b.enabled)
-                    .take(3)
-                    .map(|b| b.tap.to_string())
-                    .collect::<Vec<_>>()
-                    .join(" · ")
-                    .into(),
-            );
-        }
         let zh = self.zh();
         i18n::apply(ui, zh);
         let o = &self.runtime.config.options;
@@ -1032,15 +1020,20 @@ impl Controller {
                     .collect::<Vec<slint::SharedString>>(),
             )));
         }
-        ui.set_test_result(
-            match &self.runtime.test {
-                TestStatus::Idle => String::new(),
-                TestStatus::Pending(_) => self.tr(keys::TEST_SENDING).into(),
-                TestStatus::Succeeded => self.tr(keys::TEST_SENT).into(),
-                TestStatus::Failed(error) => format!("{}: {error}", self.tr(keys::ERROR_ACTION)),
+        if self.previous_test != self.runtime.test {
+            self.previous_test = self.runtime.test.clone();
+            let message = match &self.runtime.test {
+                TestStatus::Idle => None,
+                TestStatus::Pending(_) => Some(self.tr(keys::TEST_SENDING).to_owned()),
+                TestStatus::Succeeded => Some(self.tr(keys::TEST_SENT).to_owned()),
+                TestStatus::Failed(error) => {
+                    Some(format!("{}: {error}", self.tr(keys::ERROR_ACTION)))
+                }
+            };
+            if let Some(message) = message {
+                self.say(message);
             }
-            .into(),
-        );
+        }
         ui.set_input_count(self.runtime.matched.min(i32::MAX as u64) as i32);
         ui.set_toast(if Instant::now() < self.toast_until {
             self.toast.clone().into()

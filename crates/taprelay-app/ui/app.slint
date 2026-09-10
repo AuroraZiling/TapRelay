@@ -10,6 +10,7 @@ import { WizardPage } from "pages/wizard.slint";
 import { OverviewPage } from "pages/overview.slint";
 import { BindingsPage } from "pages/bindings.slint";
 import { DevicesPage } from "pages/devices.slint";
+import { ReceiverActions } from "components/receiver-actions.slint";
 import { LogsPage } from "pages/logs.slint";
 import { SettingsPage } from "pages/settings.slint";
 export { Theme, ThemeMode, I18n, TranslationText, BindingRow, DeviceRow, CheckRow }
@@ -134,7 +135,6 @@ export component AppWindow inherits Window {
             if root.mode == 2: VerticalLayout {
                 spacing: 18px;
                 HorizontalLayout {
-                    alignment: start;
                     spacing: 12px;
                     Heading {
                         horizontal-stretch: 0;
@@ -144,6 +144,10 @@ export component AppWindow inherits Window {
                         available: root.bluetooth-available;
                         busy: root.busy;
                         status-label: root.adapter-label;
+                    }
+                    if root.page == 2: Rectangle { horizontal-stretch: 1; }
+                    if root.page == 2: ReceiverActions {
+                        action(name, index, value) => { root.action(name, index, value); }
                     }
                 }
                 if root.problem != "" && root.page != 2: ErrorBanner {

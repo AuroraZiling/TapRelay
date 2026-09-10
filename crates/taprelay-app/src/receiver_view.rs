@@ -103,6 +103,7 @@ pub fn row(target: &Target, state: &Snapshot, tr: impl Fn(&'static str) -> Strin
             Connection::Connected => keys::RECEIVER_READY,
             Connection::Disconnecting => keys::RECEIVER_DISCONNECTING,
             Connection::Failed => keys::RECEIVER_CONNECT_FAILED,
+            Connection::Disconnected if target.link == Knowledge::Yes => keys::RECEIVER_LINKED,
             Connection::Disconnected => match target.pairing {
                 Knowledge::Yes => keys::RECEIVER_PAIRED_DISCONNECTED,
                 Knowledge::No => keys::RECEIVER_UNPAIRED,
@@ -113,7 +114,25 @@ pub fn row(target: &Target, state: &Snapshot, tr: impl Fn(&'static str) -> Strin
     let detail = tr(detail);
     DeviceRow {
         id: target.id.clone().into(),
-        name: target.name.clone().into(),
+        name: if target.name.trim().is_empty() {
+            target.id.clone()
+        } else {
+            target.name.clone()
+        }
+        .into(),
+        device_kind: device_kind(target.kind).into(),
+        status: match target.connection {
+            Connection::Connected => "ready",
+            Connection::Connecting | Connection::Synchronizing | Connection::Disconnecting => {
+                "busy"
+            }
+            Connection::Failed => "failed",
+            _ if target.availability == Availability::Unavailable => "unavailable",
+            _ if target.link == Knowledge::Yes => "linked",
+            _ if target.pairing == Knowledge::Yes => "paired",
+            _ => "unknown",
+        }
+        .into(),
         detail: detail.into(),
         selected,
         action: action.into(),
@@ -130,9 +149,39 @@ pub fn row(target: &Target, state: &Snapshot, tr: impl Fn(&'static str) -> Strin
     }
 }
 
+fn device_kind(kind: taprelay_core::state::DeviceKind) -> &'static str {
+    use taprelay_core::state::DeviceKind;
+    match kind {
+        DeviceKind::Tablet => "tablet",
+        DeviceKind::Phone => "phone",
+        DeviceKind::Computer => "computer",
+        DeviceKind::Unknown => "bluetooth",
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn compact_row_preserves_identity_and_distinguishes_link_from_session() {
+        let state = Snapshot::default();
+        let mut target = Target {
+            id: "unnamed-endpoint".into(),
+            pairing: Knowledge::Yes,
+            ..Default::default()
+        };
+        let project = |t: &Target| row(t, &state, |key| crate::i18n::text(false, key).into());
+        assert!(project(&target).name.contains("unnamed-endpoint"));
+        assert_eq!(project(&target).status, "paired");
+        target.link = Knowledge::Yes;
+        assert_eq!(project(&target).status, "linked");
+        assert!(project(&target).detail.contains("session not ready"));
+        target.connection = Connection::Connected;
+        assert_eq!(project(&target).status, "ready");
+        target.name = "Artemis iPad".into();
+        assert_eq!(project(&target).device_kind, "bluetooth");
+        target.kind = taprelay_core::state::DeviceKind::Tablet;
+        assert_eq!(project(&target).device_kind, "tablet");
+    }
     #[test]
     fn device_actions_and_sections_follow_typed_state() {
         let mut state = Snapshot {
@@ -159,7 +208,7 @@ mod tests {
         assert!(!paired.enabled);
         assert!(paired.paired);
         target.subscribed = Knowledge::Yes;
-        assert_eq!(project(&target, &state).action_label, "Connect");
+        assert_eq!(project(&target, &state).action_label, "Start session");
         state.selected = Some("stable".into());
         target.connection = Connection::Connected;
         assert_eq!(project(&target, &state).action, "disconnect-device");

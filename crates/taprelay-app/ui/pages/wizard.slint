@@ -8,6 +8,7 @@ import { RelayStatusCard, RuntimeDetails } from "../components/runtime-panels.sl
 import { BindingsPage } from "bindings.slint";
 import { DevicesPage } from "devices.slint";
 import { BluetoothStatus } from "../components/bluetooth-status.slint";
+import { ReceiverActions } from "../components/receiver-actions.slint";
 
 export component WizardPage inherits VerticalLayout {
     in property <[BindingRow]> bindings;
@@ -54,7 +55,6 @@ export component WizardPage inherits VerticalLayout {
         }
     }
     HorizontalLayout {
-        alignment: start;
         spacing: 12px;
         Heading {
             horizontal-stretch: 0;
@@ -64,6 +64,10 @@ export component WizardPage inherits VerticalLayout {
             available: root.bluetooth-available;
             busy: root.busy;
             status-label: root.adapter-label;
+        }
+        if root.step == 1: Rectangle { horizontal-stretch: 1; }
+        if root.step == 1: ReceiverActions {
+            action(name, index, value) => { root.action(name, index, value); }
         }
     }
     if root.problem != "" && root.step != 1: ErrorBanner {

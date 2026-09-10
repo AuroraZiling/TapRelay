@@ -20,6 +20,7 @@ pub enum Knowledge {
 pub struct Target {
     pub id: String,
     pub name: String,
+    pub kind: DeviceKind,
     pub pairing: Knowledge,
     pub link: Knowledge,
     pub subscribed: Knowledge,
@@ -28,6 +29,14 @@ pub struct Target {
     pub aliases: Vec<String>,
     pub availability: crate::devices::Availability,
     pub connection: crate::devices::Connection,
+}
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub enum DeviceKind {
+    #[default]
+    Unknown,
+    Computer,
+    Phone,
+    Tablet,
 }
 impl Target {
     pub fn matches_id(&self, id: &str) -> bool {
@@ -67,6 +76,9 @@ pub fn upsert_target(targets: &mut Vec<Target>, mut target: Target) {
         if target.pairing == Knowledge::Unknown {
             target.pairing = previous.pairing;
         }
+        if target.kind == DeviceKind::Unknown {
+            target.kind = previous.kind;
+        }
         if previous.availability == crate::devices::Availability::Nearby {
             target.availability = previous.availability;
         }
@@ -84,6 +96,7 @@ mod tests {
     #[test]
     fn discovery_and_subscriber_of_same_device_produce_one_row() {
         let classic = Target {
+            kind: DeviceKind::Tablet,
             id: "classic-endpoint".into(),
             name: "Artemis iPad".into(),
             identity: vec!["container:ipad".into()],
@@ -94,6 +107,7 @@ mod tests {
             ..classic.clone()
         };
         let subscriber = Target {
+            kind: DeviceKind::Unknown,
             subscribed: Knowledge::Yes,
             ..le.clone()
         };
@@ -101,6 +115,7 @@ mod tests {
         upsert_target(&mut rows, subscriber);
         assert_eq!(rows.len(), 1, "One physical device must have one row");
         assert_eq!(rows[0].subscribed, Knowledge::Yes);
+        assert_eq!(rows[0].kind, DeviceKind::Tablet);
         assert!(rows[0].matches_id("classic-endpoint"));
         assert!(rows[0].matches_id("le-endpoint"));
     }

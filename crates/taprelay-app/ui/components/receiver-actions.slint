@@ -1,0 +1,35 @@
+import { Button } from "../vendor/components/button.slint";
+import { Tokens } from "../vendor/theme/tokens.slint";
+import { IconDisplay, IconSet, Icon } from "@lucide";
+import { I18n } from "@i18n";
+
+component ActionButton inherits Button {
+    in property <Icon> icon;
+    in property <string> hint;
+    size: icon-sm;
+    variant: ghost;
+    accessible-role: button;
+    accessible-label: root.hint;
+    Tooltip { text: @markdown("\{root.hint}"); }
+    IconDisplay {
+        icon: root.icon;
+        size: 18px;
+        stroke: Tokens.color-foreground;
+    }
+}
+
+export component ReceiverActions inherits HorizontalLayout {
+    horizontal-stretch: 0;
+    spacing: 4px;
+    callback action(string, int, string);
+    ActionButton {
+        icon: IconSet.RefreshCw;
+        hint: I18n.text.receiver-refresh;
+        clicked => { root.action("refresh", 0, ""); }
+    }
+    ActionButton {
+        icon: IconSet.Settings;
+        hint: I18n.text.receiver-open-settings;
+        clicked => { root.action("bluetooth-settings", 0, ""); }
+    }
+}

@@ -3,31 +3,79 @@ import { ScrollArea } from "../vendor/components/scroll-area.slint";
 import { I18n } from "@i18n";
 import { DeviceRow } from "../types.slint";
 import { Caption, Label, Panel, Spinner } from "../components/primitives.slint";
+import { Tokens } from "../vendor/theme/tokens.slint";
+
+import { IconDisplay, IconSet } from "@lucide";
 
 component ReceiverCard inherits Panel {
     in property <DeviceRow> device;
     callback action(string, int, string);
-    min-height: 86px;
+    height: 56px;
+    vertical-stretch: 0;
     HorizontalLayout {
-        padding: 16px;
-        spacing: 18px;
-        VerticalLayout {
-            spacing: 6px;
-            Label { text: root.device.name; }
-            Caption { text: root.device.detail; }
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 12px;
+        Rectangle {
+            width: 20px;
+            IconDisplay {
+                icon: root.device.device-kind == "tablet" ? IconSet.Tablet : root.device.device-kind == "phone" ? IconSet.Smartphone : root.device.device-kind == "computer" ? IconSet.Monitor : IconSet.Bluetooth;
+                size: 20px;
+                stroke: Tokens.color-muted-foreground;
+            }
         }
-        if root.device.action != "" : Button {
-            horizontal-stretch: 0;
-            text: root.device.action-label;
-            disabled: !root.device.enabled;
-            variant: outline;
-            clicked => { root.action(root.device.action, 0, root.device.id); }
-        }
-        if root.device.action == "" : Caption {
-            horizontal-stretch: 0;
-            text: root.device.action-label;
-            horizontal-alignment: center;
+        Label {
+            text: root.device.name;
+            horizontal-stretch: 1;
+            min-width: 0px;
+            wrap: no-wrap;
+            overflow: elide;
             vertical-alignment: center;
+            accessible-description: root.device.name;
+        }
+        Rectangle {
+            width: 32px;
+            Rectangle {
+            width: 32px;
+            height: 32px;
+            border-radius: 6px;
+            background: status-hover.has-hover ? Tokens.color-accent : transparent;
+            status-hover := TouchArea { }
+            Tooltip { text: @markdown("\{root.device.detail}"); }
+            accessible-role: text;
+            accessible-description: root.device.detail;
+            Rectangle {
+                IconDisplay {
+                    icon: root.device.status == "ready" ? IconSet.CircleCheck : root.device.status == "busy" ? IconSet.Loader : root.device.status == "failed" ? IconSet.CircleAlert : root.device.status == "linked" ? IconSet.BluetoothConnected : root.device.status == "paired" ? IconSet.Link2 : IconSet.BluetoothOff;
+                    size: 18px;
+                    stroke: root.device.status == "ready" ? #2eb470 : root.device.status == "linked" ? #3b82f6 : root.device.status == "failed" ? Tokens.color-destructive : Tokens.color-muted-foreground;
+                }
+            }
+            }
+        }
+        if root.device.action != "" : Rectangle {
+            width: 132px;
+            connect := Button {
+                width: parent.width;
+                size: sm;
+                text: root.device.action-label;
+                disabled: !root.device.enabled;
+                variant: outline;
+                clicked => { root.action(root.device.action, 0, root.device.id); }
+            }
+        }
+        if root.device.action == "" : Rectangle {
+            width: 132px;
+            Tooltip { text: @markdown("\{root.device.action-label}"); }
+            Rectangle {
+                Button {
+                    width: parent.width;
+                    size: sm;
+                    text: I18n.text.receiver-connect;
+                    disabled: true;
+                    variant: outline;
+                }
+            }
         }
     }
 }
@@ -61,20 +109,6 @@ export component DevicesPage inherits VerticalLayout {
                 device: device;
                 action(name,index,value) => { root.action(name,index,value); }
             }
-        }
-    }
-    HorizontalLayout {
-        alignment: start;
-        spacing: 12px;
-        Button {
-            text: I18n.text.receiver-refresh;
-            variant: outline;
-            clicked => { root.action("refresh",0,""); }
-        }
-        Button {
-            text: I18n.text.receiver-open-settings;
-            variant: ghost;
-            clicked => { root.action("bluetooth-settings",0,""); }
         }
     }
 }

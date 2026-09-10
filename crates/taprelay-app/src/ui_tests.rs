@@ -243,6 +243,46 @@ fn render_all_views_without_hardware() {
             bytes.extend_from_slice(&[pixel.r, pixel.g, pixel.b]);
         }
         std::fs::write(out.join(format!("receiver-{name}.ppm")), bytes).unwrap();
+        if name == "connected" {
+            let mut hovered = None;
+            for x in [598., 600., 604., 608., 598.] {
+                ui.window()
+                    .dispatch_event(slint::platform::WindowEvent::PointerMoved {
+                        position: slint::LogicalPosition::new(x, 191.),
+                    });
+                i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
+                let current = ui.window().take_snapshot().unwrap();
+                let pixels = current.as_slice().to_vec();
+                assert!(pixels != shot.as_slice(), "Hover must display a tooltip");
+                assert!(
+                    pixels
+                        .iter()
+                        .zip(shot.as_slice())
+                        .enumerate()
+                        .any(|(i, (a, b))| {
+                            let y = i / current.width() as usize;
+                            !(163..219).contains(&y) && a != b
+                        }),
+                    "The tooltip bubble must be visible outside the row, not only the hover highlight"
+                );
+                assert!(
+                    hovered.get_or_insert(pixels.clone()) == &pixels,
+                    "Tooltip must remain stable while moving over the status icon"
+                );
+            }
+            ui.window()
+                .dispatch_event(slint::platform::WindowEvent::PointerMoved {
+                    position: slint::LogicalPosition::new(400., 350.),
+                });
+            i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
+            let _ = ui.window().take_snapshot().unwrap();
+            i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
+            let left = ui.window().take_snapshot().unwrap();
+            assert!(
+                left.as_slice()[..800 * 400] == shot.as_slice()[..800 * 400],
+                "Leaving the icon must dismiss the tooltip and highlight"
+            );
+        }
     }
     // Preview empty, pending-new and existing-row capture layouts at minimum width.
     ui.set_mode(1);

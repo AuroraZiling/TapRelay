@@ -123,6 +123,7 @@ impl Stream {
                 Ok(Target {
                     id: info.Id()?.to_string(),
                     name: info.Name()?.to_string(),
+                    kind: device_kind(info),
                     pairing: if info.Pairing()?.IsPaired()? {
                         Knowledge::Yes
                     } else {
@@ -170,6 +171,85 @@ fn bool_property(info: &DeviceInformation, key: &str) -> Knowledge {
         .and_then(|v| v.GetBoolean())
         .map(|v| if v { Knowledge::Yes } else { Knowledge::No })
         .unwrap_or_default()
+}
+
+fn device_kind(info: &DeviceInformation) -> taprelay_core::state::DeviceKind {
+    let read = |key: &str| -> Option<u16> {
+        info.Properties()
+            .ok()?
+            .Lookup(&HSTRING::from(key))
+            .ok()?
+            .cast::<IPropertyValue>()
+            .ok()?
+            .GetUInt16()
+            .ok()
+    };
+    classify_device(
+        read("System.Devices.Aep.Bluetooth.Cod.Major"),
+        read("System.Devices.Aep.Bluetooth.Cod.Minor"),
+        read("System.Devices.Aep.Bluetooth.Le.Appearance.Category"),
+    )
+}
+
+fn classify_device(
+    major: Option<u16>,
+    minor: Option<u16>,
+    appearance: Option<u16>,
+) -> taprelay_core::state::DeviceKind {
+    use taprelay_core::state::DeviceKind;
+    use windows::Devices::Bluetooth::{
+        BluetoothLEAppearanceCategories, BluetoothMajorClass, BluetoothMinorClass,
+    };
+    if major == Some(BluetoothMajorClass::Computer.0 as u16) {
+        return if minor == Some(BluetoothMinorClass::ComputerTablet.0 as u16) {
+            DeviceKind::Tablet
+        } else {
+            DeviceKind::Computer
+        };
+    }
+    if major == Some(BluetoothMajorClass::Phone.0 as u16) {
+        return DeviceKind::Phone;
+    }
+    // Missing properties must not match a failed static API lookup (None).
+    if let Some(category) = appearance {
+        if BluetoothLEAppearanceCategories::Phone().ok() == Some(category) {
+            return DeviceKind::Phone;
+        }
+        if BluetoothLEAppearanceCategories::Computer().ok() == Some(category) {
+            return DeviceKind::Computer;
+        }
+    }
+    DeviceKind::Unknown
+}
+
+#[cfg(test)]
+mod classification_tests {
+    use super::*;
+    use taprelay_core::state::DeviceKind;
+    #[test]
+    fn system_classification_handles_missing_and_unknown_properties() {
+        assert_eq!(classify_device(None, None, None), DeviceKind::Unknown);
+        assert_eq!(
+            classify_device(Some(31), None, Some(65535)),
+            DeviceKind::Unknown
+        );
+        assert_eq!(classify_device(Some(1), Some(7), None), DeviceKind::Tablet);
+        assert_eq!(
+            classify_device(Some(1), Some(3), None),
+            DeviceKind::Computer
+        );
+        assert_eq!(classify_device(Some(2), None, None), DeviceKind::Phone);
+        assert_eq!(
+            classify_device(
+                None,
+                None,
+                Some(
+                    windows::Devices::Bluetooth::BluetoothLEAppearanceCategories::Phone().unwrap()
+                )
+            ),
+            DeviceKind::Phone
+        );
+    }
 }
 
 pub(super) struct Discovery {

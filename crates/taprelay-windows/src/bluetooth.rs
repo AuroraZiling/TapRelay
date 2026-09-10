@@ -36,6 +36,9 @@ fn identity_properties() -> windows_collections::IIterable<HSTRING> {
         HSTRING::from("System.Devices.Aep.IsPresent"),
         HSTRING::from("System.Devices.Aep.IsConnected"),
         HSTRING::from("System.Devices.Aep.IsPaired"),
+        HSTRING::from("System.Devices.Aep.Bluetooth.Cod.Major"),
+        HSTRING::from("System.Devices.Aep.Bluetooth.Cod.Minor"),
+        HSTRING::from("System.Devices.Aep.Bluetooth.Le.Appearance.Category"),
         HSTRING::from("System.Devices.Aep.ContainerId"),
         HSTRING::from("System.Devices.Aep.DeviceAddress"),
         // BluetoothLEDevice.DeviceInformation is often a Device object rather

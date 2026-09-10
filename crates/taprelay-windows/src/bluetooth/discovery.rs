@@ -21,16 +21,12 @@ struct Stream {
     state: DiscoveryState,
 }
 impl Stream {
-    fn start(paired: bool) -> windows::core::Result<Self> {
+    fn start() -> windows::core::Result<Self> {
         // Protocol IDs identify Bluetooth association endpoints, not HID services.
         let protocol = "(System.Devices.Aep.ProtocolId:=\"{e0cbf06c-cd8b-4647-bb8a-263b43f0f974}\" OR System.Devices.Aep.ProtocolId:=\"{bb7bb05e-5972-42b5-94fc-76eaa7084d49}\")";
-        let query = if paired {
-            format!(
-                "{protocol} AND System.Devices.Aep.IsPaired:=System.StructuredQueryType.Boolean#True"
-            )
-        } else {
-            protocol.into()
-        };
+        let query = format!(
+            "{protocol} AND System.Devices.Aep.IsPaired:=System.StructuredQueryType.Boolean#True"
+        );
         let watcher = DeviceInformation::CreateWatcherWithKindAqsFilterAndAdditionalProperties(
             &HSTRING::from(query),
             &identity_properties(),
@@ -254,7 +250,6 @@ mod classification_tests {
 
 pub(super) struct Discovery {
     known: Option<Stream>,
-    nearby: Option<Stream>,
     pub inventory: Inventory,
     pub adapter: AdapterState,
     pub adapter_id: Option<String>,
@@ -263,7 +258,6 @@ pub(super) struct Discovery {
     radio_events: mpsc::Receiver<()>,
     radio_sender: mpsc::Sender<()>,
     check_at: Instant,
-    active: bool,
     failed: bool,
 }
 impl Discovery {
@@ -271,7 +265,6 @@ impl Discovery {
         let (radio_sender, radio_events) = mpsc::channel();
         Self {
             known: None,
-            nearby: None,
             inventory: Inventory::default(),
             adapter: AdapterState::Unknown,
             adapter_id: None,
@@ -280,15 +273,10 @@ impl Discovery {
             radio_events,
             radio_sender,
             check_at: Instant::now(),
-            active: false,
             failed: false,
         }
     }
-    pub fn set_active(&mut self, active: bool) {
-        self.active = active;
-    }
     pub fn restart(&mut self) {
-        self.nearby.take();
         self.known.take();
         self.failed = false;
     }
@@ -336,8 +324,6 @@ impl Discovery {
         }
         if self.adapter != AdapterState::Available {
             self.known.take();
-            self.nearby.take();
-            self.inventory.nearby.clear();
             for target in &mut self.inventory.known {
                 target.availability = Availability::Unavailable;
                 target.link = Knowledge::No;
@@ -350,27 +336,15 @@ impl Discovery {
             return Ok(());
         }
         if self.known.is_none() {
-            self.known = Some(Stream::start(true)?);
-        }
-        if self.active && self.nearby.is_none() {
-            self.nearby = Some(Stream::start(false)?);
-        }
-        if !self.active {
-            self.nearby.take();
-            self.inventory.nearby.clear();
+            self.known = Some(Stream::start()?);
         }
         if let Some(stream) = &mut self.known
             && let Some(rows) = stream.drain()?
         {
             self.inventory.known = rows;
         }
-        if let Some(stream) = &mut self.nearby
-            && let Some(rows) = stream.drain()?
-        {
-            self.inventory.nearby = rows;
-        }
         self.state = self
-            .nearby
+            .known
             .as_ref()
             .map_or(DiscoveryState::Idle, |s| s.state);
         if self

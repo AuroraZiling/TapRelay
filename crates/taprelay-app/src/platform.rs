@@ -16,9 +16,6 @@ pub trait Transport {
     fn refresh(&self) -> Result<()>;
     fn restart(&self) -> Result<u64>;
     fn select(&self, id: String) -> Result<u64>;
-    fn discover(&self, _active: bool) -> Result<()> {
-        Ok(())
-    }
     fn pair(&self, _id: String) -> Result<()> {
         anyhow::bail!("Pairing handoff unavailable")
     }
@@ -42,11 +39,6 @@ impl InputSource for taprelay_windows::input::InputHandle {
 }
 #[cfg(windows)]
 impl Transport for taprelay_windows::bluetooth::BleHandle {
-    fn discover(&self, active: bool) -> Result<()> {
-        self.commands
-            .try_send(taprelay_windows::bluetooth::Request::Discover(active))?;
-        Ok(())
-    }
     fn pair(&self, id: String) -> Result<()> {
         self.commands
             .try_send(taprelay_windows::bluetooth::Request::Pair(id))?;

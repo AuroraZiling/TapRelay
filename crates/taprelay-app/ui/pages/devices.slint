@@ -82,7 +82,6 @@ component ReceiverCard inherits Panel {
 
 export component DevicesPage inherits VerticalLayout {
     in property <[DeviceRow]> paired-devices;
-    in property <[DeviceRow]> nearby-devices;
     in property <bool> scanning;
     in property <string> discovery-status;
     callback action(string, int, string);
@@ -99,13 +98,7 @@ export component DevicesPage inherits VerticalLayout {
             width: parent.width;
             spacing: 12px;
             alignment: start;
-            if root.paired-devices.length > 0: Label { text: I18n.text.receiver-paired; }
             for device in root.paired-devices: ReceiverCard {
-                device: device;
-                action(name,index,value) => { root.action(name,index,value); }
-            }
-            if root.nearby-devices.length > 0: Label { text: I18n.text.receiver-nearby; }
-            for device in root.nearby-devices: ReceiverCard {
                 device: device;
                 action(name,index,value) => { root.action(name,index,value); }
             }

@@ -265,12 +265,6 @@ fn render_all_views_without_hardware() {
                 .cloned()
                 .collect::<Vec<_>>(),
         )));
-        ui.set_nearby_devices(ModelRc::new(VecModel::from(
-            rows.iter()
-                .filter(|r| !r.paired)
-                .cloned()
-                .collect::<Vec<_>>(),
-        )));
         ui.set_adapter_label(i18n::text(false, receiver_view::adapter_label_key(adapter)).into());
         ui.set_bluetooth_available(adapter == AdapterState::Available);
         ui.set_discovery_status(i18n::text(false, receiver_view::page_status_key(&state)).into());

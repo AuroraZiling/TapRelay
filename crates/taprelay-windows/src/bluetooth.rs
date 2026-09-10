@@ -1,6 +1,8 @@
 mod discovery;
 mod maintenance;
 use std::{
+    cell::RefCell,
+    rc::Rc,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
@@ -163,7 +165,6 @@ pub enum Request {
     ),
     Refresh,
     Restart,
-    Discover(bool),
     Pair(String),
 }
 pub struct BleHandle {
@@ -199,8 +200,7 @@ impl BleHandle {
                     || -> Result<(), BackendError> {
                         let _apartment = super::Apartment::new()?;
                         let mut discovery = discovery::Discovery::new();
-                        let mut manager = Coordinator::default();
-                        let mut discovery_active = false;
+                        let manager = Rc::new(RefCell::new(Coordinator::default()));
                         let mut service_retry_at = Instant::now();
                         let mut server = None;
                         let mut restart = true;
@@ -208,7 +208,6 @@ impl BleHandle {
                         while !stopping.load(Ordering::Acquire) {
                             let previous_adapter = discovery.adapter;
                             let previous_adapter_id = discovery.adapter_id.clone();
-                            discovery.set_active(discovery_active || manager.pairing_pending());
                             if let Err(e) = discovery.tick() {
                                 tracing::error!("Bluetooth discovery: {e}");
                                 discovery.fail();
@@ -226,13 +225,17 @@ impl BleHandle {
                             if restart && discovery.adapter == AdapterState::Available {
                                 // Drop the old server on its own worker before publishing another.
                                 server.take();
-                                manager.clear_selection();
+                                manager.borrow_mut().clear_selection();
                                 tx.send_replace(Snapshot {
                                     generation: worker_revision.load(Ordering::Acquire),
                                     activity: TransportActivity::CheckingEnvironment,
                                     ..Default::default()
                                 });
-                                match Server::create(tx.clone(), worker_revision.clone()) {
+                                match Server::create(
+                                    tx.clone(),
+                                    worker_revision.clone(),
+                                    manager.clone(),
+                                ) {
                                     Ok(s) => server = Some(s),
                                     Err(e) => {
                                         tracing::error!("{e}");
@@ -253,9 +256,8 @@ impl BleHandle {
                                         s.fail(&e);
                                     }
                                     if s.state.selected.is_none() {
-                                        manager.clear_selection();
+                                        manager.borrow_mut().clear_selection();
                                     }
-                                    manager.reconcile(&mut s.state, Instant::now());
                                     s.publish();
                                 } else {
                                     tx.send_modify(|state| {
@@ -265,7 +267,7 @@ impl BleHandle {
                                             discovery.adapter == AdapterState::Available;
                                         state.discovery = discovery.state;
                                         state.selected = None;
-                                        manager.reconcile(state, Instant::now());
+                                        manager.borrow_mut().reconcile(state, Instant::now());
                                     });
                                 }
                                 refresh_at = Instant::now() + Duration::from_millis(100);
@@ -280,9 +282,6 @@ impl BleHandle {
                                     discovery.restart();
                                     refresh_at = Instant::now();
                                 }
-                                Ok(Request::Discover(active)) => {
-                                    discovery_active = active;
-                                }
                                 Ok(Request::Pair(id)) => {
                                     let candidate = tx
                                         .borrow()
@@ -291,14 +290,14 @@ impl BleHandle {
                                         .find(|t| t.matches_id(&id))
                                         .cloned();
                                     if let Some(target) = candidate {
-                                        if !manager.pair(target, Instant::now()) {
+                                        if !manager.borrow_mut().pair(target, Instant::now()) {
                                             continue;
                                         }
                                         if let Err(e) =
                                             super::desktop::open("ms-settings:bluetooth")
                                         {
                                             tracing::error!("Open pairing settings: {e}");
-                                            manager.cancel_pairing();
+                                            manager.borrow_mut().cancel_pairing();
                                             if let Some(s) = &mut server {
                                                 s.state.device_error =
                                                     Some(DeviceError::PairingLaunchFailed);
@@ -311,11 +310,12 @@ impl BleHandle {
                                 }
                                 Ok(Request::Select(id)) => {
                                     if let Some(id) = &id {
-                                        if !manager.connect(id.clone(), Instant::now()) {
+                                        if !manager.borrow_mut().connect(id.clone(), Instant::now())
+                                        {
                                             continue;
                                         }
                                     } else {
-                                        manager.disconnect();
+                                        manager.borrow_mut().disconnect();
                                     }
                                     if let Some(s) = &mut server {
                                         s.state.device_error = None;
@@ -324,7 +324,7 @@ impl BleHandle {
                                             s.fail(&e);
                                         }
                                     } else {
-                                        manager.clear_selection();
+                                        manager.borrow_mut().clear_selection();
                                     }
                                 }
                                 Ok(Request::Send(c, reply)) => {
@@ -440,7 +440,21 @@ fn selected_subscriber_index(
     })
 }
 
+// Every publication, including refresh/notify intermediate snapshots, must use
+// the same lifecycle projection as the worker loop.
+fn publish_snapshot(
+    updates: &watch::Sender<Snapshot>,
+    state: &mut Snapshot,
+    manager: &mut Coordinator,
+) {
+    manager.reconcile(state, Instant::now());
+    if *updates.borrow() != *state {
+        updates.send_replace(state.clone());
+    }
+}
+
 struct Server {
+    manager: Rc<RefCell<Coordinator>>,
     providers: Vec<GattServiceProvider>,
     input: Option<GattLocalCharacteristic>,
     control: Option<GattLocalCharacteristic>,
@@ -472,6 +486,7 @@ impl Server {
     fn create(
         updates: watch::Sender<Snapshot>,
         revision: Arc<AtomicU64>,
+        manager: Rc<RefCell<Coordinator>>,
     ) -> Result<Self, BackendError> {
         let d = super::diagnostics::doctor()?;
         tracing::info!(adapter = ?d.adapter_id, radio = ?d.radio_name, peripheral = ?d.peripheral_role, low_energy = ?d.low_energy, "Bluetooth capabilities inspected");
@@ -493,6 +508,7 @@ impl Server {
         )?;
         let initial_generation = revision.load(Ordering::Acquire);
         let mut s = Self {
+            manager,
             providers: vec![],
             input: None,
             control: None,
@@ -722,10 +738,12 @@ impl Server {
         }
         Ok(())
     }
-    fn publish(&self) {
-        if *self.updates.borrow() != self.state {
-            self.updates.send_replace(self.state.clone());
-        }
+    fn publish(&mut self) {
+        publish_snapshot(
+            &self.updates,
+            &mut self.state,
+            &mut self.manager.borrow_mut(),
+        );
     }
     fn fail(&mut self, e: &BackendError) {
         self.maintenance.failure(Instant::now());
@@ -1239,6 +1257,58 @@ fn characteristic(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tap_publications_keep_ready_connection_consistent() {
+        use taprelay_core::devices::Connection;
+        let target = Target {
+            id: "ipad".into(),
+            pairing: Knowledge::Yes,
+            subscribed: Knowledge::Yes,
+            ..Default::default()
+        };
+        let mut state = Snapshot {
+            adapter_state: AdapterState::Available,
+            selected: Some(target.id.clone()),
+            targets: vec![target.clone()],
+            target_status: Some(target),
+            ready: true,
+            ..Default::default()
+        };
+        let (updates, received) = watch::channel(Snapshot::default());
+        let mut manager = Coordinator::default();
+        // refresh() rebuilds native targets before notify() publishes Sending.
+        for activity in [
+            TransportActivity::Idle,
+            TransportActivity::Sending,
+            TransportActivity::Idle,
+        ] {
+            state.activity = activity;
+            state.targets[0].connection = Connection::Disconnected;
+            state.target_status.as_mut().unwrap().connection = Connection::Disconnected;
+            publish_snapshot(&updates, &mut state, &mut manager);
+            assert!(received.borrow().ready);
+            assert_eq!(
+                received.borrow().target_status.as_ref().unwrap().connection,
+                Connection::Connected,
+                "ready Tap publication must not say paired/disconnected"
+            );
+        }
+        state.ready = false;
+        state.device_error = Some(DeviceError::ConnectionFailed);
+        publish_snapshot(&updates, &mut state, &mut manager);
+        assert!(!received.borrow().ready);
+        assert_eq!(
+            received.borrow().target_status.as_ref().unwrap().connection,
+            Connection::Failed
+        );
+        state.adapter_state = AdapterState::Disabled;
+        publish_snapshot(&updates, &mut state, &mut manager);
+        assert_eq!(
+            received.borrow().target_status.as_ref().unwrap().connection,
+            Connection::Disconnected
+        );
+    }
 
     #[test]
     fn discovery_link_cannot_make_inactive_hid_session_sendable() {

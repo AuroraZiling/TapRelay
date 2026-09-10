@@ -53,7 +53,6 @@ pub struct Runtime {
     next_test: u64,
     bindings: BindingIndex,
     pub bindings_revision: u64,
-    discovery_active: Option<bool>,
 }
 impl Runtime {
     pub fn new(mut config: Config) -> Self {
@@ -95,7 +94,6 @@ impl Runtime {
             next_test: 0,
             bindings,
             bindings_revision: 0,
-            discovery_active: None,
         }
     }
     pub fn start_bluetooth(&mut self) -> Result<()> {
@@ -105,7 +103,6 @@ impl Runtime {
         &mut self,
         create: impl FnOnce() -> Result<Box<dyn Transport>>,
     ) -> Result<()> {
-        self.discovery_active = None;
         self.state.ready = false;
         self.state.service = false;
         self.state.broadcasting = false;
@@ -123,15 +120,6 @@ impl Runtime {
         }
         self.required_generation = 0;
         self.transport = Some(create()?);
-        Ok(())
-    }
-    pub fn discover(&mut self, active: bool) -> Result<()> {
-        if self.discovery_active != Some(active)
-            && let Some(transport) = &self.transport
-        {
-            transport.discover(active)?;
-            self.discovery_active = Some(active);
-        }
         Ok(())
     }
     pub fn pair(&mut self, id: String) -> Result<()> {

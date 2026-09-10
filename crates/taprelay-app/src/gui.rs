@@ -669,12 +669,6 @@ impl Controller {
         let now = Instant::now();
         if self.fatal.is_none() {
             self.runtime.tick();
-            let active = !self.hidden
-                && ((ui.get_mode() == 1 && ui.get_wizard_page() == 1)
-                    || (ui.get_mode() == 2 && ui.get_page() == 2));
-            if let Err(e) = self.runtime.discover(active) {
-                tracing::warn!("Discovery lifecycle: {e}");
-            }
         }
         if self.recording() {
             if !desktop::foreground_is_ours() || self.runtime.capture_cancelled {
@@ -1027,12 +1021,6 @@ impl Controller {
             ui.set_paired_devices(ModelRc::new(VecModel::from(
                 rows.iter()
                     .filter(|r| r.paired)
-                    .cloned()
-                    .collect::<Vec<_>>(),
-            )));
-            ui.set_nearby_devices(ModelRc::new(VecModel::from(
-                rows.iter()
-                    .filter(|r| !r.paired)
                     .cloned()
                     .collect::<Vec<_>>(),
             )));

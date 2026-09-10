@@ -44,7 +44,14 @@ pub fn page_status_key(state: &Snapshot) -> &'static str {
     match state.discovery {
         DiscoveryState::Failed => keys::RECEIVER_SCAN_FAILED,
         DiscoveryState::Scanning => keys::RECEIVER_SCANNING,
-        DiscoveryState::ResultsAvailable if state.targets.is_empty() => keys::RECEIVER_EMPTY,
+        DiscoveryState::ResultsAvailable
+            if !state
+                .targets
+                .iter()
+                .any(|target| target.pairing == Knowledge::Yes) =>
+        {
+            keys::RECEIVER_EMPTY
+        }
         _ => keys::RECEIVER_HELP,
     }
 }

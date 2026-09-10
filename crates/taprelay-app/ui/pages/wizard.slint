@@ -28,7 +28,6 @@ export component WizardPage inherits VerticalLayout {
     in property <string> adapter-label;
     in property <bool> scanning;
     in property <[DeviceRow]> paired-devices;
-    in property <[DeviceRow]> nearby-devices;
     in property <bool> bluetooth-available;
     in property <bool> busy;
     in property <color> signal;
@@ -91,7 +90,6 @@ export component WizardPage inherits VerticalLayout {
         discovery-status: root.discovery-status;
         scanning: root.scanning;
         paired-devices: root.paired-devices;
-        nearby-devices: root.nearby-devices;
         action(name, index, value) => {
             root.action(name, index, value);
         }

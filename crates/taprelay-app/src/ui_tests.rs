@@ -31,9 +31,6 @@ fn render_all_views_without_hardware() {
     ui.set_device_name("Living room tablet".into());
     ui.set_device_selected(true);
     ui.set_stage("Connected; waiting for HID subscription".into());
-    ui.set_stage_detail(
-        "Time in this stage: 23 s · Retry or check system Bluetooth settings.".into(),
-    );
     ui.set_bindings(ModelRc::new(VecModel::from(vec![
         BindingRow {
             text: "F8".into(),

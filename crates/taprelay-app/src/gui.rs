@@ -941,25 +941,6 @@ impl Controller {
             self.stage_since = Instant::now();
         }
         ui.set_stage(stage.into());
-        ui.set_stage_detail(if s.ready {
-            if self.runtime.config.bindings.iter().any(|b| b.enabled) {
-                self.tr(keys::RECEIVER_READY_HINT).into()
-            } else {
-                self.tr(keys::RECEIVER_WAIT_BINDING).into()
-            }
-        } else {
-            format!(
-                "{} {} s{}",
-                self.tr(keys::RECEIVER_WAIT_TIME),
-                self.stage_since.elapsed().as_secs(),
-                if self.stage_since.elapsed() > Duration::from_secs(20) {
-                    self.tr(keys::RECEIVER_WAIT_HINT)
-                } else {
-                    ""
-                }
-            )
-            .into()
-        });
         ui.set_ready(s.ready);
         ui.set_listening(self.runtime.listening);
         ui.set_state_color(if (!self.passed && failure.is_some()) || key == "fault" {

@@ -24,6 +24,7 @@ time = { version = "0.3.55", features = [
 slint = { version = "=1.17.1", default-features = false, features = [
     "std",
     "backend-winit",
+    "unstable-winit-030",
     "renderer-software",
     "compat-1-2",
     "accessibility",
@@ -43,4 +44,5 @@ i-slint-backend-testing = { version = "=1.17.1", features = [
 ] }
 
 [target.'cfg(windows)'.dependencies]
+i-slint-core = "=1.17.1"
 taprelay-windows = { path = "../taprelay-windows" }

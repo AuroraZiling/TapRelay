@@ -1,15 +1,31 @@
 //! Headless view validation only: no native window, permissions, input hooks or Bluetooth.
 use crate::*;
-use slint::{ComponentHandle, ModelRc, VecModel};
+use slint::{ComponentHandle, ModelRc, VecModel, platform::WindowAdapter};
+
+struct SoftwareTestPlatform {
+    window: std::rc::Rc<slint::platform::software_renderer::MinimalSoftwareWindow>,
+}
+
+impl slint::platform::Platform for SoftwareTestPlatform {
+    fn create_window_adapter(
+        &self,
+    ) -> Result<std::rc::Rc<dyn slint::platform::WindowAdapter>, slint::PlatformError> {
+        Ok(self.window.clone())
+    }
+
+    fn duration_since_start(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(i_slint_backend_testing::get_mocked_time())
+    }
+}
+
 #[test]
 fn render_all_views_without_hardware() {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            renderer_name: Some("software".into()),
-            mock_time: true,
-            threading: false,
-        },
-    )))
+    let render_window = slint::platform::software_renderer::MinimalSoftwareWindow::new(
+        slint::platform::software_renderer::RepaintBufferType::ReusedBuffer,
+    );
+    slint::platform::set_platform(Box::new(SoftwareTestPlatform {
+        window: render_window.clone(),
+    }))
     .unwrap();
     let ui = AppWindow::new().unwrap();
     ui.set_device_name("Living room tablet".into());
@@ -375,4 +391,61 @@ fn render_all_views_without_hardware() {
     ui.set_log_text("log model revision changed".into());
     let shot = ui.window().take_snapshot().unwrap();
     assert_eq!((shot.width(), shot.height()), (1000, 700));
+
+    // Seed the retained renderer cache and confirm unchanged UI has no damage.
+    use slint::platform::software_renderer::PremultipliedRgbaColor;
+    let mut frame = vec![PremultipliedRgbaColor::default(); 1000 * 700];
+    render_window.window().request_redraw();
+    let mut first_region = None;
+    assert!(render_window.draw_if_needed(|renderer| {
+        first_region = Some(renderer.render(frame.as_mut_slice(), 1000));
+    }));
+    assert_eq!(
+        first_region.unwrap().bounding_box_size(),
+        slint::PhysicalSize::new(1000, 700)
+    );
+
+    render_window.window().request_redraw();
+    let mut unchanged_region = None;
+    assert!(render_window.draw_if_needed(|renderer| {
+        unchanged_region = Some(renderer.render(frame.as_mut_slice(), 1000));
+    }));
+    assert_eq!(
+        unchanged_region.unwrap().bounding_box_size(),
+        slint::PhysicalSize::default()
+    );
+
+    #[cfg(windows)]
+    {
+        let expected = frame.clone();
+        // Model a lost surface, without minimizing or changing any UI property.
+        // Exercise the same invalidation used before native RedrawRequested.
+        for _ in 0..3 {
+            frame.fill(PremultipliedRgbaColor::default());
+            crate::window_rendering::invalidate_surface(ui.window());
+            render_window.window().request_redraw();
+            assert!(render_window.draw_if_needed(|renderer| {
+                let region = renderer.render(frame.as_mut_slice(), 1000);
+                assert_eq!(
+                    region.bounding_box_origin(),
+                    slint::PhysicalPosition::default()
+                );
+                assert_eq!(
+                    region.bounding_box_size(),
+                    slint::PhysicalSize::new(1000, 700)
+                );
+            }));
+            assert!(
+                frame
+                    .iter()
+                    .zip(&expected)
+                    .all(|(a, b)| (a.red, a.green, a.blue, a.alpha)
+                        == (b.red, b.green, b.blue, b.alpha)),
+                "expose must recover every pixel without UI changes"
+            );
+            assert!(
+                !render_window.draw_if_needed(|_| panic!("expose must not create a redraw loop"))
+            );
+        }
+    }
 }

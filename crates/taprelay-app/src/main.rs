@@ -10,6 +10,8 @@ mod logging;
 mod platform;
 mod receiver_view;
 mod runtime;
+#[cfg(windows)]
+mod window_rendering;
 slint::include_modules!();
 #[cfg(test)]
 mod ui_tests;

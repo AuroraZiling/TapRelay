@@ -3,9 +3,12 @@ import { FocusRing } from "../vendor/components/focus-ring.slint";
 import { ScrollArea } from "../vendor/components/scroll-area.slint";
 import { Tokens } from "../vendor/theme/tokens.slint";
 import { I18n } from "@i18n";
-import { BindingRow } from "../types.slint";
+import { FunctionBindingRow, ShortcutItem } from "../types.slint";
 import { IconDisplay, IconSet } from "@lucide";
 import { Caption, Label } from "../components/primitives.slint";
+import { Panel } from "../components/primitives.slint";
+import { Badge } from "../vendor/components/badge.slint";
+
 
 // Borderless, content-sized capture surface. BindingChip owns the visible
 // surface so the capture interaction never adds a second input border.
@@ -109,11 +112,11 @@ component BindingChip inherits Rectangle {
     out property <bool> hovered:
         surface-touch.has-hover || capture.hovered || cancel_button.hovered || remove_button.hovered;
 
-    width: content.preferred-width;
+    width: min(measure.preferred-width + 42px, root.available-width);
+    in property <length> available-width: 400px;
     height: Tokens.density-button-sm;
-    preferred-width: content.preferred-width;
+    preferred-width: min(measure.preferred-width + 42px, root.available-width);
     horizontal-stretch: 0;
-    flex-shrink: 0;
     background: root.recording
         ? Tokens.color-surface-3
         : root.hovered ? Tokens.color-accent : Tokens.color-card;
@@ -125,6 +128,14 @@ component BindingChip inherits Rectangle {
         easing: Tokens.motion-easing-standard;
     }
     accessible-role: none;
+    measure := Text {
+        text: root.label;
+        font-size: Tokens.typography-body-sm-size;
+        font-weight: Tokens.typography-weight-medium;
+        visible: false;
+        width: 0px;
+        height: 0px;
+    }
 
     // Cover padding and layout gaps as well as the child controls.
     surface-touch := TouchArea {
@@ -134,7 +145,7 @@ component BindingChip inherits Rectangle {
 
     content := HorizontalLayout {
         x: 0px;
-        width: self.preferred-width;
+        width: parent.width;
         height: parent.height;
         padding-left: Tokens.spacing-sm;
         padding-right: 2px;
@@ -142,6 +153,7 @@ component BindingChip inherits Rectangle {
         cross-axis-alignment: center;
 
         capture := ShortcutCapture {
+            width: max(0px, parent.width - 42px);
             text: root.label;
             recording: root.recording;
             begin => { root.begin(); }
@@ -215,7 +227,7 @@ component AddBindingButton inherits Rectangle {
     height: Tokens.density-button-sm;
     preferred-width: content.preferred-width + 2 * Tokens.spacing-sm;
     horizontal-stretch: 0;
-    flex-shrink: 0;
+
     opacity: root.disabled ? 0.5 : 1.0;
     background: root.hovered && !root.disabled ? Tokens.color-accent : Tokens.color-background;
     border-width: 1px;
@@ -295,60 +307,199 @@ component AddBindingButton inherits Rectangle {
     }
 }
 
-export component BindingsPage inherits VerticalLayout {
-    in property <[BindingRow]> bindings;
-    in property <string> capture-error;
-    in property <int> capture-index: -1;
-    in property <string> capture-text;
-    in property <[string]> capture-keys;
-    callback action(string, int, string);
-    spacing: Tokens.spacing-xl;
-    Caption {
-        text: I18n.text.bindings-help;
+component DisabledShortcutChip inherits Rectangle {
+    in property <ShortcutItem> shortcut;
+    in property <length> available-width: 400px;
+    width: min(root.available-width, max(92px, label.preferred-width + 2 * Tokens.spacing-sm));
+    height: Tokens.density-button-sm;
+    horizontal-stretch: 0;
+    background: Tokens.color-card;
+    border-width: 1px;
+    border-color: Tokens.color-border-hairline;
+    border-radius: Tokens.radius-md;
+    opacity: 0.5;
+    label := Text {
+        x: Tokens.spacing-sm;
+        width: parent.width - 2 * Tokens.spacing-sm;
+        height: parent.height;
+        text: root.shortcut.text;
+        color: Tokens.color-muted-foreground;
+        font-size: Tokens.typography-body-sm-size;
+        font-weight: Tokens.typography-weight-medium;
+        vertical-alignment: center;
+        overflow: elide;
     }
+}
+
+// Shared row geometry keeps active and disabled sections on the same columns.
+component FunctionBindingRowView inherits Rectangle {
+    in property <FunctionBindingRow> binding-row;
+    in property <bool> inactive: false;
+    in property <string> capture-function;
+    in property <int> capture-slot: -1;
+    in property <string> capture-text;
+    in property <string> capture-error;
+    callback action(string, int, string);
+    property <ShortcutItem> first-shortcut: root.binding-row.shortcuts[0];
+    property <bool> has-error: root.capture-error != "" && root.capture-function == root.binding-row.id;
+    height: 64px;
+    background: Tokens.color-card;
+    border-radius: Tokens.radius-md;
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        height: 64px;
+        spacing: 16px;
+        cross-axis-alignment: center;
+        left := HorizontalLayout {
+            width: root.width - 364px;
+
+            spacing: 8px;
+            alignment: start;
+            cross-axis-alignment: center;
+            // Present one slot for now; the model retains all saved shortcuts.
+            if !root.inactive && root.binding-row.shortcuts.length > 0: BindingChip {
+                available-width: root.has-error ? (root.width - 372px) / 2 : root.width - 364px;
+                label: root.capture-function == root.binding-row.id && root.capture-slot == root.first-shortcut.slot
+                    ? root.capture-text : root.first-shortcut.text;
+                recording: root.capture-function == root.binding-row.id && root.capture-slot == root.first-shortcut.slot;
+                remove-disabled: root.capture-function != "";
+                key-input(text, down) => { root.action("capture-key", down ? 1 : 0, text); }
+                begin => { if root.capture-function == "" { root.action("capture", root.first-shortcut.slot, root.binding-row.id); } }
+                cancel => { root.action("cancel-capture", 0, ""); }
+                remove => { root.action("delete", root.first-shortcut.slot, root.binding-row.id); }
+            }
+            if root.inactive && root.binding-row.shortcuts.length > 0: DisabledShortcutChip {
+                available-width: root.width - 364px;
+                shortcut: root.first-shortcut;
+            }
+            if !root.inactive && root.binding-row.shortcuts.length == 0
+                    && !(root.capture-function == root.binding-row.id
+                        && root.capture-slot == root.binding-row.shortcuts.length): AddBindingButton {
+                text: I18n.text.bindings-unset;
+                accessible-label: I18n.text.bindings-add;
+                disabled: root.capture-function != "";
+                clicked => { root.action("capture", root.binding-row.shortcuts.length, root.binding-row.id); }
+            }
+            if !root.inactive && root.binding-row.shortcuts.length == 0
+                    && root.capture-function == root.binding-row.id
+                    && root.capture-slot == root.binding-row.shortcuts.length: BindingChip {
+                available-width: root.has-error ? (root.width - 372px) / 2 : root.width - 364px;
+                label: root.capture-text;
+                recording: true;
+                removable: false;
+                cancel => { root.action("cancel-capture", 0, ""); }
+                key-input(text, down) => { root.action("capture-key", down ? 1 : 0, text); }
+            }
+            if root.has-error: Text {
+                text: root.capture-error;
+                color: Tokens.color-destructive;
+                font-size: Tokens.typography-body-sm-size;
+                min-width: 0px;
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+        HorizontalLayout {
+            width: 80px;
+            spacing: 8px;
+            opacity: root.inactive ? 0.5 : 1;
+            Label {
+                text: root.binding-row.activation;
+                color: Tokens.color-muted-foreground;
+                vertical-alignment: center;
+                horizontal-stretch: 0;
+            }
+            IconDisplay { icon: IconSet.ArrowRight; size: 16px; stroke: Tokens.color-muted-foreground; }
+        }
+        HorizontalLayout {
+            width: 220px;
+            spacing: 8px;
+            cross-axis-alignment: center;
+            Badge {
+                text: root.binding-row.label;
+                variant: secondary;
+                opacity: root.inactive ? 0.5 : 1;
+                horizontal-stretch: 0;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            if root.inactive: Button {
+                text: I18n.text.bindings-unbind;
+                variant: destructive;
+                destructive-outline: true;
+                horizontal-stretch: 0;
+                size: sm;
+                disabled: root.capture-function != "";
+                clicked => { root.action("unbind-function", 0, root.binding-row.id); }
+            }
+        }
+    }
+
+}
+
+export component FunctionBindingsPage inherits VerticalLayout {
+    in property <[FunctionBindingRow]> active-rows;
+    in property <[FunctionBindingRow]> disabled-rows;
+    in property <string> capture-function;
+    in property <int> capture-slot: -1;
+    in property <string> capture-text;
+    in property <string> capture-error;
+    callback action(string, int, string);
+    spacing: 24px;
+    Caption { text: I18n.text.bindings-help; vertical-stretch: 0; }
     ScrollArea {
-        // Drag recognition delays child presses and races the native recorder.
         drag-to-scroll: false;
         content-height: max(self.height, content.preferred-height);
         content := VerticalLayout {
+            x: 0px;
+            y: 0px;
             width: parent.width;
-            spacing: Tokens.spacing-sm;
+            height: self.preferred-height;
+            spacing: 8px;
             alignment: start;
-            flow := FlexboxLayout {
-                width: parent.width;
-                spacing-horizontal: Tokens.spacing-sm;
-                spacing-vertical: Tokens.spacing-sm;
-                flex-direction: row;
-                flex-wrap: wrap;
-                alignment: start;
-                align-content: start;
-                cross-axis-alignment: center;
-
-                for binding[i] in root.bindings: BindingChip {
-                    label: root.capture-index == i ? root.capture-text : binding.text;
-                    recording: root.capture-index == i;
-                    removable: root.capture-index != i;
-                    remove-disabled: root.capture-index != -1;
-                    key-input(text, down) => { root.action("capture-key", down ? 1 : 0, text); }
-                    begin => { root.action("capture", i, ""); }
-                    cancel => { root.action("cancel-capture", 0, ""); }
-                    remove => { root.action("delete", i, ""); }
-                }
-                if root.capture-index == -2: BindingChip {
-                    label: root.capture-text;
-                    recording: true;
-                    removable: false;
-                    cancel => { root.action("cancel-capture", 0, ""); }
-                    key-input(text, down) => { root.action("capture-key", down ? 1 : 0, text); }
-                }
-                if root.capture-index == -1: AddBindingButton {
-                    text: I18n.text.bindings-add;
-                    clicked => { root.action("capture", -2, ""); }
+            if root.active-rows.length == 0: Panel {
+                height: empty-content.preferred-height;
+                empty-content := HorizontalLayout {
+                    padding: 20px;
+                    spacing: 20px;
+                    cross-axis-alignment: center;
+                    Label { text: I18n.text.bindings-empty; horizontal-stretch: 1; }
+                    Button {
+                        text: I18n.text.functions-open;
+                        variant: outline;
+                        horizontal-stretch: 0;
+                        clicked => { root.action("navigate", 1, ""); }
+                    }
                 }
             }
-            if root.capture-error != "": Label {
-                text: root.capture-error;
-                color: Tokens.color-destructive;
+            if root.active-rows.length > 0: HorizontalLayout {
+                height: 28px;
+                padding-left: 16px;
+                padding-right: 16px;
+                spacing: 16px;
+                Caption { text: I18n.text.bindings-column-shortcut; horizontal-stretch: 1; }
+                Caption { text: I18n.text.bindings-column-activation; width: 80px; }
+                Caption { text: I18n.text.bindings-column-function; width: 220px; }
+            }
+            for row in root.active-rows: FunctionBindingRowView {
+                binding-row: row;
+                capture-function: root.capture-function;
+                capture-slot: root.capture-slot;
+                capture-text: root.capture-text;
+                capture-error: root.capture-error;
+                action(name, index, value) => { root.action(name, index, value); }
+            }
+            if root.disabled-rows.length > 0: VerticalLayout {
+                padding-top: 16px;
+                padding-bottom: 4px;
+                Caption { text: I18n.text.bindings-disabled; }
+            }
+            for row in root.disabled-rows: FunctionBindingRowView {
+                binding-row: row;
+                inactive: true;
+                capture-function: root.capture-function;
+                action(name, index, value) => { root.action(name, index, value); }
             }
         }
     }

@@ -1,5 +1,6 @@
 use crate::{
-    AppWindow, BindingRow, CheckRow, LogLine, Theme, ThemeMode,
+    AppWindow, BindingRow, CheckRow, FunctionBindingRow, FunctionCard, FunctionItem, LogLine,
+    ShortcutItem, Theme, ThemeMode,
     action::{Action, CaptureTarget},
     administrator,
     config::{self, Config, Language, SaveQueue, Theme as ThemeSetting},
@@ -18,8 +19,7 @@ use std::{
     time::{Duration, Instant},
 };
 use taprelay_core::{
-    binding::Binding,
-    command::MediaCommand,
+    function::{self, Activation, CategoryId, FunctionId},
     state::{Target, TransportActivity},
 };
 
@@ -253,6 +253,7 @@ fn should_request_admin(privilege: PrivilegeMode, configured_always_admin: bool)
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod startup_option_tests {
     use super::*;
 
@@ -348,9 +349,8 @@ struct Controller {
         bool,
         taprelay_core::devices::AdapterState,
     )>,
-    previous_bindings: Option<u64>,
+    previous_bindings: Option<(u64, bool)>,
     previous_checks: Option<([bool; 4], bool, bool)>,
-    previous_capture_keys: Vec<String>,
     system_theme: bool,
     system_language: bool,
     last_system_poll: Instant,
@@ -398,7 +398,6 @@ impl Controller {
             previous_devices: None,
             previous_bindings: None,
             previous_checks: None,
-            previous_capture_keys: vec![],
             system_theme: desktop::system_dark(),
             system_language: desktop::system_chinese(),
             last_system_poll: now,
@@ -492,6 +491,7 @@ impl Controller {
             }
             Action::Quit => {
                 self.cancel_capture();
+                self.runtime.shutdown();
                 self.save_geometry(ui);
                 self.flush(true);
                 self.shutdown = true;
@@ -501,7 +501,7 @@ impl Controller {
                 if self.recording() {
                     self.cancel_capture();
                 }
-                ui.set_page(index.clamp(0, 4));
+                ui.set_page(index.clamp(0, 5));
             }
             Action::Listen => {
                 self.runtime.set_listening(!self.runtime.listening)?;
@@ -539,25 +539,43 @@ impl Controller {
             }
             Action::Capture => {
                 self.cancel_capture();
+                let id = FunctionId::from_stable_id(value).context("Unknown function")?;
+                let slot = usize::try_from(index).context("Invalid shortcut slot")?;
+                let config = self
+                    .runtime
+                    .config
+                    .functions
+                    .get(&id)
+                    .context("Function no longer exists")?;
+                anyhow::ensure!(config.enabled, "Function is disabled");
                 anyhow::ensure!(
-                    index < 0 || (index as usize) < self.runtime.config.bindings.len(),
-                    "Binding no longer exists"
+                    slot <= config.shortcuts.len() && slot < 2,
+                    "Shortcut slot unavailable"
                 );
                 self.runtime.record()?;
-                if index >= 0 {
-                    self.capture = Some(CaptureTarget::Existing(index as usize));
-                } else {
-                    self.capture = Some(CaptureTarget::New);
-                }
+                self.capture = Some(CaptureTarget::Function { id, slot });
             }
             Action::CancelCapture => self.cancel_capture(),
             Action::Delete => {
                 self.cancel_capture();
-                if (index as usize) < self.runtime.config.bindings.len() {
-                    self.runtime.config.bindings.remove(index as usize);
-                    self.runtime.bindings_changed();
-                    self.saves.changed();
+                let id = FunctionId::from_stable_id(value).context("Unknown function")?;
+                let slot = usize::try_from(index).context("Invalid shortcut slot")?;
+                self.runtime.remove_shortcut(id, slot)?;
+                self.saves.changed();
+            }
+            Action::ToggleFunction => {
+                let id = FunctionId::from_stable_id(value).context("Unknown function")?;
+                if self.recording() {
+                    self.cancel_capture();
                 }
+                self.runtime.set_function_enabled(id, index != 0)?;
+                self.saves.changed();
+            }
+            Action::UnbindFunction => {
+                self.cancel_capture();
+                let id = FunctionId::from_stable_id(value).context("Unknown function")?;
+                self.runtime.unbind_function(id)?;
+                self.saves.changed();
             }
             Action::Device | Action::PairDevice => {
                 if let Some(target) = self
@@ -586,13 +604,13 @@ impl Controller {
             }
             Action::WizardNext | Action::WizardBack => {
                 if name == Action::WizardNext
-                    && ui.get_wizard_page() == 1
+                    && ui.get_wizard_page() == 2
                     && !taprelay_core::devices::receiver_next_allowed(&self.runtime.state)
                 {
                     return Ok(());
                 }
                 let page = (ui.get_wizard_page() + if name == Action::WizardNext { 1 } else { -1 })
-                    .clamp(0, 2);
+                    .clamp(0, 3);
                 ui.set_wizard_page(page);
                 self.runtime.config.wizard.page = page as u8;
                 self.saves.changed();
@@ -684,33 +702,28 @@ impl Controller {
             } else if let Some(t) = self.runtime.learned.take() {
                 if !t.valid() {
                     self.capture_error = self.tr(keys::CAPTURE_INVALID).into();
-                } else if self
-                    .runtime
-                    .config
-                    .bindings
-                    .iter()
-                    .enumerate()
-                    .any(|(i, b)| Some(CaptureTarget::Existing(i)) != self.capture && b.tap == t)
-                {
-                    self.capture_error = self.tr(keys::CAPTURE_DUPLICATE).into();
-                } else {
-                    let common = matches!(&t,taprelay_core::input::Trigger::Keyboard{keys} if keys.len()==1 && matches!(keys[0],0x0d|0x20|0x30..=0x5a));
-                    if let Some(CaptureTarget::Existing(i)) = self.capture {
-                        self.runtime.config.bindings[i].tap = t;
+                } else if let Some(CaptureTarget::Function { id, slot }) = self.capture {
+                    if let Some(conflict) = self.runtime.shortcut_conflict(id, slot, &t) {
+                        self.capture_error = format!(
+                            "{}: {}",
+                            self.tr(keys::CAPTURE_DUPLICATE),
+                            self.tr(function::function_definition(conflict).name_key)
+                        );
                     } else {
-                        self.runtime.config.bindings.push(Binding {
-                            tap: t,
-                            relay: MediaCommand::PlayPause,
-                            enabled: true,
-                        });
+                        match self.runtime.replace_shortcut(id, slot, t) {
+                            Ok(()) => {
+                                self.saves.changed();
+                                self.cancel_capture();
+                            }
+                            Err(error) => self.capture_error = error.to_string(),
+                        }
                     }
-                    self.runtime.bindings_changed();
-                    self.saves.changed();
-                    self.cancel_capture();
-                    if common {
-                        self.say(self.tr(keys::BINDINGS_COMMON_KEY_HINT).into());
-                    }
+                } else {
+                    self.capture_error = self.tr(keys::CAPTURE_INVALID).into();
                 }
+            } else if self.runtime.capture_invalid {
+                self.runtime.capture_invalid = false;
+                self.capture_error = self.tr(keys::CAPTURE_INVALID).into();
             }
         }
         if let Some(e) = self.runtime.error.take() {
@@ -922,7 +935,14 @@ impl Controller {
             3
         } else if self.passed && !self.runtime.listening {
             1
-        } else if s.ready && self.runtime.config.bindings.iter().any(|b| b.enabled) {
+        } else if s.ready
+            && self
+                .runtime
+                .config
+                .functions
+                .values()
+                .any(|function| function.enabled && !function.shortcuts.is_empty())
+        {
             0
         } else {
             2
@@ -936,26 +956,94 @@ impl Controller {
                 .into(),
         );
         ui.set_diagnostics(format!("Adapter={} · Peripheral={} · Service={} · Advertising={}\nLink={:?} · Subscription={:?} · Input={}\n{}: {}",s.adapter,s.peripheral,s.service,s.broadcasting,target.map(|t|t.link),target.map(|t|t.subscribed),s.input,self.tr(keys::DIAGNOSTICS_INPUTS),self.runtime.matched).into());
-        if self.previous_bindings != Some(self.runtime.bindings_revision) {
-            self.previous_bindings = Some(self.runtime.bindings_revision);
-            ui.set_bindings(ModelRc::new(VecModel::from(
-                self.runtime
-                    .config
-                    .bindings
+        if self.previous_bindings != Some((self.runtime.bindings_revision, zh)) {
+            self.previous_bindings = Some((self.runtime.bindings_revision, zh));
+            let mut cards: Vec<(CategoryId, Vec<FunctionItem>, &'static str)> = Vec::new();
+            let mut active_rows = Vec::new();
+            let mut disabled_rows = Vec::new();
+            let mut summary = Vec::new();
+            for definition in taprelay_core::function::FUNCTION_CATALOG {
+                let Some(config) = self.runtime.config.functions.get(&definition.id) else {
+                    continue;
+                };
+                let activation = match definition.activation {
+                    Activation::Press => self.tr(keys::BINDINGS_ACTIVATION_PRESS),
+                    Activation::Hold => self.tr(keys::BINDINGS_ACTIVATION_HOLD),
+                };
+                let item = FunctionItem {
+                    id: definition.id.stable_id().into(),
+                    label: self.tr(definition.name_key).into(),
+                    enabled: config.enabled,
+                    activation: activation.into(),
+                };
+                let category = if let Some(index) = cards
                     .iter()
-                    .map(|b| BindingRow {
-                        text: b.tap.key_labels().join(" + ").into(),
+                    .position(|(category, _, _)| *category == definition.category)
+                {
+                    index
+                } else {
+                    cards.push((definition.category, Vec::new(), definition.category_key));
+                    cards.len() - 1
+                };
+                cards[category].1.push(item);
+
+                let shortcuts = config
+                    .shortcuts
+                    .iter()
+                    .enumerate()
+                    .map(|(slot, shortcut)| ShortcutItem {
+                        text: shortcut.display().into(),
                         keys: ModelRc::new(VecModel::from(
-                            b.tap
+                            shortcut
                                 .key_labels()
                                 .into_iter()
                                 .map(Into::into)
                                 .collect::<Vec<slint::SharedString>>(),
                         )),
-                        enabled: b.enabled,
+                        slot: slot as i32,
+                        enabled: config.enabled,
+                    })
+                    .collect::<Vec<_>>();
+                if config.enabled {
+                    for shortcut in &config.shortcuts {
+                        summary.push(BindingRow {
+                            text: shortcut.display().into(),
+                            keys: ModelRc::new(VecModel::from(
+                                shortcut
+                                    .key_labels()
+                                    .into_iter()
+                                    .map(Into::into)
+                                    .collect::<Vec<slint::SharedString>>(),
+                            )),
+                            enabled: true,
+                        });
+                    }
+                }
+                let row = FunctionBindingRow {
+                    id: definition.id.stable_id().into(),
+                    label: self.tr(definition.name_key).into(),
+                    activation: activation.into(),
+                    enabled: config.enabled,
+                    shortcuts: ModelRc::new(VecModel::from(shortcuts)),
+                };
+                if config.enabled {
+                    active_rows.push(row);
+                } else if !config.shortcuts.is_empty() {
+                    disabled_rows.push(row);
+                }
+            }
+            ui.set_function_cards(ModelRc::new(VecModel::from(
+                cards
+                    .into_iter()
+                    .map(|(_, items, category_key)| FunctionCard {
+                        title: self.tr(category_key).into(),
+                        items: ModelRc::new(VecModel::from(items)),
                     })
                     .collect::<Vec<_>>(),
             )));
+            ui.set_active_bindings(ModelRc::new(VecModel::from(active_rows)));
+            ui.set_disabled_bindings(ModelRc::new(VecModel::from(disabled_rows)));
+            ui.set_bindings(ModelRc::new(VecModel::from(summary)));
         }
         if self
             .previous_devices
@@ -981,11 +1069,18 @@ impl Controller {
                     .collect::<Vec<_>>(),
             )));
         }
-        ui.set_capture_index(
+        ui.set_capture_function(
             self.capture
                 .map(|target| match target {
-                    CaptureTarget::Existing(i) => i as i32,
-                    CaptureTarget::New => -2,
+                    CaptureTarget::Function { id, .. } => id.stable_id(),
+                })
+                .unwrap_or("")
+                .into(),
+        );
+        ui.set_capture_slot(
+            self.capture
+                .map(|target| match target {
+                    CaptureTarget::Function { slot, .. } => slot as i32,
                 })
                 .unwrap_or(-1),
         );
@@ -997,16 +1092,6 @@ impl Controller {
             self.runtime.capture_preview.clone().into()
         });
         ui.set_capture_error(self.capture_error.clone().into());
-        let capture_keys = self.runtime.capture_key_labels();
-        if capture_keys != self.previous_capture_keys {
-            self.previous_capture_keys.clone_from(&capture_keys);
-            ui.set_capture_keys(ModelRc::new(VecModel::from(
-                capture_keys
-                    .into_iter()
-                    .map(Into::into)
-                    .collect::<Vec<slint::SharedString>>(),
-            )));
-        }
         if self.previous_test != self.runtime.test {
             self.previous_test = self.runtime.test.clone();
             let message = match &self.runtime.test {

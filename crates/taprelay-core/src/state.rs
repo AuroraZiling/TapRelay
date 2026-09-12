@@ -178,6 +178,12 @@ pub struct Snapshot {
     pub selected: Option<String>,
     pub target_status: Option<Target>,
     pub ready: bool,
+    /// The three report subscriptions are tracked independently. `ready`
+    /// remains the media/Consumer readiness used by the diagnostics flow.
+    pub consumer_ready: bool,
+    pub keyboard_ready: bool,
+    pub mouse_ready: bool,
+    pub passthrough_ready: bool,
     pub hid_suspended: bool,
     pub generation: u64,
     pub input: bool,

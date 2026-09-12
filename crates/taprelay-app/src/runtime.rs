@@ -1,4 +1,7 @@
-//! Independent input and transport lifetimes. Configuration and navigation do not gate either.
+//! Runtime coordination around the platform input router and transport
+//! adapters. The Windows input thread owns the single router instance; this
+//! module only applies its parsed outputs to transport and UI state.
+
 use crate::{
     config::Config,
     feedback::TestStatus,
@@ -7,9 +10,11 @@ use crate::{
 use anyhow::{Context, Result};
 use std::time::Instant;
 use taprelay_core::{
-    binding::BindingIndex,
-    command::{COMMAND_TTL, MediaCommand, QueuedCommand},
-    input::{InputCode, InputEvent, InputState, Recorder, Trigger},
+    command::{COMMAND_TTL, CommandPhase, MediaCommand, QueuedCommand, QueuedReport},
+    function::{FunctionAction, FunctionId, Shortcut, complete_configs},
+    hid::{self, ConsumerState, KeyboardState, MouseReport, ReportKind, split_relative},
+    input::{InputCode, InputEvent, InputState, Recorder},
+    input_router::{PhysicalInput, RouteResult, RoutedInput, RoutedOutput, RouterReason},
     state::Snapshot,
 };
 use tokio::sync::{mpsc, oneshot};
@@ -20,16 +25,18 @@ enum CapturePhase {
     WaitingForRelease,
     Recording,
 }
+
 struct Receipt {
     created: Instant,
     test: Option<u64>,
+    action: MediaCommand,
     result: oneshot::Receiver<Result<(), String>>,
 }
 
 pub struct Runtime {
     pub config: Config,
     pub state: Snapshot,
-    pub learned: Option<Trigger>,
+    pub learned: Option<Shortcut>,
     pub matched: u64,
     pub delivered: u64,
     pub error: Option<String>,
@@ -37,39 +44,37 @@ pub struct Runtime {
     capture: CapturePhase,
     pub capture_preview: String,
     pub capture_cancelled: bool,
+    pub capture_invalid: bool,
     input: Option<Box<dyn InputSource>>,
     transport: Option<Box<dyn Transport>>,
-    events: mpsc::Receiver<InputEvent>,
-    sender: mpsc::Sender<InputEvent>,
-    gate: InputState,
+    events: mpsc::Receiver<RoutedInput>,
+    sender: mpsc::Sender<RoutedInput>,
+    capture_state: InputState,
     recorder: Recorder,
     pub window_keys: Vec<InputEvent>,
-    keyboard_from_window: Option<bool>,
     epoch: Instant,
     required_generation: u64,
     ui_input_until: Instant,
     receipts: Vec<Receipt>,
     pub test: TestStatus,
     next_test: u64,
-    bindings: BindingIndex,
     pub bindings_revision: u64,
+    remote_keyboard: KeyboardState,
+    remote_consumer: ConsumerState,
+    remote_mouse_buttons: u8,
+    last_transport_ready: bool,
 }
+
 impl Runtime {
     pub fn new(mut config: Config) -> Self {
-        // Legacy configs may contain disabled rows; every listed binding is now active.
-        for binding in &mut config.bindings {
-            binding.enabled = true;
-        }
-        // Device selection is intentionally session-only. Older config files may still
+        complete_configs(&mut config.functions);
+        // Device selection is session-only. Older config files may still
         // deserialize a device record, but it must never be restored or used.
         config.device = None;
-        let (sender, events) = mpsc::channel(256);
-        let bindings = BindingIndex::new(&config.bindings);
+        let (sender, events) = mpsc::channel(1024);
         Self {
             config,
-            state: Snapshot {
-                ..Default::default()
-            },
+            state: Snapshot::default(),
             learned: None,
             matched: 0,
             delivered: 0,
@@ -78,27 +83,32 @@ impl Runtime {
             capture: CapturePhase::Idle,
             capture_preview: String::new(),
             capture_cancelled: false,
+            capture_invalid: false,
             input: None,
             transport: None,
             events,
             sender,
-            gate: InputState::default(),
+            capture_state: InputState::default(),
             recorder: Recorder::default(),
             window_keys: vec![],
-            keyboard_from_window: None,
             epoch: Instant::now(),
             required_generation: 0,
             ui_input_until: Instant::now(),
             receipts: vec![],
             test: TestStatus::Idle,
             next_test: 0,
-            bindings,
             bindings_revision: 0,
+            remote_keyboard: KeyboardState::default(),
+            remote_consumer: ConsumerState::default(),
+            remote_mouse_buttons: 0,
+            last_transport_ready: false,
         }
     }
+
     pub fn start_bluetooth(&mut self) -> Result<()> {
         self.start_bluetooth_with(platform::transport)
     }
+
     fn start_bluetooth_with(
         &mut self,
         create: impl FnOnce() -> Result<Box<dyn Transport>>,
@@ -110,18 +120,23 @@ impl Runtime {
         self.state.target_status = None;
         self.state.last_error = None;
         self.error = None;
-        self.invalidate();
-        if self.transport.as_ref().is_some_and(|t| t.is_finished()) {
+        self.invalidate(RouterReason::SessionChanged);
+        if self
+            .transport
+            .as_ref()
+            .is_some_and(|transport| transport.is_finished())
+        {
             self.transport.take();
         }
-        if let Some(t) = &self.transport {
-            self.required_generation = t.restart()?;
+        if let Some(transport) = &self.transport {
+            self.required_generation = transport.restart()?;
             return Ok(());
         }
         self.required_generation = 0;
         self.transport = Some(create()?);
         Ok(())
     }
+
     pub fn pair(&mut self, id: String) -> Result<()> {
         if self.state.selected.as_ref() == Some(&id)
             && self.state.pairing_handoff == taprelay_core::devices::PairingHandoff::WaitingForOS
@@ -136,6 +151,7 @@ impl Runtime {
         self.state.pairing_handoff = taprelay_core::devices::PairingHandoff::WaitingForOS;
         Ok(())
     }
+
     pub fn disconnect(&mut self) -> Result<()> {
         let result = self
             .transport
@@ -145,27 +161,30 @@ impl Runtime {
         self.state.ready = false;
         self.state.selected = None;
         self.state.target_status = None;
-        self.invalidate();
+        self.invalidate(RouterReason::SessionChanged);
         self.required_generation = result?;
         Ok(())
     }
+
     pub fn bluetooth_settings(&self) -> Result<()> {
         self.transport
             .as_ref()
             .context("Bluetooth not started")?
             .bluetooth_settings()
     }
+
     pub fn refresh(&self) -> Result<()> {
         self.transport
             .as_ref()
             .context("Bluetooth not started")?
             .refresh()
     }
+
     pub fn choose(&mut self, id: String) -> Result<()> {
         if self.state.selected.as_ref() == Some(&id)
-            && self.state.target_status.as_ref().is_some_and(|t| {
+            && self.state.target_status.as_ref().is_some_and(|target| {
                 matches!(
-                    t.connection,
+                    target.connection,
                     taprelay_core::devices::Connection::Connecting
                         | taprelay_core::devices::Connection::AwaitingHostSubscription
                         | taprelay_core::devices::Connection::Synchronizing
@@ -183,70 +202,114 @@ impl Runtime {
         self.state.ready = false;
         self.state.selected = Some(id);
         self.state.target_status = None;
-        self.invalidate();
+        self.invalidate(RouterReason::SessionChanged);
         Ok(())
     }
+
     fn ensure_input(&mut self) -> Result<()> {
-        if self.input.as_ref().is_none_or(|i| i.is_finished()) {
+        if self.input.as_ref().is_none_or(|input| input.is_finished()) {
             self.input.take();
             while self.events.try_recv().is_ok() {}
-            self.gate = InputState::default();
+            self.capture_state = InputState::default();
             self.epoch = Instant::now();
             self.input = Some(platform::input(self.sender.clone())?);
         }
         Ok(())
     }
+
+    fn configure_input(&mut self) {
+        let result = self
+            .input
+            .as_ref()
+            .map_or_else(RouteResult::default, |input| {
+                input.configure(
+                    &self.config.functions,
+                    self.listening,
+                    self.recording(),
+                    self.state.passthrough_ready,
+                    self.bindings_revision,
+                )
+            });
+        self.apply_router_outputs(result);
+    }
+
     pub fn set_listening(&mut self, on: bool) -> Result<()> {
         if on {
             self.ensure_input()?;
         }
         self.listening = on;
+        self.configure_input();
         if !on && !self.recording() {
             self.input.take();
         }
         if !on {
-            self.invalidate();
+            self.invalidate(RouterReason::ListenerStopped);
         }
         Ok(())
     }
-    fn invalidate(&mut self) {
+
+    fn invalidate(&mut self, reason: RouterReason) {
+        let cleanup = self
+            .input
+            .as_ref()
+            .map_or_else(RouteResult::default, |input| input.terminate(reason));
+        self.apply_router_outputs(cleanup);
         self.epoch = Instant::now();
         if matches!(self.test, TestStatus::Pending(_)) {
             self.test = TestStatus::Failed(
                 "Test cancelled because the input or connection session changed".into(),
             );
         }
-        if let Some(t) = &self.transport {
-            t.invalidate();
+        if let Some(transport) = &self.transport {
+            transport.invalidate();
         }
     }
+
+    /// Finish the input session before the transport is dropped. This is a
+    /// best-effort release: the BLE worker still owns the native notification
+    /// boundary, so a physically disconnected receiver cannot be promised a
+    /// final packet.
+    pub fn shutdown(&mut self) {
+        self.invalidate(RouterReason::ApplicationExit);
+        self.listening = false;
+        self.capture = CapturePhase::Idle;
+        self.input.take();
+        self.transport.take();
+    }
+
     pub fn record(&mut self) -> Result<()> {
         self.ensure_input()?;
-        self.invalidate();
         self.capture = CapturePhase::WaitingForRelease;
+        self.configure_input();
         self.learned = None;
         self.capture_cancelled = false;
+        self.capture_invalid = false;
         self.capture_preview.clear();
-        self.recorder = Recorder::default();
+        self.recorder.reset();
+        self.capture_state = InputState::default();
         self.window_keys.clear();
-        self.keyboard_from_window = None;
         Ok(())
     }
+
     pub fn finish_recording(&mut self) {
         if !self.recording() {
             return;
         }
         self.capture = CapturePhase::Idle;
+        self.configure_input();
         self.window_keys.clear();
         self.learned = None;
         self.capture_preview.clear();
-        self.invalidate();
-        self.gate = InputState::default();
+        self.capture_invalid = false;
+        self.epoch = Instant::now();
+        self.capture_state = InputState::default();
+        self.recorder.reset();
         while self.events.try_recv().is_ok() {}
         if !self.listening {
             self.input.take();
         }
     }
+
     pub fn send(&mut self) -> Result<()> {
         anyhow::ensure!(
             !matches!(self.test, TestStatus::Pending(_)),
@@ -254,74 +317,220 @@ impl Runtime {
         );
         self.next_test += 1;
         let id = self.next_test;
-        match self.enqueue(Instant::now(), Some(id)) {
+        match self.enqueue_media(
+            MediaCommand::PlayPause,
+            CommandPhase::Press,
+            Instant::now(),
+            Some(id),
+        ) {
             Ok(()) => {
                 self.test = TestStatus::Pending(id);
                 Ok(())
             }
-            Err(e) => {
-                self.test = TestStatus::Failed(e.to_string());
-                Err(e)
+            Err(error) => {
+                self.test = TestStatus::Failed(error.to_string());
+                Err(error)
             }
         }
     }
+
     pub fn recording(&self) -> bool {
         self.capture != CapturePhase::Idle
     }
+
     pub fn capture_waiting(&self) -> bool {
         self.capture == CapturePhase::WaitingForRelease
     }
-    /// Call once after an accepted binding edit; options/navigation never rebuild matching.
+
     pub fn bindings_changed(&mut self) {
-        self.bindings = BindingIndex::new(&self.config.bindings);
         self.bindings_revision += 1;
+        self.configure_input();
     }
+
+    pub fn set_function_enabled(&mut self, id: FunctionId, enabled: bool) -> Result<()> {
+        let function = self
+            .config
+            .functions
+            .get_mut(&id)
+            .context("Unknown function")?;
+        if function.enabled == enabled {
+            return Ok(());
+        }
+        function.enabled = enabled;
+        self.bindings_changed();
+        Ok(())
+    }
+
+    pub fn unbind_function(&mut self, id: FunctionId) -> Result<()> {
+        let function = self
+            .config
+            .functions
+            .get_mut(&id)
+            .context("Unknown function")?;
+        function.shortcuts.clear();
+        self.bindings_changed();
+        Ok(())
+    }
+
+    pub fn replace_shortcut(
+        &mut self,
+        id: FunctionId,
+        slot: usize,
+        shortcut: Shortcut,
+    ) -> Result<()> {
+        anyhow::ensure!(slot < 2, "Shortcut slot out of range");
+        anyhow::ensure!(shortcut.valid(), "Invalid shortcut");
+        let mut candidate = self.config.functions.clone();
+        let function = candidate.get_mut(&id).context("Unknown function")?;
+        anyhow::ensure!(function.enabled, "Function is disabled");
+        if slot == function.shortcuts.len() {
+            anyhow::ensure!(
+                function.shortcuts.len() < 2,
+                "A function may have at most two shortcuts"
+            );
+            function.shortcuts.push(shortcut);
+        } else {
+            *function
+                .shortcuts
+                .get_mut(slot)
+                .context("Shortcut slot out of range")? = shortcut;
+        }
+        anyhow::ensure!(
+            taprelay_core::binding::valid(&candidate),
+            "Shortcut conflicts with another function"
+        );
+        self.config.functions = candidate;
+        self.bindings_changed();
+        Ok(())
+    }
+
+    pub fn shortcut_conflict(
+        &self,
+        id: FunctionId,
+        slot: usize,
+        shortcut: &Shortcut,
+    ) -> Option<FunctionId> {
+        self.config.functions.iter().find_map(|(&other, config)| {
+            config
+                .shortcuts
+                .iter()
+                .enumerate()
+                .any(|(other_slot, candidate)| {
+                    (other, other_slot) != (id, slot) && candidate == shortcut
+                })
+                .then_some(other)
+        })
+    }
+
+    pub fn remove_shortcut(&mut self, id: FunctionId, slot: usize) -> Result<()> {
+        let mut candidate = self.config.functions.clone();
+        let function = candidate.get_mut(&id).context("Unknown function")?;
+        anyhow::ensure!(
+            slot < function.shortcuts.len(),
+            "Shortcut slot out of range"
+        );
+        function.shortcuts.remove(slot);
+        self.config.functions = candidate;
+        self.bindings_changed();
+        Ok(())
+    }
+
     /// Native edges belonging to a GUI control must not also trigger a global shortcut.
     pub fn consume_ui_input(&mut self) {
         self.ui_input_until = Instant::now();
     }
-    pub fn capture_key_labels(&self) -> Vec<String> {
-        if self.recording() && !self.capture_waiting() {
-            self.gate.key_labels()
-        } else {
-            vec![]
-        }
-    }
-    fn send_at(&mut self, created: Instant) -> Result<()> {
-        self.enqueue(created, None)
-    }
-    fn enqueue(&mut self, created: Instant, test: Option<u64>) -> Result<()> {
+
+    fn enqueue_media(
+        &mut self,
+        action: MediaCommand,
+        phase: CommandPhase,
+        created: Instant,
+        test: Option<u64>,
+    ) -> Result<()> {
         anyhow::ensure!(self.state.ready, "Device is not ready");
         anyhow::ensure!(
-            created >= self.epoch && created.elapsed() <= COMMAND_TTL,
+            created >= self.epoch
+                && (phase == CommandPhase::Release || created.elapsed() <= COMMAND_TTL),
             "Input expired"
         );
-        let c = QueuedCommand {
-            action: MediaCommand::PlayPause,
-            target: self.state.selected.clone().context("No selected device")?,
-            generation: self.state.generation,
-            created,
+        let command = match phase {
+            CommandPhase::Press => QueuedCommand::press(
+                action,
+                self.state.selected.clone().context("No selected device")?,
+                self.state.generation,
+                created,
+            ),
+            CommandPhase::Release => QueuedCommand::release(
+                action,
+                self.state.selected.clone().context("No selected device")?,
+                self.state.generation,
+                created,
+            ),
         };
         let receipt = self
             .transport
             .as_ref()
             .context("Bluetooth not started")?
-            .send(c)?;
+            .send(command)?;
         self.receipts.push(Receipt {
             created,
             test,
+            action,
             result: receipt,
         });
         Ok(())
     }
+
+    fn enqueue_report(
+        &mut self,
+        kind: ReportKind,
+        bytes: Vec<u8>,
+        created: Instant,
+        must_deliver: bool,
+    ) -> Result<()> {
+        let ready = match kind {
+            ReportKind::Consumer => self.state.ready,
+            ReportKind::Keyboard | ReportKind::Mouse => self.state.passthrough_ready,
+        };
+        anyhow::ensure!(ready, "HID report channel is not ready");
+        let report = QueuedReport {
+            kind,
+            bytes,
+            target: self.state.selected.clone().context("No selected device")?,
+            generation: self.state.generation,
+            created,
+            must_deliver,
+        };
+        anyhow::ensure!(
+            report.valid(
+                self.state.selected.as_deref(),
+                self.state.generation,
+                ready,
+                Instant::now(),
+                self.epoch,
+            ),
+            "HID input report expired"
+        );
+        self.transport
+            .as_ref()
+            .context("Bluetooth not started")?
+            .send_report(report)
+    }
+
     pub fn tick(&mut self) {
-        let stopped = self.transport.as_ref().is_some_and(|t| t.is_finished());
-        if let Some(s) = self.transport.as_mut().and_then(|t| t.snapshot())
+        let stopped = self
+            .transport
+            .as_ref()
+            .is_some_and(|transport| transport.is_finished());
+        if let Some(snapshot) = self
+            .transport
+            .as_mut()
+            .and_then(|transport| transport.snapshot())
             && (stopped
-                || (s.generation >= self.required_generation
-                    && (s.selected == self.state.selected || s.selected.is_none())))
+                || (snapshot.generation >= self.required_generation
+                    && (snapshot.selected == self.state.selected || snapshot.selected.is_none())))
         {
-            self.state = s;
+            self.state = snapshot;
             if self.state.selected.is_none() {
                 self.state.ready = false;
                 self.state.target_status = None;
@@ -335,351 +544,439 @@ impl Runtime {
                 .last_error
                 .get_or_insert_with(|| "Bluetooth worker stopped; retry to restart".into());
         }
-        self.state.input = self.input.as_ref().is_some_and(|i| !i.is_finished());
+
+        let transport_ready = self.state.ready;
+        if self.last_transport_ready && !transport_ready {
+            self.invalidate(RouterReason::TransportLost);
+        }
+        self.last_transport_ready = transport_ready;
+
+        self.state.input = self
+            .input
+            .as_ref()
+            .is_some_and(|input| !input.is_finished());
+        self.configure_input();
         if (self.listening || self.recording()) && !self.state.input {
             self.error = Some(
                 self.input
                     .as_ref()
-                    .and_then(|i| i.failure())
+                    .and_then(|input| input.failure())
                     .unwrap_or_else(|| "Input listener stopped; start listening to retry".into()),
             );
             self.listening = false;
             self.capture_cancelled = true;
+            self.invalidate(RouterReason::ListenerStopped);
             self.finish_recording();
         }
-        if self.recording() && self.capture_waiting() {
-            // Native snapshot covers keys held before the hook was created and the activating click.
-            if !platform::desktop::any_input_held() {
-                while self.events.try_recv().is_ok() {}
-                self.gate = InputState::default();
-                self.capture = CapturePhase::Recording;
-                self.epoch = Instant::now();
-            }
+
+        if self.recording() && self.capture_waiting() && !platform::desktop::any_input_held() {
+            while self.events.try_recv().is_ok() {}
+            self.capture_state = InputState::default();
+            self.capture = CapturePhase::Recording;
+            self.epoch = Instant::now();
         }
+
         let mut pending = Vec::new();
-        for _ in 0..256 {
-            let Ok(event) = self.events.try_recv() else {
+        for _ in 0..1024 {
+            let Ok(input) = self.events.try_recv() else {
                 break;
             };
-            pending.push((event, false));
-        }
-        pending.extend(self.window_keys.drain(..).map(|event| (event, true)));
-        pending.sort_by_key(|(event, _)| event.captured);
-        for (event, from_window) in pending {
-            if from_window && !self.recording() {
-                continue;
-            }
-            if event.captured < self.epoch {
-                continue;
-            }
-            if self.recording() && matches!(event.code, InputCode::Key(_)) {
-                if self.capture_waiting() {
-                    continue;
-                }
-                // Choose one source for the entire gesture: native hooks normally
-                // arrive first, while the focused field works if the hook is silent.
-                let source = self.keyboard_from_window.get_or_insert(from_window);
-                if *source != from_window {
-                    continue;
-                }
-            }
-            let release_match = !event.down && matches!(event.code, InputCode::Mouse(_));
-            let matched = if release_match {
-                self.best_match(event)
-            } else {
-                None
-            };
-            if event.captured < self.epoch || !self.gate.update(event) {
-                continue;
-            }
-            if !self.recording() && event.captured <= self.ui_input_until {
-                continue;
-            }
-            if self.recording() {
-                if self.capture_waiting() {
-                    continue;
-                }
-                if event.code == InputCode::Key(0x1b) && event.down {
-                    self.capture_cancelled = true;
-                    continue;
-                }
-                self.capture_preview = self.gate.description();
-                if self.learned.is_none() {
-                    self.learned = self.recorder.observe(&self.gate, event);
-                }
-                continue;
-            }
-            let matched = if event.down && matches!(event.code, InputCode::Key(_)) {
-                self.best_match(event)
-            } else {
-                matched
-            };
-            if self.listening
-                && let Some(matched) = matched
+            if let Some(previous) = pending.last_mut()
+                && merge_motion(previous, &input)
             {
-                self.matched += 1;
-                tracing::info!("Input recognized: {}", self.config.bindings[matched].tap);
-                // Disconnected input is observed but never queued for later delivery.
-                if self.state.ready
-                    && let Err(e) = self.send_at(event.captured)
-                {
-                    self.error = Some(e.to_string());
+                continue;
+            }
+            pending.push(input);
+        }
+        let window_keys = std::mem::take(&mut self.window_keys);
+        if self.recording() {
+            pending.extend(window_keys.into_iter().map(|event| RoutedInput::Edge {
+                event,
+                result: RouteResult::default(),
+            }));
+        }
+        for input in pending {
+            match input {
+                RoutedInput::Motion { event, result } => {
+                    if !self.recording() && event.captured >= self.epoch {
+                        self.apply_router_outputs(result);
+                    }
+                }
+                RoutedInput::Edge { event, result } => {
+                    if event.captured < self.epoch {
+                        continue;
+                    }
+                    if self.recording() {
+                        if self.capture_waiting() {
+                            continue;
+                        }
+                        if event.code == InputCode::Key(0x1b) && event.down {
+                            self.capture_cancelled = true;
+                            continue;
+                        }
+                        if !self.capture_state.update(event) {
+                            continue;
+                        }
+                        self.capture_preview = self.capture_state.description();
+                        if self.learned.is_none() {
+                            self.learned = self.recorder.observe(&self.capture_state, event);
+                            if self.recorder.take_invalid() {
+                                self.capture_invalid = true;
+                            }
+                        }
+                        continue;
+                    }
+                    if event.captured > self.ui_input_until {
+                        self.apply_router_outputs(result);
+                    }
                 }
             }
         }
-        let mut i = 0;
-        while i < self.receipts.len() {
-            let r = match self.receipts[i].result.try_recv() {
-                Ok(r) => Some(r),
+
+        let mut index = 0;
+        while index < self.receipts.len() {
+            let result = match self.receipts[index].result.try_recv() {
+                Ok(result) => Some(result),
                 Err(oneshot::error::TryRecvError::Closed) => {
                     Some(Err("Transport stopped before delivery".into()))
                 }
-                Err(_) => None,
+                Err(oneshot::error::TryRecvError::Empty) => None,
             };
-            if let Some(r) = r {
-                let receipt = self.receipts.swap_remove(i);
+            if let Some(result) = result {
+                let receipt = self.receipts.swap_remove(index);
                 if let Some(id) = receipt.test
                     && self.test == TestStatus::Pending(id)
                 {
-                    self.test = match &r {
+                    self.test = match &result {
                         Ok(()) => TestStatus::Succeeded,
-                        Err(e) => TestStatus::Failed(e.clone()),
+                        Err(error) => TestStatus::Failed(error.clone()),
                     };
                 }
                 if receipt.created < self.epoch {
                     continue;
                 }
-                match r {
+                match result {
                     Ok(()) => {
                         self.delivered += 1;
                         tracing::info!(
-                            "Windows accepted Play/Pause notifications; receiver playback is not acknowledged"
+                            action = ?receipt.action,
+                            "Windows accepted HID notification; receiver execution is not acknowledged"
                         );
                     }
-                    Err(e) => self.error = Some(e),
+                    Err(error) => self.error = Some(error),
                 }
             } else {
-                i += 1;
+                index += 1;
             }
         }
     }
-    fn best_match(&self, event: InputEvent) -> Option<usize> {
-        self.bindings.best_match(event.code, &self.gate)
+
+    fn apply_router_outputs(&mut self, result: taprelay_core::input_router::RouteResult) {
+        if result.revision != self.bindings_revision && !result.outputs.is_empty() {
+            tracing::debug!(
+                result_revision = result.revision,
+                current_revision = self.bindings_revision,
+                "Dropping input result from an older configuration revision"
+            );
+            return;
+        }
+        for output in result.outputs {
+            match output {
+                RoutedOutput::Feedback { binding, action } => {
+                    self.matched += 1;
+                    tracing::info!(?binding, ?action, "Input recognized");
+                }
+                RoutedOutput::Function {
+                    action: FunctionAction::Media(action),
+                    activation: _,
+                    down,
+                    created,
+                    ..
+                } => {
+                    if let Err(error) = self.enqueue_media(
+                        action,
+                        if down {
+                            CommandPhase::Press
+                        } else {
+                            CommandPhase::Release
+                        },
+                        created,
+                        None,
+                    ) {
+                        // Recognition remains real even while the receiver is
+                        // unavailable; no command is queued for later replay.
+                        if self.state.ready {
+                            self.error = Some(error.to_string());
+                        }
+                    }
+                }
+                RoutedOutput::Function { .. } => {}
+                RoutedOutput::PassthroughChanged(enabled) => {
+                    tracing::info!(enabled, "Passthrough route changed");
+                }
+                RoutedOutput::ResetRemote => {
+                    self.remote_keyboard.clear();
+                    self.remote_consumer.clear();
+                    self.remote_mouse_buttons = 0;
+                    if self.state.ready {
+                        let now = Instant::now();
+                        if let Err(error) = self.enqueue_report(
+                            ReportKind::Consumer,
+                            self.remote_consumer.report(),
+                            now,
+                            true,
+                        ) {
+                            self.error = Some(error.to_string());
+                        }
+                    }
+                    if self.state.passthrough_ready {
+                        let now = Instant::now();
+                        if let Err(error) = self.enqueue_report(
+                            ReportKind::Keyboard,
+                            vec![0; hid::KEYBOARD_REPORT_LENGTH],
+                            now,
+                            true,
+                        ) {
+                            self.error = Some(error.to_string());
+                        }
+                        if let Err(error) = self.enqueue_report(
+                            ReportKind::Mouse,
+                            MouseReport::neutral().encode().to_vec(),
+                            now,
+                            true,
+                        ) {
+                            self.error = Some(error.to_string());
+                        }
+                    }
+                }
+                RoutedOutput::Remote(input) => {
+                    if let Err(error) = self.send_remote(input) {
+                        self.error = Some(error.to_string());
+                        self.invalidate(RouterReason::TransportLost);
+                    }
+                }
+                RoutedOutput::Replay(input) => {
+                    if let Some(source) = &self.input
+                        && let Err(error) = source.replay(input)
+                    {
+                        self.error = Some(error.to_string());
+                    }
+                }
+                RoutedOutput::Local(_) => {}
+            }
+        }
+    }
+
+    fn send_remote(&mut self, input: PhysicalInput) -> Result<()> {
+        let now = Instant::now();
+        match input {
+            PhysicalInput::Edge { code, down } => match code {
+                InputCode::Key(key) => {
+                    if let Some(usage) = hid::consumer_usage(key) {
+                        if self.state.ready {
+                            let owner = 0x8000_0000u64 | u64::from(key);
+                            if down {
+                                self.remote_consumer.press_usage(owner, usage);
+                            } else {
+                                self.remote_consumer.release_usage(owner, usage);
+                            }
+                            self.enqueue_report(
+                                ReportKind::Consumer,
+                                self.remote_consumer.report(),
+                                now,
+                                !down,
+                            )?;
+                        }
+                        return Ok(());
+                    }
+                    if let Some(bit) = hid::keyboard_modifier_bit(key) {
+                        self.remote_keyboard.set_modifier(bit, down);
+                    } else if let Some(usage) = hid::keyboard_usage(key) {
+                        self.remote_keyboard.set_key(usage, down).map_err(|_| {
+                            anyhow::anyhow!("More than six keyboard keys are held; input released")
+                        })?;
+                    }
+                    self.enqueue_report(
+                        ReportKind::Keyboard,
+                        self.remote_keyboard
+                            .report()
+                            .map_err(|_| anyhow::anyhow!("Keyboard rollover overflow"))?
+                            .to_vec(),
+                        now,
+                        !down,
+                    )?;
+                }
+                InputCode::Mouse(button) => {
+                    let bit = 1 << button as u8;
+                    if down {
+                        self.remote_mouse_buttons |= bit;
+                    } else {
+                        self.remote_mouse_buttons &= !bit;
+                    }
+                    self.enqueue_report(
+                        ReportKind::Mouse,
+                        MouseReport {
+                            buttons: self.remote_mouse_buttons,
+                            ..MouseReport::neutral()
+                        }
+                        .encode()
+                        .to_vec(),
+                        now,
+                        !down,
+                    )?;
+                }
+            },
+            PhysicalInput::Motion { dx, dy } => {
+                let xs: Vec<_> = split_relative(dx).collect();
+                let ys: Vec<_> = split_relative(dy).collect();
+                let count = xs.len().max(ys.len());
+                for index in 0..count {
+                    self.enqueue_report(
+                        ReportKind::Mouse,
+                        MouseReport {
+                            buttons: self.remote_mouse_buttons,
+                            x: xs.get(index).copied().unwrap_or_default(),
+                            y: ys.get(index).copied().unwrap_or_default(),
+                            ..MouseReport::neutral()
+                        }
+                        .encode()
+                        .to_vec(),
+                        now,
+                        false,
+                    )?;
+                }
+            }
+            PhysicalInput::Wheel {
+                vertical,
+                horizontal,
+            } => {
+                let verticals: Vec<_> = split_wheel(vertical).collect();
+                let horizontals: Vec<_> = split_wheel(horizontal).collect();
+                let count = verticals.len().max(horizontals.len());
+                for index in 0..count {
+                    self.enqueue_report(
+                        ReportKind::Mouse,
+                        MouseReport {
+                            buttons: self.remote_mouse_buttons,
+                            wheel: verticals.get(index).copied().unwrap_or_default(),
+                            horizontal_wheel: horizontals.get(index).copied().unwrap_or_default(),
+                            ..MouseReport::neutral()
+                        }
+                        .encode()
+                        .to_vec(),
+                        now,
+                        false,
+                    )?;
+                }
+            }
+        }
+        Ok(())
     }
 }
+
+impl Drop for Runtime {
+    fn drop(&mut self) {
+        self.invalidate(RouterReason::ApplicationExit);
+    }
+}
+
+/// Collapse only adjacent motion reports with the same route and report kind.
+/// Keyboard/button edges, route changes, and pending-modifier replays remain
+/// hard ordering boundaries. The accumulator is deliberately bounded by the
+/// per-tick dispatch drain rather than growing with pointer rate.
+fn merge_motion(previous: &mut RoutedInput, next: &RoutedInput) -> bool {
+    let RoutedInput::Motion {
+        event: previous_event,
+        result: previous_result,
+    } = previous
+    else {
+        return false;
+    };
+    let RoutedInput::Motion {
+        event: next_event,
+        result: next_result,
+    } = next
+    else {
+        return false;
+    };
+    if previous_result.consume != next_result.consume
+        || previous_result.outputs.len() != 1
+        || next_result.outputs.len() != 1
+    {
+        return false;
+    }
+    let (route, previous_input, next_input) =
+        match (&previous_result.outputs[0], &next_result.outputs[0]) {
+            (RoutedOutput::Local(previous), RoutedOutput::Local(next)) => (0u8, previous, next),
+            (RoutedOutput::Remote(previous), RoutedOutput::Remote(next)) => (1u8, previous, next),
+            _ => return false,
+        };
+    let Some(input) = add_motion(*previous_input, *next_input) else {
+        return false;
+    };
+    previous_event.input = input;
+    previous_event.captured = previous_event.captured.max(next_event.captured);
+    previous_result.outputs[0] = if route == 0 {
+        RoutedOutput::Local(input)
+    } else {
+        RoutedOutput::Remote(input)
+    };
+    true
+}
+
+fn add_motion(left: PhysicalInput, right: PhysicalInput) -> Option<PhysicalInput> {
+    match (left, right) {
+        (PhysicalInput::Motion { dx, dy }, PhysicalInput::Motion { dx: rx, dy: ry }) => {
+            Some(PhysicalInput::Motion {
+                dx: dx.checked_add(rx)?,
+                dy: dy.checked_add(ry)?,
+            })
+        }
+        (
+            PhysicalInput::Wheel {
+                vertical,
+                horizontal,
+            },
+            PhysicalInput::Wheel {
+                vertical: rv,
+                horizontal: rh,
+            },
+        ) => Some(PhysicalInput::Wheel {
+            vertical: vertical.checked_add(rv)?,
+            horizontal: horizontal.checked_add(rh)?,
+        }),
+        _ => None,
+    }
+}
+
+fn split_wheel(mut value: i32) -> impl Iterator<Item = i8> {
+    std::iter::from_fn(move || {
+        if value == 0 {
+            return None;
+        }
+        let part = value.clamp(i8::MIN as i32, i8::MAX as i32) as i8;
+        value -= i32::from(part);
+        Some(part)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use taprelay_core::{binding::Binding, input::MouseButton};
-    struct FakeTransport;
+    use crate::config::Config;
+    use taprelay_core::{
+        function::{FunctionConfig, FunctionId, ModifierSet, Shortcut},
+        input::MouseButton,
+    };
+
     struct FakeInput;
-    type Reply = oneshot::Sender<Result<(), String>>;
-    struct DeferredTransport {
-        replies: std::rc::Rc<std::cell::RefCell<Vec<Reply>>>,
-        stopped: bool,
-    }
-    impl Transport for DeferredTransport {
-        fn disconnect(&self) -> Result<u64> {
-            Ok(2)
-        }
-        fn snapshot(&mut self) -> Option<Snapshot> {
-            None
-        }
-        fn is_finished(&self) -> bool {
-            self.stopped
-        }
-        fn refresh(&self) -> Result<()> {
-            Ok(())
-        }
-        fn restart(&self) -> Result<u64> {
-            anyhow::ensure!(!self.stopped, "dead worker was reused");
-            Ok(1)
-        }
-        fn select(&self, _: String) -> Result<u64> {
-            Ok(1)
-        }
-        fn invalidate(&self) {}
-        fn send(&self, _: QueuedCommand) -> Result<oneshot::Receiver<Result<(), String>>> {
-            let (tx, rx) = oneshot::channel();
-            self.replies.borrow_mut().push(tx);
-            Ok(rx)
-        }
-    }
-    #[test]
-    fn receiver_selection_is_session_only_and_legacy_config_is_not_restored() {
-        let mut config = Config::default();
-        config.device = Some(crate::config::Device {
-            id: "old-endpoint".into(),
-            name: "Old tablet".into(),
-            identity: vec![],
-            aliases: vec![],
-            legacy_verified: false,
-        });
-        let mut runtime = Runtime::new(config);
-        assert!(runtime.config.device.is_none());
-        assert!(runtime.state.selected.is_none());
-        runtime.transport = Some(Box::new(DeferredTransport {
-            replies: Default::default(),
-            stopped: false,
-        }));
-        runtime.choose("candidate".into()).unwrap();
-        assert_eq!(runtime.state.selected.as_deref(), Some("candidate"));
-        runtime.disconnect().unwrap();
-        assert!(runtime.state.selected.is_none());
-        assert!(!runtime.state.ready);
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("config.json");
-        runtime.config.save(&path).unwrap();
-        assert!(!std::fs::read_to_string(path).unwrap().contains("device"));
-    }
-    #[test]
-    fn manual_failure_is_terminal_and_automatic_receipts_do_not_override_it() {
-        let replies = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
-        let mut r = Runtime::new(Config::default());
-        r.transport = Some(Box::new(DeferredTransport {
-            replies: replies.clone(),
-            stopped: false,
-        }));
-        r.state.ready = true;
-        r.state.selected = Some("receiver".into());
-        r.send().unwrap();
-        r.send_at(Instant::now()).unwrap();
-        replies.borrow_mut().remove(1).send(Ok(())).unwrap();
-        r.tick();
-        assert!(matches!(r.test, TestStatus::Pending(_)));
-        replies
-            .borrow_mut()
-            .remove(0)
-            .send(Err("Receiver disconnected".into()))
-            .unwrap();
-        r.tick();
-        assert_eq!(r.test, TestStatus::Failed("Receiver disconnected".into()));
-        r.send_at(Instant::now()).unwrap();
-        replies.borrow_mut().remove(0).send(Ok(())).unwrap();
-        r.tick();
-        assert_eq!(r.test, TestStatus::Failed("Receiver disconnected".into()));
-        r.send().unwrap();
-        replies.borrow_mut().clear();
-        r.tick();
-        assert_eq!(
-            r.test,
-            TestStatus::Failed("Transport stopped before delivery".into())
-        );
-    }
-    #[test]
-    fn retry_recreates_dead_worker_and_resets_generation_floor() {
-        let mut r = Runtime::new(Config::default());
-        r.transport = Some(Box::new(DeferredTransport {
-            replies: Default::default(),
-            stopped: true,
-        }));
-        r.required_generation = 99;
-        let mut recreated = false;
-        r.start_bluetooth_with(|| {
-            recreated = true;
-            Ok(Box::new(FakeTransport))
-        })
-        .unwrap();
-        assert!(recreated);
-        assert_eq!(r.required_generation, 0);
-        assert!(!r.transport.as_ref().unwrap().is_finished());
-    }
-    #[test]
-    fn changing_device_cancels_test_even_if_old_receipt_later_succeeds() {
-        let replies = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
-        let mut r = Runtime::new(Config::default());
-        r.transport = Some(Box::new(DeferredTransport {
-            replies: replies.clone(),
-            stopped: false,
-        }));
-        r.state.ready = true;
-        r.state.selected = Some("old".into());
-        r.send().unwrap();
-        r.choose("new".into()).unwrap();
-        replies.borrow_mut().remove(0).send(Ok(())).unwrap();
-        r.tick();
-        assert!(matches!(r.test, TestStatus::Failed(_)));
-        assert_eq!(r.delivered, 0);
-    }
     impl InputSource for FakeInput {
         fn is_finished(&self) -> bool {
             false
         }
     }
-    #[test]
-    fn keyboard_recording_previews_and_confirms_on_release() {
-        for keys in [vec![0x77], vec![0xa2, 0x4b]] {
-            let mut r = Runtime::new(Config::default());
-            r.input = Some(Box::new(FakeInput));
-            r.record().unwrap();
-            r.capture = CapturePhase::Recording;
-            for &key in &keys {
-                r.sender
-                    .try_send(InputEvent {
-                        code: InputCode::Key(key),
-                        down: true,
-                        captured: Instant::now(),
-                    })
-                    .unwrap();
-                r.tick();
-                assert!(!r.capture_preview.is_empty());
-                assert!(r.learned.is_none());
-            }
-            for &key in keys.iter().rev() {
-                r.sender
-                    .try_send(InputEvent {
-                        code: InputCode::Key(key),
-                        down: false,
-                        captured: Instant::now(),
-                    })
-                    .unwrap();
-                r.tick();
-            }
-            let mut expected = keys;
-            expected.sort_unstable();
-            assert_eq!(r.learned, Some(Trigger::Keyboard { keys: expected }));
-        }
-    }
-    #[test]
-    fn focused_keyboard_records_when_hook_is_silent_and_deduplicates_when_present() {
-        for native in [false, true] {
-            let mut r = Runtime::new(Config::default());
-            r.input = Some(Box::new(FakeInput));
-            r.record().unwrap();
-            r.capture = CapturePhase::Recording;
-            for (key, down) in [(0xa2, true), (0x4b, true), (0x4b, false), (0xa2, false)] {
-                if native {
-                    r.sender
-                        .try_send(InputEvent {
-                            code: InputCode::Key(key),
-                            down,
-                            captured: Instant::now(),
-                        })
-                        .unwrap();
-                }
-                r.window_keys.push(InputEvent {
-                    code: InputCode::Key(key),
-                    down,
-                    captured: Instant::now(),
-                });
-                r.tick();
-                if down {
-                    assert!(!r.capture_preview.is_empty());
-                    assert!(r.learned.is_none());
-                }
-            }
-            assert_eq!(
-                r.learned,
-                Some(Trigger::Keyboard {
-                    keys: vec![0x4b, 0xa2]
-                })
-            );
-            assert_eq!(r.keyboard_from_window, Some(!native));
-            r.finish_recording();
-            assert!(r.learned.is_none());
-            assert!(r.window_keys.is_empty());
-        }
-    }
+
+    struct FakeTransport;
     impl Transport for FakeTransport {
         fn snapshot(&mut self) -> Option<Snapshot> {
             None
@@ -700,203 +997,66 @@ mod tests {
             Ok(rx)
         }
     }
-    #[test]
-    fn manual_test_needs_neither_bindings_nor_listener() {
-        let mut r = Runtime::new(Config::default());
-        r.transport = Some(Box::new(FakeTransport));
-        r.state.ready = true;
-        r.state.selected = Some("receiver".into());
-        r.send().unwrap();
-        r.tick();
-        assert_eq!(r.delivered, 1);
-        assert!(!r.listening);
-        assert!(r.config.bindings.is_empty());
-    }
-    #[test]
-    fn gui_clicks_do_not_send_a_second_media_command() {
-        let mut r = Runtime::new(Config::default());
-        r.input = Some(Box::new(FakeInput));
-        r.listening = true;
-        r.config.bindings.push(Binding {
-            tap: Trigger::Mouse {
-                button: MouseButton::Left,
-            },
-            relay: MediaCommand::PlayPause,
-            enabled: true,
-        });
-        for down in [true, false] {
-            r.sender
-                .try_send(InputEvent {
-                    code: InputCode::Mouse(MouseButton::Left),
-                    down,
-                    captured: Instant::now(),
-                })
-                .unwrap();
-        }
-        r.bindings_changed();
-        r.consume_ui_input();
-        r.tick();
-        assert_eq!(r.matched, 0);
-        for down in [true, false] {
-            r.sender
-                .try_send(InputEvent {
-                    code: InputCode::Mouse(MouseButton::Left),
-                    down,
-                    captured: Instant::now(),
-                })
-                .unwrap();
-        }
-        r.tick();
-        assert_eq!(r.matched, 1);
-    }
-    #[test]
-    fn backend_clearing_selection_stops_waiting_for_the_old_receiver() {
-        struct DisconnectingTransport;
-        impl Transport for DisconnectingTransport {
-            fn snapshot(&mut self) -> Option<Snapshot> {
-                Some(Snapshot {
-                    generation: 1,
-                    selected: None,
-                    ready: false,
-                    ..Default::default()
-                })
-            }
-            fn refresh(&self) -> Result<()> {
-                Ok(())
-            }
-            fn restart(&self) -> Result<u64> {
-                Ok(1)
-            }
-            fn select(&self, _: String) -> Result<u64> {
-                Ok(1)
-            }
-            fn invalidate(&self) {}
-            fn send(&self, _: QueuedCommand) -> Result<oneshot::Receiver<Result<(), String>>> {
-                unreachable!()
-            }
-        }
 
-        let mut runtime = Runtime::new(Config::default());
-        runtime.transport = Some(Box::new(DisconnectingTransport));
-        runtime.choose("ipad".into()).unwrap();
-        assert_eq!(runtime.state.selected.as_deref(), Some("ipad"));
-        runtime.tick();
+    #[test]
+    fn new_runtime_keeps_functions_disabled_and_does_not_restore_device() {
+        let mut config = Config::default();
+        config.device = Some(crate::config::Device {
+            id: "old-endpoint".into(),
+            name: "Old tablet".into(),
+            identity: vec![],
+            aliases: vec![],
+            legacy_verified: false,
+        });
+        let runtime = Runtime::new(config);
+        assert!(runtime.config.device.is_none());
+        assert!(
+            runtime
+                .config
+                .functions
+                .values()
+                .all(|function| !function.enabled)
+        );
         assert!(runtime.state.selected.is_none());
-        assert!(runtime.state.target_status.is_none());
-        assert!(!runtime.state.ready);
     }
+
     #[test]
-    fn stale_snapshot_cannot_restore_previous_receiver_after_selection() {
-        struct StaleTransport;
-        impl Transport for StaleTransport {
-            fn disconnect(&self) -> Result<u64> {
-                Ok(2)
-            }
-            fn snapshot(&mut self) -> Option<Snapshot> {
-                Some(Snapshot {
-                    ready: true,
-                    selected: Some("old".into()),
-                    generation: 99,
-                    ..Default::default()
-                })
-            }
-            fn refresh(&self) -> Result<()> {
-                Ok(())
-            }
-            fn restart(&self) -> Result<u64> {
-                Ok(1)
-            }
-            fn select(&self, _: String) -> Result<u64> {
-                Ok(1)
-            }
-            fn invalidate(&self) {}
-            fn send(&self, _: QueuedCommand) -> Result<oneshot::Receiver<Result<(), String>>> {
-                unreachable!()
-            }
-        }
-        let mut r = Runtime::new(Config::default());
-        r.transport = Some(Box::new(StaleTransport));
-        r.choose("new".into()).unwrap();
-        r.tick();
-        assert_eq!(r.state.selected.as_deref(), Some("new"));
-        assert!(!r.state.ready);
-        r.disconnect().unwrap();
-        r.tick();
-        assert!(r.state.selected.is_none());
-        assert!(!r.state.ready);
+    fn explicit_test_needs_no_bindings_or_listener() {
+        let mut runtime = Runtime::new(Config::default());
+        runtime.transport = Some(Box::new(FakeTransport));
+        runtime.state.ready = true;
+        runtime.state.selected = Some("receiver".into());
+        runtime.send().unwrap();
+        runtime.tick();
+        assert_eq!(runtime.delivered, 1);
+        assert!(!runtime.listening);
     }
+
     #[test]
-    fn changing_receiver_and_stopping_input_preserve_transport() {
-        let mut r = Runtime::new(Config::default());
-        r.transport = Some(Box::new(FakeTransport));
-        r.listening = true;
-        r.choose("next".into()).unwrap();
-        assert!(r.listening);
-        assert!(!r.state.ready);
-        r.set_listening(false).unwrap();
-        assert!(r.transport.is_some());
-        assert!(!r.listening);
-    }
-    #[test]
-    fn overlapping_mouse_bindings_fire_once_and_disabled_bindings_do_not_fire() {
-        let mut r = Runtime::new(Config::default());
-        r.listening = true;
-        struct Fake;
-        impl InputSource for Fake {
-            fn is_finished(&self) -> bool {
-                false
-            }
-        }
-        r.input = Some(Box::new(Fake));
-        r.config.bindings = vec![
-            Binding {
-                tap: Trigger::Mouse {
-                    button: MouseButton::Side1,
-                },
-                relay: MediaCommand::PlayPause,
-                enabled: true,
+    fn disabled_function_shortcut_can_be_saved_but_is_not_recognized() {
+        let mut runtime = Runtime::new(Config::default());
+        runtime.config.functions.insert(
+            FunctionId::MediaNext,
+            FunctionConfig {
+                enabled: false,
+                shortcuts: vec![Shortcut::mouse(ModifierSet::empty(), MouseButton::Side1)],
             },
-            Binding {
-                tap: Trigger::Mixed {
-                    modifiers: vec![0xa2],
-                    button: MouseButton::Side1,
-                },
-                relay: MediaCommand::PlayPause,
-                enabled: true,
-            },
-        ];
-        r.bindings_changed();
-        for (code, down) in [
-            (InputCode::Key(0xa2), true),
-            (InputCode::Mouse(MouseButton::Side1), true),
-            (InputCode::Mouse(MouseButton::Side1), true),
-            (InputCode::Mouse(MouseButton::Side1), false),
-        ] {
-            r.sender
-                .try_send(InputEvent {
-                    code,
-                    down,
-                    captured: Instant::now(),
-                })
-                .unwrap();
-        }
-        r.tick();
-        assert_eq!(r.matched, 1);
-        assert_eq!(r.delivered, 0);
-        for b in &mut r.config.bindings {
-            b.enabled = false;
-        }
-        r.bindings_changed();
-        for down in [true, false] {
-            r.sender
-                .try_send(InputEvent {
+        );
+        runtime.bindings_changed();
+        runtime.input = Some(Box::new(FakeInput));
+        runtime.listening = true;
+        runtime
+            .sender
+            .try_send(RoutedInput::Edge {
+                event: InputEvent {
                     code: InputCode::Mouse(MouseButton::Side1),
-                    down,
+                    down: true,
                     captured: Instant::now(),
-                })
-                .unwrap();
-        }
-        r.tick();
-        assert_eq!(r.matched, 1);
+                },
+                result: RouteResult::default(),
+            })
+            .unwrap();
+        runtime.tick();
+        assert_eq!(runtime.matched, 0);
     }
 }

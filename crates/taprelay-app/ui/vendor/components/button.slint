@@ -41,6 +41,8 @@ export component Button inherits Rectangle {
     // Immediate commands (capture cancel/delete) own the press, not its release.
     in property <bool> activate-on-press: false;
     in property <bool> foreground-only: false;
+    // Optional outlined destructive treatment for secondary destructive actions.
+    in property <bool> destructive-outline: false;
     // TapRelay integration: expose hover without overlaying an input-consuming TouchArea.
     out property <bool> hovered: touch.has-hover;
 
@@ -74,7 +76,7 @@ export component Button inherits Rectangle {
         variant == ButtonVariant.secondary   ? Tokens.color-secondary :
         variant == ButtonVariant.ghost       ? transparent :
         variant == ButtonVariant.link        ? transparent :
-        variant == ButtonVariant.destructive ? Tokens.color-destructive.with-alpha(0.2) :
+        variant == ButtonVariant.destructive ? (root.destructive-outline ? transparent : Tokens.color-destructive.with-alpha(0.2)) :
         variant == ButtonVariant.glass       ? Tokens.color-scrim-2 :
         /* default | glow */                   Tokens.color-foreground;
 
@@ -83,16 +85,18 @@ export component Button inherits Rectangle {
         variant == ButtonVariant.secondary   ? Tokens.color-secondary.with-alpha(0.8) :
         variant == ButtonVariant.ghost       ? Tokens.color-accent :
         variant == ButtonVariant.link        ? transparent :
-        variant == ButtonVariant.destructive ? Tokens.color-destructive.with-alpha(0.3) :
+        variant == ButtonVariant.destructive ? Tokens.color-destructive.with-alpha(root.destructive-outline ? 0.12 : 0.3) :
         variant == ButtonVariant.glass       ? Tokens.color-surface-3 :
         /* default | glow */                   Tokens.color-foreground.with-alpha(0.95);
 
     property <length> border-w:
-        variant == ButtonVariant.outline || variant == ButtonVariant.glass ? 1px : 0px;
+        variant == ButtonVariant.outline || variant == ButtonVariant.glass || (variant == ButtonVariant.destructive && root.destructive-outline) ? 1px : 0px;
     property <color> border-rest:
+        variant == ButtonVariant.destructive && root.destructive-outline ? Tokens.color-destructive :
         variant == ButtonVariant.outline || variant == ButtonVariant.glass
             ? Tokens.color-border-hairline : transparent;
     property <color> border-hover:
+        variant == ButtonVariant.destructive && root.destructive-outline ? Tokens.color-destructive :
         variant == ButtonVariant.outline || variant == ButtonVariant.glass
             ? Tokens.color-border-hairline-strong : transparent;
 

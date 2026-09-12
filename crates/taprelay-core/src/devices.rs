@@ -229,6 +229,10 @@ pub fn receiver_next_allowed(state: &Snapshot) -> bool {
 /// A dead worker must not leave an old selection, connected card, or readiness behind.
 pub fn revoke_session(state: &mut Snapshot) {
     state.ready = false;
+    state.consumer_ready = false;
+    state.keyboard_ready = false;
+    state.mouse_ready = false;
+    state.passthrough_ready = false;
     state.device_error = Some(DeviceError::ConnectionFailed);
     for target in &mut state.targets {
         target.connection = Connection::Disconnected;

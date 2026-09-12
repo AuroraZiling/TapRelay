@@ -1,8 +1,11 @@
-//! Physical input state and release-to-confirm recording. Fixed bitsets avoid allocations in matching.
+//! Physical input state, shortcut recording, and the platform-neutral input vocabulary.
+
+use crate::function::{ModifierSet, PrimaryInput, Shortcut};
 use serde::{Deserialize, Serialize};
 use std::{fmt, time::Instant};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[repr(u8)]
 #[serde(rename_all = "lowercase")]
 pub enum MouseButton {
     Left,
@@ -11,57 +14,33 @@ pub enum MouseButton {
     Side1,
     Side2,
 }
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
-pub enum Trigger {
-    Keyboard {
-        keys: Vec<u8>,
-    },
-    Mouse {
-        button: MouseButton,
-    },
-    Mixed {
-        modifiers: Vec<u8>,
-        button: MouseButton,
-    },
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum InputCode {
+    Key(u8),
+    Mouse(MouseButton),
 }
-impl Trigger {
-    pub fn valid(&self) -> bool {
+
+impl InputCode {
+    pub fn index(self) -> usize {
         match self {
-            Self::Mouse { .. } => true,
-            Self::Mixed { modifiers, .. } => {
-                !modifiers.is_empty()
-                    && modifiers.iter().all(|&k| modifier(k))
-                    && modifiers.windows(2).all(|w| w[0] < w[1])
-            }
-            Self::Keyboard { keys } => {
-                !keys.is_empty()
-                    && keys.windows(2).all(|w| w[0] < w[1])
-                    && keys.iter().all(|&k| (8..=254).contains(&k))
-                    && keys.iter().any(|&k| !modifier(k))
-            }
-        }
-    }
-    pub fn specificity(&self) -> usize {
-        match self {
-            Self::Keyboard { keys } => keys.len(),
-            Self::Mixed { modifiers, .. } => modifiers.len() + 1,
-            Self::Mouse { .. } => 1,
-        }
-    }
-    pub fn contains(&self, code: InputCode) -> bool {
-        match (self, code) {
-            (Self::Keyboard { keys }, InputCode::Key(k)) => keys.contains(&k),
-            (Self::Mouse { button } | Self::Mixed { button, .. }, InputCode::Mouse(b)) => {
-                *button == b
-            }
-            _ => false,
+            Self::Key(key) => key as usize,
+            Self::Mouse(button) => 256 + button as usize,
         }
     }
 }
+
+#[derive(Debug, Clone, Copy)]
+pub struct InputEvent {
+    pub code: InputCode,
+    pub down: bool,
+    pub captured: Instant,
+}
+
 pub fn modifier(key: u8) -> bool {
     matches!(key, 0x10..=0x12 | 0x5b..=0x5c | 0xa0..=0xa5)
 }
+
 pub fn key_name(key: u8) -> String {
     match key {
         0x30..=0x39 | 0x41..=0x5a => char::from(key).to_string(),
@@ -80,6 +59,7 @@ pub fn key_name(key: u8) -> String {
         0x08 => "Backspace".into(),
         0x09 => "Tab".into(),
         0x0d => "Enter".into(),
+        0xe0 => "Num Enter".into(),
         0x1b => "Esc".into(),
         0x20 => "Space".into(),
         0x25 => "Left".into(),
@@ -112,122 +92,10 @@ pub fn key_name(key: u8) -> String {
         _ => format!("VK{key:02X}"),
     }
 }
-impl fmt::Display for Trigger {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Mouse { button } => write!(
-                f,
-                "mouse.{}",
-                match button {
-                    MouseButton::Left => "left",
-                    MouseButton::Right => "right",
-                    MouseButton::Middle => "middle",
-                    MouseButton::Side1 => "side1",
-                    MouseButton::Side2 => "side2",
-                }
-            ),
-            Self::Mixed { modifiers, button } => write!(
-                f,
-                "{}+{}",
-                modifiers
-                    .iter()
-                    .map(|&k| key_name(k))
-                    .collect::<Vec<_>>()
-                    .join("+"),
-                Self::Mouse { button: *button }
-            ),
-            Self::Keyboard { keys } => {
-                let names: Vec<_> = keys
-                    .iter()
-                    .filter(|&&k| modifier(k))
-                    .chain(keys.iter().filter(|&&k| !modifier(k)))
-                    .map(|&k| key_name(k))
-                    .collect();
-                write!(f, "{}", names.join("+"))
-            }
-        }
-    }
-}
-impl Trigger {
-    /// Structured key labels; never split display text because a key can contain '+'.
-    pub fn key_labels(&self) -> Vec<String> {
-        match self {
-            Self::Keyboard { keys } => keys
-                .iter()
-                .filter(|&&key| modifier(key))
-                .chain(keys.iter().filter(|&&key| !modifier(key)))
-                .map(|&key| key_name(key))
-                .collect(),
-            Self::Mouse { .. } => vec![self.to_string()],
-            Self::Mixed { modifiers, button } => modifiers
-                .iter()
-                .map(|&key| key_name(key))
-                .chain(Some(Self::Mouse { button: *button }.to_string()))
-                .collect(),
-        }
-    }
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InputCode {
-    Key(u8),
-    Mouse(MouseButton),
-}
-impl InputCode {
-    pub fn index(self) -> usize {
-        match self {
-            Self::Key(key) => key as usize,
-            Self::Mouse(button) => 256 + button as usize,
-        }
-    }
-}
 
-/// Runtime-only representation: configuration stays human-readable and schema-compatible.
-pub struct CompiledTrigger {
-    keys: Keys,
-    mouse: Option<MouseButton>,
-    exact: bool,
-    pub specificity: usize,
-}
-impl CompiledTrigger {
-    pub fn new(trigger: &Trigger) -> Self {
-        let mut keys = Keys::default();
-        let (codes, mouse, exact) = match trigger {
-            Trigger::Keyboard { keys } => (keys.as_slice(), None, true),
-            Trigger::Mouse { button } => (&[][..], Some(*button), false),
-            Trigger::Mixed { modifiers, button } => (modifiers.as_slice(), Some(*button), false),
-        };
-        for &key in codes {
-            keys.set(key, true);
-        }
-        Self {
-            keys,
-            mouse,
-            exact,
-            specificity: trigger.specificity(),
-        }
-    }
-    pub fn matches(&self, state: &InputState) -> bool {
-        let keys_match = if self.exact {
-            state.held == self.keys
-        } else {
-            state
-                .held
-                .0
-                .iter()
-                .zip(self.keys.0)
-                .all(|(held, required)| held & required == required)
-        };
-        keys_match && self.mouse.is_none_or(|b| state.mouse & (1 << b as u8) != 0)
-    }
-}
-#[derive(Debug, Clone, Copy)]
-pub struct InputEvent {
-    pub code: InputCode,
-    pub down: bool,
-    pub captured: Instant,
-}
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct Keys([u64; 4]);
+
 impl Keys {
     fn set(&mut self, key: u8, down: bool) -> bool {
         let word = &mut self.0[key as usize / 64];
@@ -240,29 +108,35 @@ impl Keys {
         }
         changed
     }
+
     fn count(self) -> u32 {
         self.0.iter().map(|n| n.count_ones()).sum()
     }
-    fn keys(self) -> Vec<u8> {
-        (0..=255)
-            .filter(|&k| self.0[k as usize / 64] & (1 << (k % 64)) != 0)
-            .collect()
+
+    fn contains(self, key: u8) -> bool {
+        self.0[key as usize / 64] & (1 << (key % 64)) != 0
+    }
+
+    fn keys(self) -> impl Iterator<Item = u8> {
+        (0..=255).filter(move |&key| self.contains(key))
     }
 }
+
 #[derive(Default)]
 pub struct InputState {
     held: Keys,
     mouse: u8,
 }
+
 impl InputState {
-    /// Returns true only when physical state changes; callers choose down/up semantics.
-    pub fn update(&mut self, e: InputEvent) -> bool {
-        match e.code {
-            InputCode::Key(k) => self.held.set(k, e.down),
-            InputCode::Mouse(b) => {
-                let mask = 1 << b as u8;
-                let changed = (self.mouse & mask != 0) != e.down;
-                if e.down {
+    /// Returns false for a repeated key/button edge, which is not a new physical down.
+    pub fn update(&mut self, event: InputEvent) -> bool {
+        match event.code {
+            InputCode::Key(key) => self.held.set(key, event.down),
+            InputCode::Mouse(button) => {
+                let mask = 1 << button as u8;
+                let changed = (self.mouse & mask != 0) != event.down;
+                if event.down {
                     self.mouse |= mask;
                 } else {
                     self.mouse &= !mask;
@@ -271,162 +145,230 @@ impl InputState {
             }
         }
     }
+
+    pub fn is_down(&self, code: InputCode) -> bool {
+        match code {
+            InputCode::Key(key) => self.held.contains(key),
+            InputCode::Mouse(button) => self.mouse & (1 << button as u8) != 0,
+        }
+    }
+
+    pub fn logical_modifiers(&self) -> ModifierSet {
+        ModifierSet::from_keys(self.held.keys())
+    }
+
     pub fn empty(&self) -> bool {
         self.held.count() == 0 && self.mouse == 0
     }
+
     pub fn description(&self) -> String {
-        self.key_labels().join(" + ")
-    }
-    pub fn key_labels(&self) -> Vec<String> {
-        let mut parts: Vec<String> = self.held.keys().into_iter().map(key_name).collect();
-        for b in [
+        let mut labels = self.logical_modifiers().labels();
+        labels.extend(self.held.keys().filter(|key| !modifier(*key)).map(key_name));
+        for button in [
             MouseButton::Left,
             MouseButton::Right,
             MouseButton::Middle,
             MouseButton::Side1,
             MouseButton::Side2,
         ] {
-            if self.mouse & (1 << b as u8) != 0 {
-                parts.push(Trigger::Mouse { button: b }.to_string());
+            if self.mouse & (1 << button as u8) != 0 {
+                labels.push(PrimaryInput::mouse(button).label());
             }
         }
-        parts
+        labels.join("+")
     }
-    pub fn matches(&self, trigger: &Trigger) -> bool {
-        match trigger {
-            Trigger::Keyboard { keys } => {
-                self.held.count() == keys.len() as u32
-                    && keys
-                        .iter()
-                        .all(|&k| self.held.0[k as usize / 64] & (1 << (k % 64)) != 0)
-            }
-            Trigger::Mouse { button } => self.mouse & (1 << *button as u8) != 0,
-            Trigger::Mixed { modifiers, button } => {
-                self.mouse & (1 << *button as u8) != 0
-                    && modifiers
-                        .iter()
-                        .all(|&k| self.held.0[k as usize / 64] & (1 << (k % 64)) != 0)
-            }
-        }
+
+    pub fn key_labels(&self) -> Vec<String> {
+        let mut labels = self.logical_modifiers().labels();
+        labels.extend(self.held.keys().filter(|key| !modifier(*key)).map(key_name));
+        labels
     }
 }
-/// A single recorder recognizes keyboard, mouse and mixed input automatically.
+
+/// Records exactly one physical primary down and the logical modifiers that
+/// existed at that edge. It never constructs a shortcut from a peak held set.
 #[derive(Default)]
 pub struct Recorder {
-    peak: Keys,
-    mouse: Option<MouseButton>,
+    primary: Option<PrimaryInput>,
+    modifiers: ModifierSet,
+    primary_released: bool,
+    saw_input: bool,
+    invalid: bool,
+    completed_invalid: bool,
 }
+
 impl Recorder {
-    pub fn observe(&mut self, state: &InputState, event: InputEvent) -> Option<Trigger> {
-        if state.held.count() > self.peak.count() {
-            self.peak = state.held;
-        }
-        if let InputCode::Mouse(b) = event.code
-            && event.down
-            && self.mouse.is_none()
+    pub fn observe(&mut self, state: &InputState, event: InputEvent) -> Option<Shortcut> {
+        self.saw_input = true;
+        if event.down {
+            match event.code {
+                InputCode::Key(key) if modifier(key) => {}
+                InputCode::Key(key) => self.observe_primary(PrimaryInput::keyboard(key), state),
+                InputCode::Mouse(button) => {
+                    self.observe_primary(PrimaryInput::mouse(button), state)
+                }
+            }
+        } else if self
+            .primary
+            .as_ref()
+            .is_some_and(|primary| primary.code() == event.code)
         {
-            self.mouse = Some(b);
+            self.primary_released = true;
         }
         if !event.down && state.empty() {
-            let keys = std::mem::take(&mut self.peak).keys();
-            if let Some(button) = self.mouse.take() {
-                return Some(if keys.is_empty() {
-                    Trigger::Mouse { button }
-                } else {
-                    Trigger::Mixed {
-                        modifiers: keys,
-                        button,
-                    }
-                });
+            let primary = self.primary.take();
+            let modifiers = self.modifiers;
+            let invalid = self.invalid || primary.is_none();
+            self.modifiers = ModifierSet::empty();
+            self.primary_released = false;
+            self.saw_input = false;
+            self.invalid = false;
+            if invalid {
+                self.completed_invalid = true;
+                return None;
             }
-            if !keys.is_empty() {
-                return Some(Trigger::Keyboard { keys });
-            }
+            return Some(Shortcut::new(modifiers, primary.expect("checked above")));
         }
         None
     }
+
+    fn observe_primary(&mut self, primary: PrimaryInput, state: &InputState) {
+        if self.primary.is_some() {
+            // Repeated down for the same physical primary is not another key.
+            if self.primary_released || self.primary.as_ref() != Some(&primary) {
+                self.invalid = true;
+            }
+        } else {
+            self.modifiers = state.logical_modifiers();
+            self.primary = Some(primary);
+        }
+    }
+
+    pub fn take_invalid(&mut self) -> bool {
+        std::mem::take(&mut self.completed_invalid)
+    }
+
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
 }
+
+impl fmt::Display for Shortcut {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.display())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn event(k: u8, down: bool) -> InputEvent {
+
+    fn event(code: InputCode, down: bool) -> InputEvent {
         InputEvent {
-            code: InputCode::Key(k),
+            code,
             down,
             captured: Instant::now(),
         }
     }
+
     #[test]
-    fn chord_requires_overlap_and_all_releases() {
-        let mut s = InputState::default();
-        let mut r = Recorder::default();
-        for e in [
-            event(0xa2, true),
-            event(0x4b, true),
-            event(0x4b, true),
-            event(0xa2, false),
+    fn exact_modifier_set_is_captured_at_primary_down() {
+        let mut state = InputState::default();
+        let mut recorder = Recorder::default();
+        for event in [
+            event(InputCode::Key(0xa2), true),
+            event(InputCode::Key(0x58), true),
+            event(InputCode::Key(0xa1), true),
+            event(InputCode::Key(0x58), false),
+            event(InputCode::Key(0xa2), false),
+            event(InputCode::Key(0xa1), false),
         ] {
-            s.update(e);
-            assert!(r.observe(&s, e).is_none());
-        }
-        let e = event(0x4b, false);
-        s.update(e);
-        let t = r.observe(&s, e).unwrap();
-        assert!(t.valid());
-        assert_eq!(t.to_string(), "LCtrl+K");
-        for e in [
-            event(0xa2, true),
-            event(0xa2, false),
-            event(0x4b, true),
-            event(0x4b, false),
-        ] {
-            s.update(e);
-            if let Some(t) = r.observe(&s, e) {
+            state.update(event);
+            if let Some(shortcut) = recorder.observe(&state, event) {
                 assert_eq!(
-                    t.valid(),
-                    matches!(t, Trigger::Keyboard { ref keys } if keys == &[0x4b])
+                    shortcut,
+                    Shortcut::keyboard(
+                        ModifierSet {
+                            ctrl: true,
+                            ..Default::default()
+                        },
+                        0x58
+                    )
                 );
             }
         }
     }
+
     #[test]
-    fn repeats_extra_keys_and_left_right_modifiers() {
-        let mut s = InputState::default();
-        let t = Trigger::Keyboard {
-            keys: vec![0x4b, 0xa2],
-        };
-        assert!(s.update(event(0xa2, true)));
-        assert!(s.update(event(0x4b, true)));
-        assert!(s.matches(&t));
-        assert!(!s.update(event(0x4b, true)));
-        s.update(event(0xa3, true));
-        assert!(!s.matches(&t));
-        s.update(event(0xa2, false));
-        assert!(!s.matches(&t));
-    }
-    #[test]
-    fn all_mouse_buttons_confirm_on_release() {
-        for b in [
-            MouseButton::Left,
-            MouseButton::Right,
-            MouseButton::Middle,
-            MouseButton::Side1,
-            MouseButton::Side2,
+    fn second_primary_and_pure_modifiers_are_invalid() {
+        let mut state = InputState::default();
+        let mut recorder = Recorder::default();
+        for event in [
+            event(InputCode::Key(0x41), true),
+            event(InputCode::Key(0x42), true),
+            event(InputCode::Key(0x42), false),
+            event(InputCode::Key(0x41), false),
         ] {
-            let mut s = InputState::default();
-            let mut r = Recorder::default();
-            for down in [true, false] {
-                let e = InputEvent {
-                    code: InputCode::Mouse(b),
-                    down,
-                    captured: Instant::now(),
-                };
-                s.update(e);
-                assert_eq!(
-                    r.observe(&s, e),
-                    (!down).then_some(Trigger::Mouse { button: b })
-                );
-            }
+            state.update(event);
+            recorder.observe(&state, event);
         }
+        assert!(recorder.take_invalid());
+
+        for event in [
+            event(InputCode::Key(0xa2), true),
+            event(InputCode::Key(0xa2), false),
+        ] {
+            state.update(event);
+            recorder.observe(&state, event);
+        }
+        assert!(recorder.take_invalid());
+    }
+
+    #[test]
+    fn mouse_primary_confirms_on_down_and_up_does_not_repeat() {
+        let mut state = InputState::default();
+        let mut recorder = Recorder::default();
+        let down = event(InputCode::Mouse(MouseButton::Side1), true);
+        state.update(down);
+        assert_eq!(recorder.observe(&state, down), None);
+        let up = event(InputCode::Mouse(MouseButton::Side1), false);
+        state.update(up);
+        assert_eq!(
+            recorder.observe(&state, up).unwrap().primary,
+            PrimaryInput::mouse(MouseButton::Side1)
+        );
+    }
+
+    #[test]
+    fn repeated_down_does_not_change_state() {
+        let mut state = InputState::default();
+        assert!(state.update(event(InputCode::Key(0x58), true)));
+        assert!(!state.update(event(InputCode::Key(0x58), true)));
+        assert!(state.is_down(InputCode::Key(0x58)));
+    }
+
+    #[test]
+    fn a_new_gesture_after_release_can_be_recorded() {
+        let mut state = InputState::default();
+        let mut recorder = Recorder::default();
+        let first_down = event(InputCode::Key(0x41), true);
+        state.update(first_down);
+        assert_eq!(recorder.observe(&state, first_down), None);
+        let first_up = event(InputCode::Key(0x41), false);
+        state.update(first_up);
+        assert_eq!(
+            recorder.observe(&state, first_up).unwrap().primary,
+            PrimaryInput::keyboard(0x41)
+        );
+
+        let second_down = event(InputCode::Key(0x42), true);
+        state.update(second_down);
+        assert_eq!(recorder.observe(&state, second_down), None);
+        let second_up = event(InputCode::Key(0x42), false);
+        state.update(second_up);
+        assert_eq!(
+            recorder.observe(&state, second_up).unwrap().primary,
+            PrimaryInput::keyboard(0x42)
+        );
     }
 }

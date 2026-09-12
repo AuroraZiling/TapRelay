@@ -1,20 +1,21 @@
 import { Tokens, Theme, ThemeMode } from "vendor/theme/tokens.slint";
 import { BluetoothStatus } from "components/bluetooth-status.slint";
 import { I18n, TranslationText } from "@i18n";
-import { BindingRow, DeviceRow, CheckRow, RelayStatus, LogLevel, LogLine } from "types.slint";
+import { BindingRow, DeviceRow, CheckRow, FunctionBindingRow, FunctionCard, FunctionItem, ShortcutItem, RelayStatus, LogLevel, LogLine } from "types.slint";
 import { Heading, ErrorBanner } from "components/primitives.slint";
 import { Sidebar } from "components/sidebar.slint";
 import { Toast } from "components/toast.slint";
 import { EnvironmentPage } from "pages/environment.slint";
 import { WizardPage } from "pages/wizard.slint";
 import { OverviewPage } from "pages/overview.slint";
-import { BindingsPage } from "pages/bindings.slint";
+import { FunctionsPage } from "pages/functions.slint";
+import { FunctionBindingsPage } from "pages/bindings.slint";
 import { DevicesPage } from "pages/devices.slint";
 import { ReceiverActions } from "components/receiver-actions.slint";
 import { LogClearButton, LogLevelFilters } from "components/log-level-filters.slint";
 import { LogsPage } from "pages/logs.slint";
 import { SettingsPage } from "pages/settings.slint";
-export { Theme, ThemeMode, I18n, TranslationText, BindingRow, DeviceRow, CheckRow, RelayStatus, LogLevel, LogLine }
+export { Theme, ThemeMode, I18n, TranslationText, BindingRow, DeviceRow, CheckRow, FunctionBindingRow, FunctionCard, FunctionItem, ShortcutItem, RelayStatus, LogLevel, LogLine }
 
 // Window shell: public Rust interface, navigation and page composition only.
 export component AppWindow inherits Window {
@@ -34,6 +35,9 @@ export component AppWindow inherits Window {
     in-out property <int> page: 0;
     in-out property <int> wizard-page: 0;
     in property <[BindingRow]> bindings;
+    in property <[FunctionCard]> function-cards;
+    in property <[FunctionBindingRow]> active-bindings;
+    in property <[FunctionBindingRow]> disabled-bindings;
     in property <[CheckRow]> checks;
     in property <bool> listening;
     in property <bool> ready;
@@ -52,9 +56,9 @@ export component AppWindow inherits Window {
     in property <string> diagnostics;
     in property <string> problem;
     in property <string> capture-text;
-    in property <[string]> capture-keys;
     in property <string> capture-error;
-    in property <int> capture-index: -1;
+    in property <string> capture-function;
+    in property <int> capture-slot: -1;
     in property <int> input-count;
     in property <string> toast;
     in property <int> state-color: 2;
@@ -112,11 +116,13 @@ export component AppWindow inherits Window {
                 adapter-label: root.adapter-label;
                 bluetooth-available: root.bluetooth-available;
                 busy: root.busy;
-                bindings: root.bindings;
+                function-cards: root.function-cards;
+                active-bindings: root.active-bindings;
+                disabled-bindings: root.disabled-bindings;
+                capture-function: root.capture-function;
+                capture-slot: root.capture-slot;
                 capture-error: root.capture-error;
-                capture-index: root.capture-index;
                 capture-text: root.capture-text;
-                capture-keys: root.capture-keys;
                 discovery-status: root.discovery-status;
                 scanning: root.scanning;
                 paired-devices: root.paired-devices;
@@ -135,22 +141,22 @@ export component AppWindow inherits Window {
                     spacing: 12px;
                     Heading {
                         horizontal-stretch: 0;
-                        text: [I18n.text.nav-overview,I18n.text.nav-bindings,I18n.text.nav-receiver,I18n.text.nav-logs,I18n.text.nav-settings][root.page];
+                        text: [I18n.text.nav-overview,I18n.text.nav-functions,I18n.text.nav-bindings,I18n.text.nav-receiver,I18n.text.nav-logs,I18n.text.nav-settings][root.page];
                     }
-                    if root.page == 3: LogClearButton {
+                    if root.page == 4: LogClearButton {
                         cleared => { root.action("clear-logs", 0, ""); }
                     }
-                    if root.page == 2: BluetoothStatus {
+                    if root.page == 3: BluetoothStatus {
                         available: root.bluetooth-available;
                         busy: root.busy;
                         status-label: root.adapter-label;
                     }
-                    if root.page == 2: Rectangle { horizontal-stretch: 1; }
-                    if root.page == 2: ReceiverActions {
+                    if root.page == 3: Rectangle { horizontal-stretch: 1; }
+                    if root.page == 3: ReceiverActions {
                         action(name, index, value) => { root.action(name, index, value); }
                     }
-                    if root.page == 3: Rectangle { horizontal-stretch: 1; }
-                    if root.page == 3: LogLevelFilters {
+                    if root.page == 4: Rectangle { horizontal-stretch: 1; }
+                    if root.page == 4: LogLevelFilters {
                         debug <=> root.log-debug;
                         info <=> root.log-info;
                         warning <=> root.log-warning;
@@ -173,17 +179,24 @@ export component AppWindow inherits Window {
                         root.action(name, index, value);
                     }
                 }
-                if root.page == 1: BindingsPage {
-                    bindings: root.bindings;
-                    capture-error: root.capture-error;
-                    capture-index: root.capture-index;
-                    capture-text: root.capture-text;
-                    capture-keys: root.capture-keys;
+                if root.page == 1: FunctionsPage {
+                    cards: root.function-cards;
                     action(name, index, value) => {
                         root.action(name, index, value);
                     }
                 }
-                if root.page == 2: DevicesPage {
+                if root.page == 2: FunctionBindingsPage {
+                    active-rows: root.active-bindings;
+                    disabled-rows: root.disabled-bindings;
+                    capture-function: root.capture-function;
+                    capture-slot: root.capture-slot;
+                    capture-error: root.capture-error;
+                    capture-text: root.capture-text;
+                    action(name, index, value) => {
+                        root.action(name, index, value);
+                    }
+                }
+                if root.page == 3: DevicesPage {
                     discovery-status: root.discovery-status;
                     scanning: root.scanning;
                     paired-devices: root.paired-devices;
@@ -191,14 +204,14 @@ export component AppWindow inherits Window {
                         root.action(name, index, value);
                     }
                 }
-                if root.page == 3: LogsPage {
+                if root.page == 4: LogsPage {
                     log-lines: root.log-lines;
                     viewport-y <=> root.log-viewport-y;
                     action(name, index, value) => {
                         root.action(name, index, value);
                     }
                 }
-                if root.page == 4: SettingsPage {
+                if root.page == 5: SettingsPage {
                     always-admin <=> root.always-admin;
                     app-version: root.app-version;
                     auto-listen <=> root.auto-listen;

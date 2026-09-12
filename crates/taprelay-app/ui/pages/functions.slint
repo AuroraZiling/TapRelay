@@ -1,0 +1,83 @@
+import { Button, ButtonSize, ButtonVariant } from "../vendor/components/button.slint";
+import { ScrollArea } from "../vendor/components/scroll-area.slint";
+import { Tokens } from "../vendor/theme/tokens.slint";
+import { I18n } from "@i18n";
+import { FunctionCard } from "../types.slint";
+import { Caption, Label, Panel } from "../components/primitives.slint";
+
+component FunctionCardView inherits Panel {
+    in property <FunctionCard> card;
+    callback action(string, int, string);
+    preferred-height: content.preferred-height;
+    vertical-stretch: 0;
+    content := VerticalLayout {
+        padding: 20px;
+        spacing: 16px;
+        alignment: start;
+        Label {
+            text: root.card.title;
+            font-weight: 600;
+            vertical-stretch: 0;
+        }
+        FlexboxLayout {
+            min-width: 0px;
+            spacing-horizontal: 8px;
+            spacing-vertical: 8px;
+            flex-direction: row;
+            flex-wrap: wrap;
+            alignment: start;
+            align-content: start;
+            cross-axis-alignment: start;
+            for item in root.card.items: Button {
+                text: item.label;
+                flex-grow: 0;
+                flex-shrink: 0;
+                variant: item.enabled ? ButtonVariant.default : ButtonVariant.outline;
+                size: ButtonSize.sm;
+                accessible-role: checkbox;
+                accessible-label: item.label;
+                accessible-checked: item.enabled;
+                clicked => { root.action("toggle-function", item.enabled ? 0 : 1, item.id); }
+            }
+        }
+    }
+}
+
+// Both columns have an explicit width; filtered-out cards take no space.
+// Keep the viewport stretchy and its content at natural height.
+export component FunctionsPage inherits VerticalLayout {
+    in property <[FunctionCard]> cards;
+    callback action(string, int, string);
+    spacing: 24px;
+    Caption {
+        text: I18n.text.functions-help;
+        vertical-stretch: 0;
+    }
+    ScrollArea {
+        content-height: max(self.height, columns.preferred-height);
+        columns := HorizontalLayout {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: self.preferred-height;
+            spacing: 16px;
+            cross-axis-alignment: start;
+            for column in 2: VerticalLayout {
+                width: (columns.width - 16px) / 2;
+                spacing: 0px;
+                for card[i] in root.cards: Rectangle {
+                    height: Math.mod(i, 2) == column ? card-view.preferred-height + 16px : 0px;
+                    card-view := FunctionCardView {
+                        x: 0px;
+                        y: 0px;
+                        width: parent.width;
+                        height: self.preferred-height;
+                        visible: Math.mod(i, 2) == column;
+                        card: card;
+                        action(name, index, value) => { root.action(name, index, value); }
+                    }
+                }
+            }
+        }
+    }
+}

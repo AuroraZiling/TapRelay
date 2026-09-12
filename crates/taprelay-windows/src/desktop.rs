@@ -56,7 +56,7 @@ fn copy_wide(dst: &mut [u16], s: &str) {
 pub fn any_input_held() -> bool {
     unsafe {
         (1..=254)
-            .filter(|k| !matches!(k, 3 | 7 | 0x10..=0x12))
+            .filter(|k| !matches!(k, 3 | 7))
             .any(|k| GetAsyncKeyState(k) < 0)
     }
 }
@@ -289,7 +289,7 @@ pub fn icon_rgba(state: u8) -> Vec<u8> {
 fn make_icon(state: u8) -> windows::core::Result<HICON> {
     unsafe {
         let mut bytes = icon_rgba(state);
-        for pixel in bytes.chunks_exact_mut(4) {
+        for pixel in bytes.as_chunks_mut::<4>().0 {
             pixel.swap(0, 2);
         }
         let color = CreateBitmap(32, 32, 1, 32, Some(bytes.as_ptr().cast()));

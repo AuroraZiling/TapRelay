@@ -16,6 +16,7 @@ actions! {
     Resume => "resume", TrayReset => "tray-reset", BluetoothSettings => "bluetooth-settings",
     DataFolder => "data-folder", LogsFolder => "logs-folder", Capture => "capture",
     CancelCapture => "cancel-capture", Delete => "delete", Device => "device",
+    ToggleFunction => "toggle-function", UnbindFunction => "unbind-function",
     PairDevice => "pair-device", DisconnectDevice => "disconnect-device",
     Wizard => "wizard", WizardNext => "wizard-next", WizardBack => "wizard-back",
     WizardFinish => "wizard-finish", Theme => "theme", Language => "language",
@@ -24,6 +25,8 @@ actions! {
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum CaptureTarget {
-    Existing(usize),
-    New,
+    Function {
+        id: taprelay_core::function::FunctionId,
+        slot: usize,
+    },
 }

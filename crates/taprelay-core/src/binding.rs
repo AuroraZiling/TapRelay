@@ -1,130 +1,191 @@
+//! Shortcut indexing and global binding invariants.
+
 use crate::{
-    command::MediaCommand,
-    input::{CompiledTrigger, InputCode, InputState, Trigger},
+    function::{FunctionAction, FunctionConfigs, FunctionId, Shortcut, function_definition},
+    input::{InputCode, InputState},
 };
-use serde::{Deserialize, Serialize};
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Binding {
-    pub tap: Trigger,
-    // Keep schema 2 fields for existing files. The GUI currently exposes only
-    // PlayPause and normalizes all listed bindings to enabled at startup.
-    pub relay: MediaCommand,
-    pub enabled: bool,
-}
-/// No arbitrary UI limit; duplicate physical triggers remain invalid.
-pub fn valid(bindings: &[Binding]) -> bool {
-    // Small lists avoid a hash-table allocation; the quadratic branch is capped.
-    if bindings.len() <= 16 {
-        return bindings.iter().enumerate().all(|(i, b)| {
-            b.tap.valid() && !bindings[..i].iter().any(|previous| previous.tap == b.tap)
-        });
-    }
-    let mut seen = std::collections::HashSet::with_capacity(bindings.len());
-    bindings
-        .iter()
-        .all(|b| b.tap.valid() && seen.insert(&b.tap))
+use std::collections::HashSet;
+
+pub const MAX_SHORTCUTS_PER_FUNCTION: usize = 2;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BindingKey {
+    pub function: FunctionId,
+    pub slot: usize,
 }
 
-/// Candidate lookup avoids scanning unrelated bindings on every physical edge.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexedBinding {
+    pub key: BindingKey,
+    pub shortcut: Shortcut,
+    pub action: FunctionAction,
+}
+
+/// Disabled entries remain in the config and therefore remain in this global
+/// uniqueness check. They are absent from the runtime index below.
+pub fn valid(configs: &FunctionConfigs) -> bool {
+    let mut seen = HashSet::new();
+    configs.values().all(|config| {
+        config.shortcuts.len() <= MAX_SHORTCUTS_PER_FUNCTION
+            && config
+                .shortcuts
+                .iter()
+                .all(|shortcut| shortcut.valid() && seen.insert(shortcut.clone()))
+    })
+}
+
+/// Runtime index keyed by the only edge that can start a shortcut: its primary.
+/// Matching is exact on the normalized modifier set and deliberately ignores
+/// unrelated ordinary keys held by the user.
 pub struct BindingIndex {
     candidates: [Vec<usize>; 261],
-    triggers: Vec<CompiledTrigger>,
+    bindings: Vec<IndexedBinding>,
 }
+
 impl BindingIndex {
-    pub fn new(bindings: &[Binding]) -> Self {
+    pub fn new(configs: &FunctionConfigs) -> Self {
         let mut index = Self {
             candidates: std::array::from_fn(|_| Vec::new()),
-            triggers: bindings
-                .iter()
-                .map(|b| CompiledTrigger::new(&b.tap))
-                .collect(),
+            bindings: Vec::new(),
         };
-        for (i, binding) in bindings.iter().enumerate().filter(|(_, b)| b.enabled) {
-            match &binding.tap {
-                Trigger::Keyboard { keys } => {
-                    for &key in keys {
-                        index.candidates[key as usize].push(i);
-                    }
-                }
-                Trigger::Mouse { button } | Trigger::Mixed { button, .. } => {
-                    index.candidates[InputCode::Mouse(*button).index()].push(i);
-                }
+        for id in crate::function::function_ids() {
+            let Some(config) = configs.get(&id) else {
+                continue;
+            };
+            if !config.enabled {
+                continue;
+            }
+            let definition = function_definition(id);
+            for (slot, shortcut) in config.shortcuts.iter().cloned().enumerate() {
+                let binding_index = index.bindings.len();
+                index.candidates[shortcut.primary_code().index()].push(binding_index);
+                index.bindings.push(IndexedBinding {
+                    key: BindingKey { function: id, slot },
+                    shortcut,
+                    action: definition.action,
+                });
             }
         }
         index
     }
+
+    pub fn binding(&self, index: usize) -> Option<&IndexedBinding> {
+        self.bindings.get(index)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &IndexedBinding> {
+        self.bindings.iter()
+    }
+
     pub fn best_match(&self, code: InputCode, state: &InputState) -> Option<usize> {
         self.candidates[code.index()]
             .iter()
             .copied()
-            .filter(|&i| self.triggers[i].matches(state))
-            .max_by_key(|&i| self.triggers[i].specificity)
+            .find(|&index| {
+                let binding = &self.bindings[index];
+                binding.shortcut.primary_code() == code
+                    && state.logical_modifiers() == binding.shortcut.modifiers
+            })
     }
+
+    pub fn find(&self, key: BindingKey) -> Option<usize> {
+        self.bindings.iter().position(|binding| binding.key == key)
+    }
+
+    pub fn uses_modifier(&self, code: InputCode) -> bool {
+        let InputCode::Key(key) = code else {
+            return false;
+        };
+        let logical = crate::function::ModifierSet::from_keys([key]);
+        self.bindings
+            .iter()
+            .any(|binding| logical.is_subset_of(binding.shortcut.modifiers))
+    }
+}
+
+pub fn all_shortcuts(configs: &FunctionConfigs) -> impl Iterator<Item = (BindingKey, &Shortcut)> {
+    configs.iter().flat_map(|(&function, config)| {
+        config
+            .shortcuts
+            .iter()
+            .enumerate()
+            .map(move |(slot, shortcut)| (BindingKey { function, slot }, shortcut))
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::input::{InputEvent, MouseButton};
+    use crate::{
+        function::{FunctionConfig, ModifierSet, PrimaryInput, default_configs},
+        input::{InputEvent, MouseButton},
+    };
+    use std::time::Instant;
+
+    fn shortcut(modifiers: ModifierSet, key: u8) -> Shortcut {
+        Shortcut::new(modifiers, PrimaryInput::keyboard(key))
+    }
+
     #[test]
-    fn indexed_matching_agrees_with_reference_for_every_edge() {
-        let bindings = vec![
-            Binding {
-                tap: Trigger::Keyboard { keys: vec![0x77] },
-                relay: MediaCommand::PlayPause,
+    fn index_matches_only_primary_and_exact_logical_modifiers() {
+        let mut configs = default_configs();
+        configs.insert(
+            FunctionId::MediaNext,
+            FunctionConfig {
                 enabled: true,
+                shortcuts: vec![shortcut(ModifierSet::empty(), 0x58)],
             },
-            Binding {
-                tap: Trigger::Keyboard {
-                    keys: vec![0x77, 0xa2],
-                },
-                relay: MediaCommand::PlayPause,
+        );
+        configs.insert(
+            FunctionId::MediaPrevious,
+            FunctionConfig {
                 enabled: true,
+                shortcuts: vec![shortcut(
+                    ModifierSet {
+                        ctrl: true,
+                        ..Default::default()
+                    },
+                    0x58,
+                )],
             },
-            Binding {
-                tap: Trigger::Mouse {
-                    button: MouseButton::Side1,
-                },
-                relay: MediaCommand::PlayPause,
-                enabled: true,
-            },
-            Binding {
-                tap: Trigger::Mixed {
-                    modifiers: vec![0xa2],
-                    button: MouseButton::Side1,
-                },
-                relay: MediaCommand::PlayPause,
-                enabled: true,
-            },
-        ];
-        let index = BindingIndex::new(&bindings);
+        );
+        let index = BindingIndex::new(&configs);
         let mut state = InputState::default();
-        let mut seed = 42u64;
-        for _ in 0..4096 {
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
-            let code = [
-                InputCode::Key(0x77),
-                InputCode::Key(0xa2),
-                InputCode::Key(0x41),
-                InputCode::Mouse(MouseButton::Side1),
-            ][(seed >> 32) as usize % 4];
-            state.update(InputEvent {
-                code,
-                down: seed & 0x100 != 0,
-                captured: std::time::Instant::now(),
-            });
-            let expected = bindings
-                .iter()
-                .enumerate()
-                .filter(|(_, b)| b.enabled && b.tap.contains(code) && state.matches(&b.tap))
-                .max_by_key(|(_, b)| b.tap.specificity())
-                .map(|(i, _)| i);
-            assert_eq!(index.best_match(code, &state), expected);
-        }
-        assert!(valid(&bindings));
-        let mut duplicate = bindings.clone();
-        duplicate.push(bindings[0].clone());
-        assert!(!valid(&duplicate));
+        state.update(InputEvent {
+            code: InputCode::Key(0x41),
+            down: true,
+            captured: Instant::now(),
+        });
+        state.update(InputEvent {
+            code: InputCode::Key(0x58),
+            down: true,
+            captured: Instant::now(),
+        });
+        assert_eq!(index.best_match(InputCode::Key(0x58), &state), Some(1));
+        state.update(InputEvent {
+            code: InputCode::Key(0x11),
+            down: true,
+            captured: Instant::now(),
+        });
+        assert_eq!(index.best_match(InputCode::Key(0x58), &state), Some(0));
+    }
+
+    #[test]
+    fn disabled_shortcuts_are_not_indexed_but_still_occupy_the_config() {
+        let mut configs = default_configs();
+        let shortcut = Shortcut::mouse(ModifierSet::empty(), MouseButton::Left);
+        configs
+            .get_mut(&FunctionId::MediaNext)
+            .unwrap()
+            .shortcuts
+            .push(shortcut.clone());
+        configs
+            .get_mut(&FunctionId::MediaPrevious)
+            .unwrap()
+            .shortcuts
+            .push(shortcut);
+        assert!(!valid(&configs));
+        let index = BindingIndex::new(&configs);
+        assert_eq!(index.iter().count(), 0);
     }
 }

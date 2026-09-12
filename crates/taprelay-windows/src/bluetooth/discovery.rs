@@ -219,6 +219,7 @@ fn classify_device(
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod classification_tests {
     use super::*;
     use taprelay_core::state::DeviceKind;

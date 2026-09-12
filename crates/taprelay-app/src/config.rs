@@ -5,13 +5,17 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
-use taprelay_core::binding::{self, Binding};
+use taprelay_core::{
+    binding,
+    function::{self, FunctionConfigs},
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub schema: u32,
-    pub bindings: Vec<Binding>,
+    #[serde(default)]
+    pub functions: FunctionConfigs,
     /// Legacy receiver record. Device selection is session-only and is never persisted.
     #[serde(default, skip_serializing)]
     pub device: Option<Device>,
@@ -22,8 +26,8 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            schema: 2,
-            bindings: vec![],
+            schema: 3,
+            functions: function::default_configs(),
             device: None,
             wizard: Wizard::default(),
             options: Options::default(),
@@ -118,12 +122,19 @@ pub struct Device {
 }
 impl Config {
     pub fn validate(&self) -> Result<()> {
-        ensure!(self.schema == 2, "Unsupported configuration format");
         ensure!(
-            binding::valid(&self.bindings),
+            self.schema == 3,
+            "Unsupported configuration format (expected schema 3)"
+        );
+        ensure!(
+            function::valid_configs(&self.functions),
             "Invalid or duplicate shortcut"
         );
-        ensure!(self.wizard.page <= 2, "Invalid wizard page");
+        ensure!(
+            binding::valid(&self.functions),
+            "Invalid or duplicate shortcut"
+        );
+        ensure!(self.wizard.page <= 3, "Invalid wizard page");
         ensure!(
             self.window.width.is_finite() && self.window.height.is_finite(),
             "Invalid window size"
@@ -135,6 +146,7 @@ impl Config {
             Ok(bytes) => {
                 let mut c: Self = serde_json::from_slice(&bytes)
                     .context("Invalid configuration; move config.json aside to start fresh")?;
+                function::complete_configs(&mut c.functions);
                 // Drop the legacy record as soon as it is read. Saving any later
                 // configuration change also removes it from the file.
                 c.device = None;
@@ -232,14 +244,20 @@ mod tests {
         assert!(Config::load(&path).unwrap().options.connection_wait_warning);
     }
     #[test]
-    fn drafts_and_empty_bindings_persist_without_verification() {
+    fn drafts_and_empty_functions_persist_without_verification() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("config.json");
         let mut c = Config::default();
         c.wizard.page = 1;
         c.save(&p).unwrap();
         assert_eq!(Config::load(&p).unwrap().wizard.page, 1);
-        assert!(Config::load(&p).unwrap().bindings.is_empty());
+        assert!(
+            Config::load(&p)
+                .unwrap()
+                .functions
+                .values()
+                .all(|function| function.shortcuts.is_empty() && !function.enabled)
+        );
     }
     #[test]
     fn rapid_edits_and_forced_flush_preserve_last_value() {
@@ -262,5 +280,30 @@ mod tests {
         std::fs::write(&p, "{\"verified\":true}").unwrap();
         assert!(Config::load(&p).is_err());
         assert_eq!(std::fs::read_to_string(p).unwrap(), "{\"verified\":true}");
+    }
+
+    #[test]
+    fn schema_two_and_unknown_function_are_rejected_without_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let schema_two = dir.path().join("schema-two.json");
+        let mut old = serde_json::to_value(Config::default()).unwrap();
+        old["schema"] = serde_json::json!(2);
+        let old_bytes = serde_json::to_vec(&old).unwrap();
+        std::fs::write(&schema_two, &old_bytes).unwrap();
+        assert!(Config::load(&schema_two).is_err());
+        assert_eq!(std::fs::read(&schema_two).unwrap(), old_bytes);
+
+        let unknown = dir.path().join("unknown-function.json");
+        let mut invalid = serde_json::to_value(Config::default()).unwrap();
+        invalid["functions"] = serde_json::json!({
+            "media.not-a-function": {
+                "enabled": true,
+                "shortcuts": []
+            }
+        });
+        let invalid_bytes = serde_json::to_vec(&invalid).unwrap();
+        std::fs::write(&unknown, &invalid_bytes).unwrap();
+        assert!(Config::load(&unknown).is_err());
+        assert_eq!(std::fs::read(&unknown).unwrap(), invalid_bytes);
     }
 }

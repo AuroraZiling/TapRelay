@@ -5,7 +5,7 @@ use std::{
     rc::Rc,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc,
     },
     thread,
@@ -15,7 +15,7 @@ use taprelay_core::devices::{
     AdapterState, Availability, Coordinator, DeviceError, PairingHandoff,
 };
 use taprelay_core::{
-    command::QueuedCommand,
+    command::{CommandPhase, QueuedCommand, QueuedReport},
     hid,
     metadata::{Metadata, MetadataCache},
     ports::BackendError,
@@ -113,6 +113,7 @@ const HID_CONTROL_POINT_CHARACTERISTIC: u16 = 0x2a4c;
 const REPORT_CHARACTERISTIC: u16 = 0x2a4d;
 const PROTOCOL_MODE_CHARACTERISTIC: u16 = 0x2a4e;
 const PROTOCOL_MODE: [u8; 1] = [1];
+const PASSTHROUGH_CONSUMER_OWNER: u64 = 1u64 << 63;
 // Windows reserves the Device Information Service (0x180A), so do not try to
 // publish it: CreateAsync returns DisabledByPolicy and aborts the whole build.
 const ADVERTISED_SERVICES: &[u16] = &[HID_SERVICE, BATTERY_SERVICE];
@@ -163,6 +164,7 @@ pub enum Request {
         QueuedCommand,
         tokio::sync::oneshot::Sender<Result<(), String>>,
     ),
+    Report(QueuedReport),
     Refresh,
     Restart,
     Pair(String),
@@ -345,6 +347,14 @@ impl BleHandle {
                                         s.fail(&e);
                                     }
                                 }
+                                Ok(Request::Report(report)) => {
+                                    if let Some(s) = &mut server
+                                        && let Err(e) = s.send_report(report)
+                                        && !matches!(e, BackendError::Stale)
+                                    {
+                                        s.fail(&e);
+                                    }
+                                }
                                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
                                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                             }
@@ -453,16 +463,22 @@ fn publish_snapshot(
     }
 }
 
+struct ReportCharacteristic {
+    kind: hid::ReportKind,
+    characteristic: GattLocalCharacteristic,
+    read_token: i64,
+    subscription_token: i64,
+    current: Arc<Mutex<Vec<u8>>>,
+}
+
 struct Server {
     manager: Rc<RefCell<Coordinator>>,
     providers: Vec<GattServiceProvider>,
-    input: Option<GattLocalCharacteristic>,
+    reports: Vec<ReportCharacteristic>,
     control: Option<GattLocalCharacteristic>,
     protocol: Option<GattLocalCharacteristic>,
-    read_token: Option<i64>,
     write_token: Option<i64>,
     protocol_token: Option<i64>,
-    subscription_token: Option<i64>,
     session: Option<(GattSession, i64)>,
     maintained_session: Option<GattSession>,
     session_active: bool,
@@ -470,12 +486,15 @@ struct Server {
     radio_token: Option<i64>,
     advertisement_tokens: Vec<i64>,
     revision: Arc<AtomicU64>,
-    current: Arc<AtomicU8>,
     suspended: Arc<Mutex<std::collections::BTreeMap<String, bool>>>,
-    selected_client: Option<GattSubscribedClient>,
+    selected_clients: [Option<GattSubscribedClient>; 3],
+    consumer: hid::ConsumerState,
+    pending_pulses: Vec<(Instant, u64, taprelay_core::command::MediaCommand)>,
+    next_pulse_owner: u64,
     state: Snapshot,
     updates: watch::Sender<Snapshot>,
     synced: bool,
+    synced_reports: [bool; 3],
     generation_started: Instant,
     retry_at: Instant,
     maintenance: maintenance::Maintenance,
@@ -510,13 +529,11 @@ impl Server {
         let mut s = Self {
             manager,
             providers: vec![],
-            input: None,
+            reports: vec![],
             control: None,
             protocol: None,
-            read_token: None,
             write_token: None,
             protocol_token: None,
-            subscription_token: None,
             session: None,
             maintained_session: None,
             session_active: false,
@@ -524,9 +541,11 @@ impl Server {
             radio_token: None,
             advertisement_tokens: vec![],
             revision,
-            current: Arc::new(AtomicU8::new(0)),
             suspended: Arc::new(Mutex::new(std::collections::BTreeMap::new())),
-            selected_client: None,
+            selected_clients: std::array::from_fn(|_| None),
+            consumer: hid::ConsumerState::default(),
+            pending_pulses: vec![],
+            next_pulse_owner: 0,
             state: Snapshot {
                 generation: initial_generation,
                 activity: TransportActivity::Publishing,
@@ -537,6 +556,7 @@ impl Server {
             },
             updates,
             synced: false,
+            synced_reports: [false; 3],
             generation_started: Instant::now(),
             retry_at: Instant::now(),
             maintenance: maintenance::Maintenance::new(Instant::now()),
@@ -637,61 +657,10 @@ impl Server {
                     },
                 ))?);
                 self.protocol = Some(protocol);
-                let input = characteristic(
-                    &p,
-                    REPORT_CHARACTERISTIC,
-                    GattCharacteristicProperties::Read | GattCharacteristicProperties::Notify,
-                    None,
-                )?;
-                self.input = Some(input.clone());
-                let params = GattLocalDescriptorParameters::new()?;
-                params.SetStaticValue(&buffer(&hid::REPORT_REFERENCE)?)?;
-                params.SetReadProtectionLevel(GattProtectionLevel::EncryptionRequired)?;
-                let reference = input.CreateDescriptorAsync(uuid(0x2908), &params)?.join()?;
-                if reference.Error()? != BluetoothError::Success {
-                    return Err(windows::core::Error::new(
-                        windows::core::HRESULT(0x80004005u32 as i32),
-                        format!("Report Reference: {:?}", reference.Error()?),
-                    ));
+                for kind in hid::ReportKind::ALL {
+                    let report = self.create_report_characteristic(&p, kind)?;
+                    self.reports.push(report);
                 }
-                let current = self.current.clone();
-                self.read_token =
-                    Some(input.ReadRequested(&TypedEventHandler::<
-                        GattLocalCharacteristic,
-                        GattReadRequestedEventArgs,
-                    >::new(move |_, args| {
-                        callback(|| {
-                            let args = args.as_ref().ok_or_else(windows::core::Error::empty)?;
-                            let deferral = args.GetDeferral()?;
-                            let result = (|| {
-                                let r = args.GetRequestAsync()?.join()?;
-                                let offset = r.Offset()?;
-                                tracing::debug!("GATT input read offset={offset}");
-                                let value = [current.load(Ordering::Acquire)];
-                                if offset > 1 {
-                                    r.RespondWithProtocolError(7)
-                                } else {
-                                    r.RespondWithValue(&buffer(if offset == 0 {
-                                        &value[..]
-                                    } else {
-                                        &[]
-                                    })?)
-                                }
-                            })();
-                            deferral.Complete()?;
-                            result
-                        })
-                    }))?);
-                let rev = self.revision.clone();
-                self.subscription_token = Some(input.SubscribedClientsChanged(
-                    &TypedEventHandler::new(move |_, _| {
-                        callback(|| {
-                            rev.fetch_add(1, Ordering::AcqRel);
-                            tracing::info!("HID subscription changed");
-                            Ok(())
-                        })
-                    }),
-                )?);
                 let control = characteristic(
                     &p,
                     HID_CONTROL_POINT_CHARACTERISTIC,
@@ -738,6 +707,106 @@ impl Server {
         }
         Ok(())
     }
+
+    fn create_report_characteristic(
+        &mut self,
+        service: &GattServiceProvider,
+        kind: hid::ReportKind,
+    ) -> windows::core::Result<ReportCharacteristic> {
+        let characteristic = characteristic(
+            service,
+            REPORT_CHARACTERISTIC,
+            GattCharacteristicProperties::Read | GattCharacteristicProperties::Notify,
+            None,
+        )?;
+        let params = GattLocalDescriptorParameters::new()?;
+        params.SetStaticValue(&buffer(&kind.reference())?)?;
+        params.SetReadProtectionLevel(GattProtectionLevel::EncryptionRequired)?;
+        let reference = characteristic
+            .CreateDescriptorAsync(uuid(0x2908), &params)?
+            .join()?;
+        if reference.Error()? != BluetoothError::Success {
+            return Err(windows::core::Error::new(
+                windows::core::HRESULT(0x80004005u32 as i32),
+                format!("Report Reference {:?}: {:?}", kind, reference.Error()?),
+            ));
+        }
+
+        let current = Arc::new(Mutex::new(hid::neutral(kind)));
+        let read_current = current.clone();
+        let read_token = characteristic.ReadRequested(&TypedEventHandler::<
+            GattLocalCharacteristic,
+            GattReadRequestedEventArgs,
+        >::new(move |_, args| {
+            callback(|| {
+                let args = args.as_ref().ok_or_else(windows::core::Error::empty)?;
+                let deferral = args.GetDeferral()?;
+                let result = (|| {
+                    let request = args.GetRequestAsync()?.join()?;
+                    let offset = request.Offset()? as usize;
+                    let value = read_current
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .clone();
+                    if offset > value.len() {
+                        request.RespondWithProtocolError(7)
+                    } else {
+                        request.RespondWithValue(&buffer(&value[offset..])?)
+                    }
+                })();
+                deferral.Complete()?;
+                result
+            })
+        }))?;
+        let revision = self.revision.clone();
+        let subscription_token =
+            characteristic.SubscribedClientsChanged(&TypedEventHandler::new(move |_, _| {
+                callback(|| {
+                    revision.fetch_add(1, Ordering::AcqRel);
+                    tracing::info!(?kind, "HID report subscription changed");
+                    Ok(())
+                })
+            }))?;
+        Ok(ReportCharacteristic {
+            kind,
+            characteristic,
+            read_token,
+            subscription_token,
+            current,
+        })
+    }
+
+    fn report(&self, kind: hid::ReportKind) -> &ReportCharacteristic {
+        self.reports
+            .iter()
+            .find(|report| report.kind == kind)
+            .expect("all HID report characteristics are constructed together")
+    }
+
+    fn reset_report_state(&mut self) {
+        for report in &self.reports {
+            *report
+                .current
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = hid::neutral(report.kind);
+        }
+    }
+
+    fn maintenance_report(&self, kind: hid::ReportKind) -> Vec<u8> {
+        let mut bytes = self
+            .report(kind)
+            .current
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        if kind == hid::ReportKind::Mouse && bytes.len() == hid::MOUSE_REPORT_LENGTH {
+            // A maintenance notification may preserve button ownership, but
+            // must never replay an old relative movement or wheel delta.
+            bytes[1..].fill(0);
+        }
+        bytes
+    }
+
     fn publish(&mut self) {
         publish_snapshot(
             &self.updates,
@@ -748,7 +817,15 @@ impl Server {
     fn fail(&mut self, e: &BackendError) {
         self.maintenance.failure(Instant::now());
         self.synced = false;
+        self.synced_reports = [false; 3];
+        self.consumer = hid::ConsumerState::default();
+        self.pending_pulses.clear();
+        self.reset_report_state();
         self.state.ready = false;
+        self.state.consumer_ready = false;
+        self.state.keyboard_ready = false;
+        self.state.mouse_ready = false;
+        self.state.passthrough_ready = false;
         self.state.last_error = Some(if self.maintenance.failures >= 6 {
             format!(
                 "Automatic recovery stopped after repeated failures; disconnect and connect again: {e}"
@@ -776,6 +853,10 @@ impl Server {
             self.state.generation = revision;
             self.generation_started = Instant::now();
             self.synced = false;
+            self.synced_reports = [false; 3];
+            self.consumer = hid::ConsumerState::default();
+            self.pending_pulses.clear();
+            self.reset_report_state();
         }
         let radio_on = self.radio.State()? == RadioState::On;
         self.state.adapter = radio_on;
@@ -797,9 +878,8 @@ impl Server {
             }
         }
         let clients = self
-            .input
-            .as_ref()
-            .expect("constructed input")
+            .report(hid::ReportKind::Consumer)
+            .characteristic
             .SubscribedClients()?;
         let mut targets = self.connected.clone();
         for target in &mut targets {
@@ -893,21 +973,50 @@ impl Server {
         let selected_client = selected_index
             .and_then(|index| subscribers.get(index))
             .map(|(_, client)| client.clone());
+        // A passthrough session is valid only when keyboard and mouse are
+        // subscribed by the same physical device as the selected Consumer
+        // client. Report characteristics may expose different client objects,
+        // so compare their session device IDs rather than object identity.
+        let next_selected_clients = std::array::from_fn(|index| {
+            if index == 0 {
+                return selected_client.clone();
+            }
+            let kind = hid::ReportKind::ALL[index];
+            let channel_clients = self.report(kind).characteristic.SubscribedClients().ok()?;
+            channel_clients.into_iter().find(|candidate| {
+                let Some(selected) = selected_client.as_ref() else {
+                    return false;
+                };
+                candidate
+                    .Session()
+                    .and_then(|session| session.DeviceId())
+                    .and_then(|device| device.Id())
+                    .ok()
+                    == selected
+                        .Session()
+                        .and_then(|session| session.DeviceId())
+                        .and_then(|device| device.Id())
+                        .ok()
+            })
+        });
         // Discovery's generic Bluetooth link must not override the live HID session.
         let selected_session_active =
             active_subscriber(selected_index.and_then(|index| subscriber_targets.get(index)));
         let selected_link_lost = self.session_active && !selected_session_active;
-        let selected_client_replaced = self.selected_client.is_some()
+        let selected_client_replaced = self.selected_clients[0].is_some()
             && selected_client.is_some()
-            && self.selected_client != selected_client;
-        let selected_client_lost = self.selected_client.is_some()
+            && self.selected_clients[0] != selected_client;
+        let selected_client_lost = self.selected_clients[0].is_some()
             && (selected_client.is_none() || selected_link_lost || selected_client_replaced);
         // Keep the session and its connection request alive while inactive.
         // Sending remains gated separately by the live session status.
-        let next_selected_client = selected_client;
-        let client_changed = self.selected_client != next_selected_client;
+        let client_changed = self.selected_clients != next_selected_clients;
         if client_changed || self.session_active != selected_session_active {
             self.synced = false;
+            self.synced_reports = [false; 3];
+            self.consumer = hid::ConsumerState::default();
+            self.pending_pulses.clear();
+            self.reset_report_state();
             self.state.generation = self.revision.fetch_add(1, Ordering::AcqRel) + 1;
             self.generation_started = Instant::now();
         }
@@ -917,7 +1026,7 @@ impl Server {
             if let Some((s, token)) = self.session.take() {
                 s.RemoveSessionStatusChanged(token)?;
             }
-            if let Some(client) = &next_selected_client {
+            if let Some(client) = &next_selected_clients[0] {
                 let session = client.Session()?;
                 match session.CanMaintainConnection() {
                     Ok(true) => match session.MaintainConnection() {
@@ -952,7 +1061,7 @@ impl Server {
                 self.session = Some((session, token));
             }
         }
-        self.selected_client = next_selected_client;
+        self.selected_clients = next_selected_clients;
         if selected_client_lost {
             tracing::info!(
                 subscriber_missing = selected_index.is_none(),
@@ -1021,62 +1130,125 @@ impl Server {
                 .copied()
                 .unwrap_or(false)
         });
+        let report_active = hid::ReportKind::ALL.map(|kind| {
+            let index = match kind {
+                hid::ReportKind::Consumer => 0,
+                hid::ReportKind::Keyboard => 1,
+                hid::ReportKind::Mouse => 2,
+            };
+            self.selected_clients[index].as_ref().is_some_and(|client| {
+                client
+                    .Session()
+                    .and_then(|session| session.SessionStatus())
+                    .is_ok_and(|status| status == GattSessionStatus::Active)
+            })
+        });
+        for (index, active) in report_active.into_iter().enumerate() {
+            if !active {
+                self.synced_reports[index] = false;
+            }
+        }
         let available = radio_on
             && !self.state.hid_suspended
             && selected_session_active
-            && self.selected_client.is_some();
+            && self.selected_clients[0].is_some();
         if !available {
             self.synced = false;
+            self.synced_reports = [false; 3];
         }
-        self.state.ready = available && self.synced;
+        self.state.consumer_ready = available && report_active[0] && self.synced_reports[0];
+        self.state.keyboard_ready =
+            radio_on && !self.state.hid_suspended && report_active[1] && self.synced_reports[1];
+        self.state.mouse_ready =
+            radio_on && !self.state.hid_suspended && report_active[2] && self.synced_reports[2];
+        self.state.passthrough_ready = self.state.keyboard_ready && self.state.mouse_ready;
+        self.state.ready = available && self.synced_reports[0];
+        self.state.consumer_ready = self.state.ready;
         self.state.activity = TransportActivity::Idle;
         self.publish();
-        if available
-            && self.maintenance.due(Instant::now())
-            && Instant::now() >= self.retry_at
-            && let Some(client) = self.selected_client.clone()
-        {
+        if available && self.maintenance.due(Instant::now()) && Instant::now() >= self.retry_at {
             let revision = self.revision.load(Ordering::Acquire);
-            match self.notify(&client, &hid::NEUTRAL) {
-                Ok(()) => {
-                    let recovering = !self.synced || self.maintenance.failures > 0;
-                    self.synced = revision == self.revision.load(Ordering::Acquire);
-                    self.state.ready = self.synced;
-                    if self.synced {
-                        self.maintenance.success(Instant::now());
-                        self.state.last_error = None;
-                        self.state.device_error = None;
-                    } else {
-                        self.fail(&BackendError::Unavailable(
-                            "Session changed during synchronization".into(),
-                        ));
+            let recovering = !self.synced || self.maintenance.failures > 0;
+            let mut failed = None;
+            for (index, kind) in hid::ReportKind::ALL.into_iter().enumerate() {
+                if !report_active[index] {
+                    continue;
+                }
+                let Some(report_client) = self.selected_clients[index].clone() else {
+                    self.synced_reports[index] = false;
+                    continue;
+                };
+                let bytes = self.maintenance_report(kind);
+                match self.notify(kind, &report_client, &bytes) {
+                    Ok(()) => {
+                        self.synced_reports[index] =
+                            revision == self.revision.load(Ordering::Acquire);
                     }
-                    if recovering {
-                        tracing::info!(
-                            "Neutral notification completed; transport ready={}",
-                            self.synced
-                        );
+                    Err(error) => {
+                        failed = Some(error);
+                        break;
                     }
                 }
-                Err(e) => self.fail(&e),
             }
+            if let Some(error) = failed {
+                self.fail(&error);
+            } else if self.synced_reports[0] && revision == self.revision.load(Ordering::Acquire) {
+                self.synced = true;
+                self.maintenance.success(Instant::now());
+                self.state.last_error = None;
+                self.state.device_error = None;
+                if recovering {
+                    tracing::info!(
+                        "HID report synchronization completed; passthrough={}",
+                        self.state.passthrough_ready
+                    );
+                }
+            } else {
+                self.synced = false;
+            }
+        }
+        self.state.consumer_ready = available && self.synced_reports[0];
+        self.state.ready = self.state.consumer_ready;
+        self.state.keyboard_ready =
+            radio_on && !self.state.hid_suspended && report_active[1] && self.synced_reports[1];
+        self.state.mouse_ready =
+            radio_on && !self.state.hid_suspended && report_active[2] && self.synced_reports[2];
+        self.state.passthrough_ready = self.state.keyboard_ready && self.state.mouse_ready;
+        if available && let Err(error) = self.process_due_pulses() {
+            self.fail(&error);
         }
         self.publish();
         Ok(())
     }
-    fn notify(&mut self, client: &GattSubscribedClient, bytes: &[u8]) -> Result<(), BackendError> {
+    fn notify(
+        &mut self,
+        kind: hid::ReportKind,
+        client: &GattSubscribedClient,
+        bytes: &[u8],
+    ) -> Result<(), BackendError> {
+        if bytes.len() != kind.payload_len() {
+            return Err(BackendError::Unavailable(format!(
+                "{} report has {} bytes; expected {}",
+                kind_name(kind),
+                bytes.len(),
+                kind.payload_len()
+            )));
+        }
         self.state.activity = if self.synced {
             TransportActivity::Sending
         } else {
             TransportActivity::Synchronizing
         };
         self.publish();
-        self.current.store(bytes[0], Ordering::Release);
+        *self
+            .report(kind)
+            .current
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = bytes.to_vec();
+        let characteristic = self.report(kind).characteristic.clone();
         let pending = api(
             "NotifyValueForSubscribedClientAsync",
-            self.input
-                .as_ref()
-                .expect("input")
+            characteristic
                 .NotifyValueForSubscribedClientAsync(&api("DataWriter", buffer(bytes))?, client),
         )?;
         let start = Instant::now();
@@ -1103,7 +1275,8 @@ impl Server {
         let result = api("Notification.GetResults", pending.GetResults())?;
         let status = api("Notification.Status result", result.Status())?;
         tracing::debug!(
-            report = bytes[0],
+            report = ?kind,
+            length = bytes.len(),
             elapsed_ms = start.elapsed().as_millis(),
             "HID notification completed: {status:?}"
         );
@@ -1114,6 +1287,14 @@ impl Server {
             )));
         }
         Ok(())
+    }
+}
+
+fn kind_name(kind: hid::ReportKind) -> &'static str {
+    match kind {
+        hid::ReportKind::Consumer => "Consumer",
+        hid::ReportKind::Keyboard => "Keyboard",
+        hid::ReportKind::Mouse => "Mouse",
     }
 }
 impl Server {
@@ -1134,12 +1315,19 @@ impl Server {
                 session.RemoveSessionStatusChanged(token),
             )?;
         }
-        self.selected_client = None;
+        self.selected_clients = std::array::from_fn(|_| None);
+        self.consumer = hid::ConsumerState::default();
+        self.pending_pulses.clear();
+        self.reset_report_state();
         self.maintenance = maintenance::Maintenance::new(Instant::now());
         self.state.selected = target;
         self.state.target_status = None;
         self.synced = false;
         self.state.ready = false;
+        self.state.consumer_ready = false;
+        self.state.keyboard_ready = false;
+        self.state.mouse_ready = false;
+        self.state.passthrough_ready = false;
         self.revision.fetch_add(1, Ordering::AcqRel);
         self.publish();
         Ok(())
@@ -1156,22 +1344,105 @@ impl Server {
             tracing::warn!("Command dropped: expired, disconnected, changed target or not ready");
             return Err(BackendError::Stale);
         }
-        let target = self
-            .selected_client
+        let target = self.selected_clients[0]
             .clone()
             .ok_or_else(|| BackendError::Unavailable("No selected subscriber".into()))?;
-        let result = hid::click(
-            command.action,
-            |bytes| self.notify(&target, bytes),
-            // Give the receiver a distinct press before neutral. Do not shorten
-            // without receiver compatibility measurements.
-            || thread::sleep(Duration::from_millis(40)),
-        );
-        self.current.store(0, Ordering::Release);
+        let owner = command.action.usage() as u64;
+        let report = match command.phase {
+            CommandPhase::Press
+                if matches!(
+                    command.action,
+                    taprelay_core::command::MediaCommand::Rewind
+                        | taprelay_core::command::MediaCommand::FastForward
+                ) =>
+            {
+                self.consumer.press(owner, command.action);
+                self.consumer.report()
+            }
+            CommandPhase::Press => {
+                self.next_pulse_owner = self.next_pulse_owner.wrapping_add(1).max(1);
+                let pulse_owner = self.next_pulse_owner;
+                self.consumer.press(pulse_owner, command.action);
+                self.pending_pulses.push((
+                    Instant::now() + Duration::from_millis(40),
+                    pulse_owner,
+                    command.action,
+                ));
+                self.consumer.report()
+            }
+            CommandPhase::Release => {
+                self.consumer.release(owner, command.action);
+                self.consumer.report()
+            }
+        };
+        let result = self.notify(hid::ReportKind::Consumer, &target, &report);
         if result.is_ok() {
             self.maintenance.success(Instant::now());
         }
         result
+    }
+
+    fn send_report(&mut self, report: QueuedReport) -> Result<(), BackendError> {
+        self.refresh()?;
+        let ready = match report.kind {
+            hid::ReportKind::Consumer => self.state.consumer_ready,
+            hid::ReportKind::Keyboard => self.state.keyboard_ready,
+            hid::ReportKind::Mouse => self.state.mouse_ready,
+        };
+        if !report.valid(
+            self.state.selected.as_deref(),
+            self.revision.load(Ordering::Acquire),
+            ready,
+            Instant::now(),
+            self.generation_started,
+        ) {
+            return Err(BackendError::Stale);
+        }
+        let index = match report.kind {
+            hid::ReportKind::Consumer => 0,
+            hid::ReportKind::Keyboard => 1,
+            hid::ReportKind::Mouse => 2,
+        };
+        let target = self.selected_clients[index]
+            .clone()
+            .ok_or_else(|| BackendError::Unavailable("No subscribed HID report".into()))?;
+        let bytes = if report.kind == hid::ReportKind::Consumer {
+            // Runtime reports describe only the physical Consumer owner. The
+            // worker owns the final report so a media function cannot be
+            // released accidentally when passthrough changes its usage set.
+            self.consumer.clear_owner(PASSTHROUGH_CONSUMER_OWNER);
+            for usage in report
+                .bytes
+                .chunks(2)
+                .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]))
+            {
+                if usage != 0 {
+                    self.consumer.press_usage(PASSTHROUGH_CONSUMER_OWNER, usage);
+                }
+            }
+            self.consumer.report()
+        } else {
+            report.bytes
+        };
+        self.notify(report.kind, &target, &bytes)
+    }
+
+    fn process_due_pulses(&mut self) -> Result<(), BackendError> {
+        let now = Instant::now();
+        let mut index = 0;
+        while index < self.pending_pulses.len() {
+            if self.pending_pulses[index].0 > now {
+                index += 1;
+                continue;
+            }
+            let (_, owner, action) = self.pending_pulses.swap_remove(index);
+            self.consumer.release(owner, action);
+            if let Some(target) = self.selected_clients[0].clone() {
+                let report = self.consumer.report();
+                self.notify(hid::ReportKind::Consumer, &target, &report)?;
+            }
+        }
+        Ok(())
     }
 }
 impl Drop for Server {
@@ -1187,14 +1458,13 @@ impl Drop for Server {
         {
             tracing::warn!("Remove GATT callback: {e}");
         }
-        if let Some(c) = &self.input {
-            if let Some(t) = self.read_token
-                && let Err(e) = c.RemoveReadRequested(t)
-            {
+        for report in &self.reports {
+            if let Err(e) = report.characteristic.RemoveReadRequested(report.read_token) {
                 tracing::warn!("Remove GATT callback: {e}");
             }
-            if let Some(t) = self.subscription_token
-                && let Err(e) = c.RemoveSubscribedClientsChanged(t)
+            if let Err(e) = report
+                .characteristic
+                .RemoveSubscribedClientsChanged(report.subscription_token)
             {
                 tracing::warn!("Remove GATT callback: {e}");
             }

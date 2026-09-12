@@ -1,9 +1,33 @@
 //! Platform boundary. Views and the session never import Windows APIs.
 use anyhow::Result;
-use taprelay_core::{command::QueuedCommand, input::InputEvent, state::Snapshot};
+use taprelay_core::{
+    command::{QueuedCommand, QueuedReport},
+    function::FunctionConfigs,
+    input_router::{PhysicalInput, RouteResult, RoutedInput, RouterReason},
+    state::Snapshot,
+};
 use tokio::sync::{mpsc, oneshot};
 pub trait InputSource {
     fn is_finished(&self) -> bool;
+    fn configure(
+        &self,
+        _functions: &FunctionConfigs,
+        _listening: bool,
+        _recording: bool,
+        _remote_ready: bool,
+        _revision: u64,
+    ) -> RouteResult {
+        RouteResult::default()
+    }
+    fn terminate(&self, _reason: RouterReason) -> RouteResult {
+        RouteResult::default()
+    }
+    /// Replay an input that the synchronous platform hook consumed. The
+    /// default keeps non-Windows fakes and the recorder independent of native
+    /// input injection.
+    fn replay(&self, _input: PhysicalInput) -> Result<()> {
+        Ok(())
+    }
     fn failure(&self) -> Option<String> {
         None
     }
@@ -27,6 +51,9 @@ pub trait Transport {
     }
     fn invalidate(&self);
     fn send(&self, command: QueuedCommand) -> Result<oneshot::Receiver<Result<(), String>>>;
+    fn send_report(&self, _report: QueuedReport) -> Result<()> {
+        anyhow::bail!("HID input reports unavailable")
+    }
 }
 #[cfg(windows)]
 impl InputSource for taprelay_windows::input::InputHandle {
@@ -35,6 +62,22 @@ impl InputSource for taprelay_windows::input::InputHandle {
     }
     fn failure(&self) -> Option<String> {
         self.failure()
+    }
+    fn replay(&self, input: PhysicalInput) -> Result<()> {
+        Ok(self.replay(input)?)
+    }
+    fn configure(
+        &self,
+        functions: &FunctionConfigs,
+        listening: bool,
+        recording: bool,
+        remote_ready: bool,
+        revision: u64,
+    ) -> RouteResult {
+        self.configure(functions, listening, recording, remote_ready, revision)
+    }
+    fn terminate(&self, reason: RouterReason) -> RouteResult {
+        self.terminate(reason)
     }
 }
 #[cfg(windows)]
@@ -83,6 +126,11 @@ impl Transport for taprelay_windows::bluetooth::BleHandle {
             .try_send(taprelay_windows::bluetooth::Request::Send(c, tx))?;
         Ok(rx)
     }
+    fn send_report(&self, report: QueuedReport) -> Result<()> {
+        self.commands
+            .try_send(taprelay_windows::bluetooth::Request::Report(report))?;
+        Ok(())
+    }
 }
 /// A closed watch can still contain an unread terminal error. Always read it,
 /// and never let a dead worker leave an old ready state visible.
@@ -102,7 +150,7 @@ fn poll_snapshot(state: &mut tokio::sync::watch::Receiver<Snapshot>) -> Option<S
     }
 }
 
-pub fn input(sender: mpsc::Sender<InputEvent>) -> Result<Box<dyn InputSource>> {
+pub fn input(sender: mpsc::Sender<RoutedInput>) -> Result<Box<dyn InputSource>> {
     #[cfg(windows)]
     {
         Ok(Box::new(taprelay_windows::input::InputHandle::start(

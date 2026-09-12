@@ -31,24 +31,15 @@ pub enum PhysicalInput {
     Wheel { vertical: i32, horizontal: i32 },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PhysicalEvent {
-    pub input: PhysicalInput,
-    pub captured: Instant,
-}
-
 /// The Windows input thread is the owner of the router. It publishes the
 /// decision made at the physical edge together with the edge itself, so the
 /// application thread only applies outputs and never re-runs matching against
 /// a second copy of router state.
 #[derive(Debug, Clone)]
 pub enum RoutedInput {
+    Control(RouteResult),
     Edge {
         event: InputEvent,
-        result: RouteResult,
-    },
-    Motion {
-        event: PhysicalEvent,
         result: RouteResult,
     },
 }
@@ -59,7 +50,6 @@ pub enum RoutedOutput {
     /// Re-deliver an earlier physical input that the hook consumed while it
     /// waited to decide a later event (currently pending modifiers).
     Replay(PhysicalInput),
-    Remote(PhysicalInput),
     Function {
         binding: BindingKey,
         action: FunctionAction,
@@ -69,8 +59,6 @@ pub enum RoutedOutput {
         revision: u64,
         created: Instant,
     },
-    PassthroughChanged(bool),
-    ResetRemote,
     Feedback {
         binding: BindingKey,
         action: FunctionAction,
@@ -107,15 +95,13 @@ struct ActiveToken {
 }
 
 /// Owns physical state, exact shortcut matching, captured lifetimes, and the
-/// independent passthrough mode. Callers publish a new config at a revision
+/// function lifetimes. Callers publish a new config at a revision
 /// boundary and then feed subsequent physical events through `route`.
 pub struct InputRouter {
     index: BindingIndex,
     revision: u64,
     listening: bool,
     recording: bool,
-    remote_ready: bool,
-    passthrough: bool,
     physical: InputState,
     active: BTreeMap<InputCode, ActiveToken>,
     held_functions: BTreeMap<FunctionId, usize>,
@@ -124,12 +110,10 @@ pub struct InputRouter {
     pending_modifiers: Vec<InputCode>,
     captured_modifiers: BTreeSet<InputCode>,
     // A prefix replayed to the host keeps local ownership until its physical
-    // up edge, even if passthrough is toggled in the meantime.
+    // up edge, across configuration changes.
     local_held: BTreeSet<InputCode>,
-    remote_held: BTreeSet<InputCode>,
     suppressed_until_up: BTreeSet<InputCode>,
     next_token: u64,
-    passthrough_signature: (bool, Vec<crate::function::Shortcut>),
 }
 
 impl InputRouter {
@@ -139,30 +123,19 @@ impl InputRouter {
             revision,
             listening: false,
             recording: false,
-            remote_ready: false,
-            passthrough: false,
             physical: InputState::default(),
             active: BTreeMap::new(),
             held_functions: BTreeMap::new(),
             pending_modifiers: Vec::new(),
             captured_modifiers: BTreeSet::new(),
             local_held: BTreeSet::new(),
-            remote_held: BTreeSet::new(),
             suppressed_until_up: BTreeSet::new(),
             next_token: 0,
-            passthrough_signature: configs
-                .get(&FunctionId::VirtualPassthrough)
-                .map(|config| (config.enabled, config.shortcuts.clone()))
-                .unwrap_or_default(),
         }
     }
 
     pub fn revision(&self) -> u64 {
         self.revision
-    }
-
-    pub fn passthrough(&self) -> bool {
-        self.passthrough
     }
 
     pub fn set_listening(&mut self, listening: bool) -> RouteResult {
@@ -183,24 +156,10 @@ impl InputRouter {
         }
     }
 
-    pub fn set_remote_ready(&mut self, ready: bool) -> RouteResult {
-        let changed = self.remote_ready != ready;
-        self.remote_ready = ready;
-        if !ready && changed {
-            self.terminate(RouterReason::TransportLost)
-        } else {
-            self.stamp(RouteResult::default())
-        }
-    }
-
     pub fn update_config(&mut self, configs: &FunctionConfigs, revision: u64) -> RouteResult {
         if revision < self.revision {
             return self.stamp(RouteResult::default());
         }
-        let next_signature = configs
-            .get(&FunctionId::VirtualPassthrough)
-            .map(|config| (config.enabled, config.shortcuts.clone()))
-            .unwrap_or_default();
         let mut cleanup = RouteResult {
             revision: self.revision,
             consume: true,
@@ -231,17 +190,11 @@ impl InputRouter {
                     self.release_function(&active, &mut cleanup, Instant::now());
                 }
                 self.suppressed_until_up.insert(code);
-                if active.action == FunctionAction::TogglePassthrough {
-                    self.exit_passthrough(&mut cleanup);
-                }
             }
         }
-        if self.passthrough && self.passthrough_signature != next_signature {
-            self.exit_passthrough(&mut cleanup);
-        }
+
         self.index = next_index;
         self.revision = revision;
-        self.passthrough_signature = next_signature;
         self.stamp(cleanup)
     }
 
@@ -292,7 +245,6 @@ impl InputRouter {
         self.held_functions.clear();
         self.pending_modifiers.clear();
         self.captured_modifiers.clear();
-        self.exit_passthrough(&mut result);
         self.stamp(result)
     }
 
@@ -317,8 +269,8 @@ impl InputRouter {
     }
 
     /// Route an edge that belongs to TapRelay's own configuration window.
-    /// Physical state is still updated and a remote-owned button is released,
-    /// but this path never starts a configured function or enters passthrough.
+    /// Physical state is still updated and a captured function is released,
+    /// but this path never starts a configured function.
     pub fn route_local_event(&mut self, event: InputEvent) -> RouteResult {
         let changed = self.physical.update(event);
         if !changed {
@@ -327,13 +279,7 @@ impl InputRouter {
             {
                 return self.route_event(event);
             }
-            if event.down && self.remote_held.contains(&event.code) {
-                return RouteResult {
-                    revision: self.revision,
-                    consume: true,
-                    outputs: Vec::new(),
-                };
-            }
+
             return self.stamp(RouteResult::default());
         }
 
@@ -360,6 +306,9 @@ impl InputRouter {
             });
         }
         if !self.listening || self.recording {
+            if event.down {
+                self.local_held.insert(event.code);
+            }
             if !event.down {
                 self.local_held.remove(&event.code);
             }
@@ -379,16 +328,6 @@ impl InputRouter {
                 })],
             });
         }
-        if !event.down && self.remote_held.remove(&event.code) {
-            return self.stamp(RouteResult {
-                revision: self.revision,
-                consume: true,
-                outputs: vec![RoutedOutput::Remote(PhysicalInput::Edge {
-                    code: event.code,
-                    down: false,
-                })],
-            });
-        }
 
         let mut result = RouteResult {
             revision: self.revision,
@@ -396,6 +335,9 @@ impl InputRouter {
             outputs: Vec::new(),
         };
         self.flush_pending_local(&mut result);
+        if event.down {
+            self.local_held.insert(event.code);
+        }
         result
             .outputs
             .push(RoutedOutput::Local(PhysicalInput::Edge {
@@ -429,15 +371,13 @@ impl InputRouter {
         }
         let mut result = RouteResult {
             revision: self.revision,
-            consume: self.passthrough && self.remote_ready,
+            consume: false,
             outputs: Vec::new(),
         };
         self.flush_pending(&mut result);
-        if self.passthrough && self.remote_ready {
-            result.outputs.push(RoutedOutput::Remote(input));
-        } else {
-            result.outputs.push(RoutedOutput::Local(input));
-        }
+
+        result.outputs.push(RoutedOutput::Local(input));
+
         result
     }
 
@@ -461,16 +401,7 @@ impl InputRouter {
                     outputs: Vec::new(),
                 };
             }
-            if event.down && self.passthrough && self.remote_ready && remote_supported(event.code) {
-                // A held physical key may generate repeated Windows
-                // key-downs. The HID state already contains the key; do not
-                // turn OS auto-repeat into repeated down/up reports.
-                return RouteResult {
-                    revision: self.revision,
-                    consume: true,
-                    outputs: Vec::new(),
-                };
-            }
+
             return self.normal_input(event);
         }
 
@@ -486,6 +417,9 @@ impl InputRouter {
         }
 
         if !self.listening || self.recording {
+            if event.down {
+                self.local_held.insert(event.code);
+            }
             if !event.down {
                 self.local_held.remove(&event.code);
             }
@@ -544,6 +478,7 @@ impl InputRouter {
                 outputs: Vec::new(),
             };
             self.flush_pending(&mut result);
+
             result
                 .outputs
                 .push(RoutedOutput::Local(PhysicalInput::Edge {
@@ -567,29 +502,7 @@ impl InputRouter {
             };
         }
 
-        let remote = self.passthrough && self.remote_ready && remote_supported(event.code);
-        let mut result = RouteResult {
-            revision: self.revision,
-            consume: remote,
-            outputs: Vec::new(),
-        };
-        self.flush_pending(&mut result);
-        let output = PhysicalInput::Edge {
-            code: event.code,
-            down: event.down,
-        };
-        if remote {
-            if event.down {
-                self.remote_held.insert(event.code);
-            } else {
-                self.remote_held.remove(&event.code);
-            }
-            result.outputs.push(RoutedOutput::Remote(output));
-        } else {
-            result.consume = false;
-            result.outputs.push(RoutedOutput::Local(output));
-        }
-        result
+        self.normal_input(event)
     }
 
     fn normal_input(&mut self, event: InputEvent) -> RouteResult {
@@ -599,29 +512,25 @@ impl InputRouter {
                 down: event.down,
             });
         }
-        let remote = self.passthrough && self.remote_ready && remote_supported(event.code);
+
         let mut result = RouteResult {
             revision: self.revision,
-            consume: remote,
+            consume: false,
             outputs: Vec::new(),
         };
         self.flush_pending(&mut result);
-        if remote {
-            result
-                .outputs
-                .push(RoutedOutput::Remote(PhysicalInput::Edge {
-                    code: event.code,
-                    down: event.down,
-                }));
-        } else {
-            result.consume = false;
-            result
-                .outputs
-                .push(RoutedOutput::Local(PhysicalInput::Edge {
-                    code: event.code,
-                    down: event.down,
-                }));
+
+        result.consume = false;
+        if event.down {
+            self.local_held.insert(event.code);
         }
+        result
+            .outputs
+            .push(RoutedOutput::Local(PhysicalInput::Edge {
+                code: event.code,
+                down: event.down,
+            }));
+
         result
     }
 
@@ -640,38 +549,6 @@ impl InputRouter {
                 action: binding.action,
             }],
         };
-        if binding.action == FunctionAction::TogglePassthrough {
-            if self.remote_ready {
-                self.passthrough = !self.passthrough;
-                if !self.passthrough {
-                    self.exit_passthrough(&mut result);
-                } else {
-                    result.outputs.push(RoutedOutput::PassthroughChanged(true));
-                }
-            }
-            // The modifier prefix belongs to the toggle gesture. Consume its
-            // complete physical lifetime: it must not be replayed to the old
-            // route, and neither its later up nor a later key while it is
-            // still held may leak it to the new route.
-            self.suppressed_until_up
-                .extend(self.pending_modifiers.iter().copied());
-            self.pending_modifiers.clear();
-            self.captured_modifiers.clear();
-            self.active.insert(
-                binding.shortcut.primary_code(),
-                ActiveToken {
-                    binding: binding.key,
-                    shortcut: binding.shortcut,
-                    action: binding.action,
-                    activation: binding_activation(binding.key.function),
-                    token,
-                    revision: self.revision,
-                    created,
-                    hold_counted: false,
-                },
-            );
-            return result;
-        }
 
         let activation = binding_activation(binding.key.function);
         let hold_counted = activation == Activation::Hold;
@@ -703,7 +580,7 @@ impl InputRouter {
         // A function match consumes the modifier prefix until the associated
         // primary is released. If another ordinary input arrives later,
         // flush_pending will replay the still-held modifiers in order so the
-        // user can continue a normal host/remote chord without a timer-based
+        // user can continue a normal host chord without a timer-based
         // guess.
         self.captured_modifiers
             .extend(self.pending_modifiers.iter().copied());
@@ -761,61 +638,22 @@ impl InputRouter {
         if self.pending_modifiers.is_empty() {
             return;
         }
-        let route_remote = self.passthrough && self.remote_ready;
         for code in self.pending_modifiers.iter().copied() {
             if !replay_captured && self.captured_modifiers.contains(&code) {
                 self.suppressed_until_up.insert(code);
                 continue;
             }
             let input = PhysicalInput::Edge { code, down: true };
-            if route_remote {
-                self.remote_held.insert(code);
-                result.outputs.push(RoutedOutput::Remote(input));
-            } else {
-                self.local_held.insert(code);
-                result.outputs.push(RoutedOutput::Replay(input));
-            }
+
+            self.local_held.insert(code);
+            result.outputs.push(RoutedOutput::Replay(input));
         }
         self.pending_modifiers.clear();
         self.captured_modifiers.clear();
     }
 
     fn flush_pending_local(&mut self, result: &mut RouteResult) {
-        self.flush_pending_with_capture_local(result, false);
-    }
-
-    fn flush_pending_with_capture_local(
-        &mut self,
-        result: &mut RouteResult,
-        replay_captured: bool,
-    ) {
-        for code in self.pending_modifiers.iter().copied() {
-            if !replay_captured && self.captured_modifiers.contains(&code) {
-                self.suppressed_until_up.insert(code);
-                continue;
-            }
-            self.local_held.insert(code);
-            result
-                .outputs
-                .push(RoutedOutput::Replay(PhysicalInput::Edge {
-                    code,
-                    down: true,
-                }));
-        }
-        self.pending_modifiers.clear();
-        self.captured_modifiers.clear();
-    }
-
-    fn exit_passthrough(&mut self, result: &mut RouteResult) {
-        if !self.passthrough && self.remote_held.is_empty() {
-            return;
-        }
-        self.suppressed_until_up
-            .extend(self.remote_held.iter().copied());
-        self.remote_held.clear();
-        self.passthrough = false;
-        result.outputs.push(RoutedOutput::ResetRemote);
-        result.outputs.push(RoutedOutput::PassthroughChanged(false));
+        self.flush_pending_unmatched(result);
     }
 }
 
@@ -823,19 +661,9 @@ fn binding_activation(function: FunctionId) -> Activation {
     crate::function::function_definition(function).activation
 }
 
-fn remote_supported(code: InputCode) -> bool {
-    match code {
-        InputCode::Mouse(_) => true,
-        InputCode::Key(key) => {
-            crate::hid::keyboard_modifier_bit(key).is_some()
-                || crate::hid::keyboard_usage(key).is_some()
-                || crate::hid::consumer_usage(key).is_some()
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use crate::{
         function::{FunctionConfig, ModifierSet, Shortcut, default_configs},
@@ -967,70 +795,6 @@ mod tests {
     }
 
     #[test]
-    fn toggle_with_modifier_does_not_leak_modifier_to_either_route() {
-        let mut router = router_with(
-            Shortcut::keyboard(
-                ModifierSet {
-                    ctrl: true,
-                    ..Default::default()
-                },
-                0x70,
-            ),
-            FunctionId::VirtualPassthrough,
-        );
-        router.set_remote_ready(true);
-        router.route_event(event(InputCode::Key(0xa2), true));
-        let toggle = router.route_event(event(InputCode::Key(0x70), true));
-        assert!(router.passthrough());
-        assert!(!toggle.outputs.iter().any(|output| {
-            matches!(
-                output,
-                RoutedOutput::Replay(PhysicalInput::Edge {
-                    code: InputCode::Key(0xa2),
-                    ..
-                })
-            )
-        }));
-        let ordinary = router.route_event(event(InputCode::Key(0x43), true));
-        assert!(ordinary.outputs.iter().any(|output| matches!(
-            output,
-            RoutedOutput::Remote(PhysicalInput::Edge {
-                code: InputCode::Key(0x43),
-                down: true
-            })
-        )));
-        assert!(!ordinary.outputs.iter().any(|output| matches!(
-            output,
-            RoutedOutput::Remote(PhysicalInput::Edge {
-                code: InputCode::Key(0xa2),
-                down: true
-            })
-        )));
-        let modifier_up = router.route_event(event(InputCode::Key(0xa2), false));
-        assert!(modifier_up.consume && modifier_up.outputs.is_empty());
-    }
-
-    #[test]
-    fn passthrough_key_repeat_is_consumed_without_a_second_remote_edge() {
-        let mut router = router_with(
-            Shortcut::keyboard(ModifierSet::empty(), 0x70),
-            FunctionId::VirtualPassthrough,
-        );
-        router.set_remote_ready(true);
-        router.route_event(event(InputCode::Key(0x70), true));
-        let first = router.route_event(event(InputCode::Key(0x41), true));
-        assert!(first.consume);
-        assert!(
-            first
-                .outputs
-                .iter()
-                .any(|output| matches!(output, RoutedOutput::Remote(_)))
-        );
-        let repeat = router.route_event(event(InputCode::Key(0x41), true));
-        assert!(repeat.consume && repeat.outputs.is_empty());
-    }
-
-    #[test]
     fn termination_suppresses_consumed_modifier_tail_up() {
         let mut router = router_with(
             Shortcut::keyboard(
@@ -1090,43 +854,6 @@ mod tests {
                 .outputs
                 .iter()
                 .any(|o| matches!(o, RoutedOutput::Function { down: false, .. }))
-        );
-    }
-
-    #[test]
-    fn passthrough_toggle_takes_effect_before_the_next_event() {
-        let mut router = router_with(
-            Shortcut::keyboard(ModifierSet::empty(), 0x70),
-            FunctionId::VirtualPassthrough,
-        );
-        router.set_remote_ready(true);
-        let toggle = router.route_event(event(InputCode::Key(0x70), true));
-        assert!(toggle.consume);
-        assert!(router.passthrough());
-        let next = router.route_event(event(InputCode::Key(0x41), true));
-        assert!(next.consume);
-        assert!(
-            next.outputs
-                .iter()
-                .any(|output| matches!(output, RoutedOutput::Remote(_)))
-        );
-    }
-
-    #[test]
-    fn transport_loss_clears_remote_mode_and_owned_state() {
-        let mut router = router_with(
-            Shortcut::keyboard(ModifierSet::empty(), 0x70),
-            FunctionId::VirtualPassthrough,
-        );
-        router.set_remote_ready(true);
-        router.route_event(event(InputCode::Key(0x70), true));
-        router.route_event(event(InputCode::Key(0x41), true));
-        let lost = router.set_remote_ready(false);
-        assert!(!router.passthrough());
-        assert!(
-            lost.outputs
-                .iter()
-                .any(|output| matches!(output, RoutedOutput::ResetRemote))
         );
     }
 
@@ -1312,45 +1039,5 @@ mod tests {
                 down: false
             })]
         ));
-    }
-
-    #[test]
-    fn disabling_a_toggle_suppresses_the_tail_up_of_a_remote_key() {
-        let toggle = Shortcut::keyboard(ModifierSet::empty(), 0x70);
-        let mut router = router_with(toggle.clone(), FunctionId::VirtualPassthrough);
-        router.set_remote_ready(true);
-        router.route_event(event(InputCode::Key(0x70), true));
-        let down = router.route_event(event(InputCode::Key(0x41), true));
-        assert!(down.consume);
-        let toggle_up = router.route_event(event(InputCode::Key(0x70), false));
-        assert!(toggle_up.consume);
-        let off = router.route_event(event(InputCode::Key(0x70), true));
-        assert!(off.consume);
-        assert!(
-            off.outputs
-                .iter()
-                .any(|output| matches!(output, RoutedOutput::PassthroughChanged(false)))
-        );
-        let tail_up = router.route_event(event(InputCode::Key(0x41), false));
-        assert!(tail_up.consume && tail_up.outputs.is_empty());
-    }
-
-    #[test]
-    fn an_unencodable_keyboard_edge_is_not_silently_swallowed_in_passthrough() {
-        let mut router = router_with(
-            Shortcut::keyboard(ModifierSet::empty(), 0x70),
-            FunctionId::VirtualPassthrough,
-        );
-        router.set_remote_ready(true);
-        router.route_event(event(InputCode::Key(0x70), true));
-        let result = router.route_event(event(InputCode::Key(0x01), true));
-        assert!(!result.consume);
-        assert!(result.outputs.iter().any(|output| matches!(
-            output,
-            RoutedOutput::Local(PhysicalInput::Edge {
-                code: InputCode::Key(0x01),
-                down: true
-            })
-        )));
     }
 }

@@ -15,7 +15,7 @@ use taprelay_core::devices::{
     AdapterState, Availability, Coordinator, DeviceError, PairingHandoff,
 };
 use taprelay_core::{
-    command::{CommandPhase, QueuedCommand, QueuedReport},
+    command::{CommandPhase, QueuedCommand},
     hid,
     metadata::{Metadata, MetadataCache},
     ports::BackendError,
@@ -113,7 +113,6 @@ const HID_CONTROL_POINT_CHARACTERISTIC: u16 = 0x2a4c;
 const REPORT_CHARACTERISTIC: u16 = 0x2a4d;
 const PROTOCOL_MODE_CHARACTERISTIC: u16 = 0x2a4e;
 const PROTOCOL_MODE: [u8; 1] = [1];
-const PASSTHROUGH_CONSUMER_OWNER: u64 = 1u64 << 63;
 // Windows reserves the Device Information Service (0x180A), so do not try to
 // publish it: CreateAsync returns DisabledByPolicy and aborts the whole build.
 const ADVERTISED_SERVICES: &[u16] = &[HID_SERVICE, BATTERY_SERVICE];
@@ -164,19 +163,28 @@ pub enum Request {
         QueuedCommand,
         tokio::sync::oneshot::Sender<Result<(), String>>,
     ),
-    Report(QueuedReport),
     Refresh,
     Restart,
     Pair(String),
 }
 pub struct BleHandle {
-    pub commands: mpsc::SyncSender<Request>,
+    commands: mpsc::SyncSender<Request>,
     pub state: watch::Receiver<Snapshot>,
     stop: Arc<AtomicBool>,
     revision: Arc<AtomicU64>,
     thread: Option<thread::JoinHandle<()>>,
 }
 impl BleHandle {
+    pub fn request(&self, request: Request) -> Result<(), BackendError> {
+        self.commands
+            .try_send(request)
+            .map_err(|_| BackendError::Unavailable("Bluetooth control queue unavailable".into()))?;
+        if let Some(t) = &self.thread {
+            t.thread().unpark();
+        }
+        Ok(())
+    }
+
     pub fn is_finished(&self) -> bool {
         self.state.has_changed().is_err() || self.thread.as_ref().is_none_or(|t| t.is_finished())
     }
@@ -274,9 +282,19 @@ impl BleHandle {
                                 }
                                 refresh_at = Instant::now() + Duration::from_millis(100);
                             }
-                            match rx
-                                .recv_timeout(refresh_at.saturating_duration_since(Instant::now()))
-                            {
+                            let request = match rx.try_recv() {
+                                Ok(request) => Ok(request),
+                                Err(mpsc::TryRecvError::Disconnected) => {
+                                    Err(mpsc::RecvTimeoutError::Disconnected)
+                                }
+                                Err(mpsc::TryRecvError::Empty) => {
+                                    thread::park_timeout(
+                                        refresh_at.saturating_duration_since(Instant::now()),
+                                    );
+                                    Err(mpsc::RecvTimeoutError::Timeout)
+                                }
+                            };
+                            match request {
                                 Ok(Request::Restart) => {
                                     restart = true;
                                 }
@@ -347,16 +365,23 @@ impl BleHandle {
                                         s.fail(&e);
                                     }
                                 }
-                                Ok(Request::Report(report)) => {
-                                    if let Some(s) = &mut server
-                                        && let Err(e) = s.send_report(report)
-                                        && !matches!(e, BackendError::Stale)
-                                    {
-                                        s.fail(&e);
-                                    }
-                                }
+
                                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
                                 Err(mpsc::RecvTimeoutError::Timeout) => {}
+                            }
+                        }
+                        // The input hook is already released. Clear every HID
+                        // collection before dropping the service; never enqueue
+                        // a shutdown release behind stale pointer movement.
+                        if let Some(s) = &mut server {
+                            for (index, kind) in hid::ReportKind::ALL.into_iter().enumerate() {
+                                if let Some(client) = s.selected_clients[index].clone() {
+                                    let bytes = vec![0; kind.payload_len()];
+                                    if let Err(error) = s.notify(kind, &client, &bytes) {
+                                        tracing::warn!(?error, "Shutdown HID release failed");
+                                        break;
+                                    }
+                                }
                             }
                         }
                         Ok(())
@@ -391,6 +416,7 @@ impl Drop for BleHandle {
         self.stop.store(true, Ordering::Release);
         let _ = self.commands.try_send(Request::Refresh);
         if let Some(t) = self.thread.take() {
+            t.thread().unpark();
             let deadline = Instant::now() + Duration::from_secs(2);
             while !t.is_finished() && Instant::now() < deadline {
                 thread::sleep(Duration::from_millis(10));
@@ -487,14 +513,14 @@ struct Server {
     advertisement_tokens: Vec<i64>,
     revision: Arc<AtomicU64>,
     suspended: Arc<Mutex<std::collections::BTreeMap<String, bool>>>,
-    selected_clients: [Option<GattSubscribedClient>; 3],
+    selected_clients: [Option<GattSubscribedClient>; 1],
     consumer: hid::ConsumerState,
     pending_pulses: Vec<(Instant, u64, taprelay_core::command::MediaCommand)>,
     next_pulse_owner: u64,
     state: Snapshot,
     updates: watch::Sender<Snapshot>,
     synced: bool,
-    synced_reports: [bool; 3],
+    synced_reports: [bool; 1],
     generation_started: Instant,
     retry_at: Instant,
     maintenance: maintenance::Maintenance,
@@ -556,7 +582,7 @@ impl Server {
             },
             updates,
             synced: false,
-            synced_reports: [false; 3],
+            synced_reports: [false; 1],
             generation_started: Instant::now(),
             retry_at: Instant::now(),
             maintenance: maintenance::Maintenance::new(Instant::now()),
@@ -793,18 +819,11 @@ impl Server {
     }
 
     fn maintenance_report(&self, kind: hid::ReportKind) -> Vec<u8> {
-        let mut bytes = self
-            .report(kind)
+        self.report(kind)
             .current
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone();
-        if kind == hid::ReportKind::Mouse && bytes.len() == hid::MOUSE_REPORT_LENGTH {
-            // A maintenance notification may preserve button ownership, but
-            // must never replay an old relative movement or wheel delta.
-            bytes[1..].fill(0);
-        }
-        bytes
+            .clone()
     }
 
     fn publish(&mut self) {
@@ -817,15 +836,12 @@ impl Server {
     fn fail(&mut self, e: &BackendError) {
         self.maintenance.failure(Instant::now());
         self.synced = false;
-        self.synced_reports = [false; 3];
+        self.synced_reports = [false; 1];
         self.consumer = hid::ConsumerState::default();
         self.pending_pulses.clear();
         self.reset_report_state();
         self.state.ready = false;
         self.state.consumer_ready = false;
-        self.state.keyboard_ready = false;
-        self.state.mouse_ready = false;
-        self.state.passthrough_ready = false;
         self.state.last_error = Some(if self.maintenance.failures >= 6 {
             format!(
                 "Automatic recovery stopped after repeated failures; disconnect and connect again: {e}"
@@ -853,7 +869,7 @@ impl Server {
             self.state.generation = revision;
             self.generation_started = Instant::now();
             self.synced = false;
-            self.synced_reports = [false; 3];
+            self.synced_reports = [false; 1];
             self.consumer = hid::ConsumerState::default();
             self.pending_pulses.clear();
             self.reset_report_state();
@@ -973,32 +989,7 @@ impl Server {
         let selected_client = selected_index
             .and_then(|index| subscribers.get(index))
             .map(|(_, client)| client.clone());
-        // A passthrough session is valid only when keyboard and mouse are
-        // subscribed by the same physical device as the selected Consumer
-        // client. Report characteristics may expose different client objects,
-        // so compare their session device IDs rather than object identity.
-        let next_selected_clients = std::array::from_fn(|index| {
-            if index == 0 {
-                return selected_client.clone();
-            }
-            let kind = hid::ReportKind::ALL[index];
-            let channel_clients = self.report(kind).characteristic.SubscribedClients().ok()?;
-            channel_clients.into_iter().find(|candidate| {
-                let Some(selected) = selected_client.as_ref() else {
-                    return false;
-                };
-                candidate
-                    .Session()
-                    .and_then(|session| session.DeviceId())
-                    .and_then(|device| device.Id())
-                    .ok()
-                    == selected
-                        .Session()
-                        .and_then(|session| session.DeviceId())
-                        .and_then(|device| device.Id())
-                        .ok()
-            })
-        });
+        let next_selected_clients = [selected_client.clone()];
         // Discovery's generic Bluetooth link must not override the live HID session.
         let selected_session_active =
             active_subscriber(selected_index.and_then(|index| subscriber_targets.get(index)));
@@ -1013,7 +1004,7 @@ impl Server {
         let client_changed = self.selected_clients != next_selected_clients;
         if client_changed || self.session_active != selected_session_active {
             self.synced = false;
-            self.synced_reports = [false; 3];
+            self.synced_reports = [false; 1];
             self.consumer = hid::ConsumerState::default();
             self.pending_pulses.clear();
             self.reset_report_state();
@@ -1133,8 +1124,6 @@ impl Server {
         let report_active = hid::ReportKind::ALL.map(|kind| {
             let index = match kind {
                 hid::ReportKind::Consumer => 0,
-                hid::ReportKind::Keyboard => 1,
-                hid::ReportKind::Mouse => 2,
             };
             self.selected_clients[index].as_ref().is_some_and(|client| {
                 client
@@ -1154,14 +1143,9 @@ impl Server {
             && self.selected_clients[0].is_some();
         if !available {
             self.synced = false;
-            self.synced_reports = [false; 3];
+            self.synced_reports = [false; 1];
         }
         self.state.consumer_ready = available && report_active[0] && self.synced_reports[0];
-        self.state.keyboard_ready =
-            radio_on && !self.state.hid_suspended && report_active[1] && self.synced_reports[1];
-        self.state.mouse_ready =
-            radio_on && !self.state.hid_suspended && report_active[2] && self.synced_reports[2];
-        self.state.passthrough_ready = self.state.keyboard_ready && self.state.mouse_ready;
         self.state.ready = available && self.synced_reports[0];
         self.state.consumer_ready = self.state.ready;
         self.state.activity = TransportActivity::Idle;
@@ -1198,10 +1182,7 @@ impl Server {
                 self.state.last_error = None;
                 self.state.device_error = None;
                 if recovering {
-                    tracing::info!(
-                        "HID report synchronization completed; passthrough={}",
-                        self.state.passthrough_ready
-                    );
+                    tracing::info!("Media HID report synchronization completed");
                 }
             } else {
                 self.synced = false;
@@ -1209,11 +1190,6 @@ impl Server {
         }
         self.state.consumer_ready = available && self.synced_reports[0];
         self.state.ready = self.state.consumer_ready;
-        self.state.keyboard_ready =
-            radio_on && !self.state.hid_suspended && report_active[1] && self.synced_reports[1];
-        self.state.mouse_ready =
-            radio_on && !self.state.hid_suspended && report_active[2] && self.synced_reports[2];
-        self.state.passthrough_ready = self.state.keyboard_ready && self.state.mouse_ready;
         if available && let Err(error) = self.process_due_pulses() {
             self.fail(&error);
         }
@@ -1239,7 +1215,9 @@ impl Server {
         } else {
             TransportActivity::Synchronizing
         };
-        self.publish();
+        if !self.synced {
+            self.publish();
+        }
         *self
             .report(kind)
             .current
@@ -1251,36 +1229,37 @@ impl Server {
             characteristic
                 .NotifyValueForSubscribedClientAsync(&api("DataWriter", buffer(bytes))?, client),
         )?;
-        let start = Instant::now();
-        let mut reported = false;
-        // Never overlap an uncertain native operation with a later report.
-        while api("Notification.Status", pending.Status())? == windows_future::AsyncStatus::Started
-        {
-            if !reported && start.elapsed() > Duration::from_secs(5) {
-                reported = true;
-                self.synced = false;
-                self.state.ready = false;
-                self.state.last_error =
-                    Some("Notification pending >5s; waiting for Windows before release".into());
-                self.state.device_error = Some(DeviceError::ConnectionFailed);
-                self.publish();
-                if self.maintenance.failures == 0 {
-                    tracing::warn!(
-                        "Notification pending >5s; waiting for Windows, no overlapping send"
-                    );
-                }
-            }
-            thread::sleep(Duration::from_millis(10));
+        let (finished, completion) = mpsc::sync_channel(1);
+        api(
+            "Notification.Completed",
+            pending.SetCompleted(&windows_future::AsyncOperationCompletedHandler::new(
+                move |_, _| {
+                    let _ = finished.try_send(());
+                    Ok(())
+                },
+            )),
+        )?;
+        // Completion wakes this serial sender immediately. On timeout, revoke
+        // local capture first, but never overlap an uncertain native operation.
+        let timed_out = completion.recv_timeout(Duration::from_millis(250)).is_err();
+        if timed_out {
+            self.synced = false;
+            self.state.ready = false;
+            self.revision.fetch_add(1, Ordering::AcqRel);
+            self.state.last_error =
+                Some("HID notification stalled; input returned to this computer".into());
+            self.state.device_error = Some(DeviceError::ConnectionFailed);
+            self.publish();
+            completion.recv().map_err(|_| {
+                BackendError::Unavailable("Notification completion disconnected".into())
+            })?;
         }
         let result = api("Notification.GetResults", pending.GetResults())?;
         let status = api("Notification.Status result", result.Status())?;
-        tracing::debug!(
-            report = ?kind,
-            length = bytes.len(),
-            elapsed_ms = start.elapsed().as_millis(),
-            "HID notification completed: {status:?}"
-        );
         self.state.activity = TransportActivity::Idle;
+        if timed_out {
+            return Err(BackendError::Stale);
+        }
         if status != GattCommunicationStatus::Success {
             return Err(BackendError::Unavailable(format!(
                 "HID notification: {status:?}"
@@ -1293,8 +1272,6 @@ impl Server {
 fn kind_name(kind: hid::ReportKind) -> &'static str {
     match kind {
         hid::ReportKind::Consumer => "Consumer",
-        hid::ReportKind::Keyboard => "Keyboard",
-        hid::ReportKind::Mouse => "Mouse",
     }
 }
 impl Server {
@@ -1325,9 +1302,6 @@ impl Server {
         self.synced = false;
         self.state.ready = false;
         self.state.consumer_ready = false;
-        self.state.keyboard_ready = false;
-        self.state.mouse_ready = false;
-        self.state.passthrough_ready = false;
         self.revision.fetch_add(1, Ordering::AcqRel);
         self.publish();
         Ok(())
@@ -1380,51 +1354,6 @@ impl Server {
             self.maintenance.success(Instant::now());
         }
         result
-    }
-
-    fn send_report(&mut self, report: QueuedReport) -> Result<(), BackendError> {
-        self.refresh()?;
-        let ready = match report.kind {
-            hid::ReportKind::Consumer => self.state.consumer_ready,
-            hid::ReportKind::Keyboard => self.state.keyboard_ready,
-            hid::ReportKind::Mouse => self.state.mouse_ready,
-        };
-        if !report.valid(
-            self.state.selected.as_deref(),
-            self.revision.load(Ordering::Acquire),
-            ready,
-            Instant::now(),
-            self.generation_started,
-        ) {
-            return Err(BackendError::Stale);
-        }
-        let index = match report.kind {
-            hid::ReportKind::Consumer => 0,
-            hid::ReportKind::Keyboard => 1,
-            hid::ReportKind::Mouse => 2,
-        };
-        let target = self.selected_clients[index]
-            .clone()
-            .ok_or_else(|| BackendError::Unavailable("No subscribed HID report".into()))?;
-        let bytes = if report.kind == hid::ReportKind::Consumer {
-            // Runtime reports describe only the physical Consumer owner. The
-            // worker owns the final report so a media function cannot be
-            // released accidentally when passthrough changes its usage set.
-            self.consumer.clear_owner(PASSTHROUGH_CONSUMER_OWNER);
-            for usage in report
-                .bytes
-                .chunks(2)
-                .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]))
-            {
-                if usage != 0 {
-                    self.consumer.press_usage(PASSTHROUGH_CONSUMER_OWNER, usage);
-                }
-            }
-            self.consumer.report()
-        } else {
-            report.bytes
-        };
-        self.notify(report.kind, &target, &bytes)
     }
 
     fn process_due_pulses(&mut self) -> Result<(), BackendError> {

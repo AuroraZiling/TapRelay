@@ -10,6 +10,7 @@ mod logging;
 mod platform;
 mod receiver_view;
 mod runtime;
+mod runtime_worker;
 #[cfg(windows)]
 mod window_rendering;
 slint::include_modules!();

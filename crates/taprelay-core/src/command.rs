@@ -1,4 +1,3 @@
-use crate::hid::ReportKind;
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
@@ -49,36 +48,6 @@ pub struct QueuedCommand {
     pub target: String,
     pub generation: u64,
     pub created: Instant,
-}
-
-#[derive(Debug, Clone)]
-pub struct QueuedReport {
-    pub kind: ReportKind,
-    pub bytes: Vec<u8>,
-    pub target: String,
-    pub generation: u64,
-    pub created: Instant,
-    /// Releases and reset reports are required to clear state even when a
-    /// key or button was held longer than the interactive press TTL.
-    pub must_deliver: bool,
-}
-
-impl QueuedReport {
-    pub fn valid(
-        &self,
-        target: Option<&str>,
-        generation: u64,
-        ready: bool,
-        now: Instant,
-        generation_started: Instant,
-    ) -> bool {
-        ready
-            && target == Some(self.target.as_str())
-            && generation == self.generation
-            && self.created >= generation_started
-            && (self.must_deliver || now.saturating_duration_since(self.created) <= COMMAND_TTL)
-            && self.bytes.len() == self.kind.payload_len()
-    }
 }
 
 impl QueuedCommand {
@@ -151,46 +120,5 @@ mod tests {
         assert!(!press.valid(Some("a"), 1, true, now + Duration::from_secs(1), now));
         assert!(release.valid(Some("a"), 1, true, now + Duration::from_secs(1), now));
         assert!(!release.valid(Some("a"), 2, true, now, now));
-    }
-
-    #[test]
-    fn reports_require_the_declared_complete_payload() {
-        let now = Instant::now();
-        let report = QueuedReport {
-            kind: ReportKind::Keyboard,
-            bytes: vec![0; crate::hid::KEYBOARD_REPORT_LENGTH],
-            target: "a".into(),
-            generation: 1,
-            created: now,
-            must_deliver: false,
-        };
-        assert!(report.valid(Some("a"), 1, true, now, now));
-        assert!(
-            !QueuedReport {
-                bytes: vec![0],
-                ..report
-            }
-            .valid(Some("a"), 1, true, now, now)
-        );
-    }
-
-    #[test]
-    fn mandatory_report_release_does_not_expire_after_a_long_hold() {
-        let created = Instant::now();
-        let report = QueuedReport {
-            kind: ReportKind::Keyboard,
-            bytes: vec![0; crate::hid::KEYBOARD_REPORT_LENGTH],
-            target: "a".into(),
-            generation: 1,
-            created,
-            must_deliver: true,
-        };
-        assert!(report.valid(
-            Some("a"),
-            1,
-            true,
-            created + Duration::from_secs(5),
-            created
-        ));
     }
 }

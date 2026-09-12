@@ -15,7 +15,6 @@ use std::collections::{BTreeMap, HashSet};
 #[serde(rename_all = "lowercase")]
 pub enum CategoryId {
     Media,
-    Virtual,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,7 +27,6 @@ pub enum Activation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FunctionAction {
     Media(MediaCommand),
-    TogglePassthrough,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,8 +53,6 @@ pub enum FunctionId {
     MediaRewind,
     #[serde(rename = "media.fast-forward")]
     MediaFastForward,
-    #[serde(rename = "virtual.passthrough")]
-    VirtualPassthrough,
 }
 
 impl FunctionId {
@@ -68,7 +64,6 @@ impl FunctionId {
             Self::MediaMute => "media.mute",
             Self::MediaRewind => "media.rewind",
             Self::MediaFastForward => "media.fast-forward",
-            Self::VirtualPassthrough => "virtual.passthrough",
         }
     }
 
@@ -80,13 +75,12 @@ impl FunctionId {
             "media.mute" => Self::MediaMute,
             "media.rewind" => Self::MediaRewind,
             "media.fast-forward" => Self::MediaFastForward,
-            "virtual.passthrough" => Self::VirtualPassthrough,
             _ => return None,
         })
     }
 }
 
-pub const FUNCTION_CATALOG: [FunctionDefinition; 7] = [
+pub const FUNCTION_CATALOG: [FunctionDefinition; 6] = [
     FunctionDefinition {
         id: FunctionId::MediaPlayPause,
         category: CategoryId::Media,
@@ -134,14 +128,6 @@ pub const FUNCTION_CATALOG: [FunctionDefinition; 7] = [
         action: FunctionAction::Media(MediaCommand::FastForward),
         name_key: "function.media.fastforward",
         category_key: "function.category.media",
-    },
-    FunctionDefinition {
-        id: FunctionId::VirtualPassthrough,
-        category: CategoryId::Virtual,
-        activation: Activation::Press,
-        action: FunctionAction::TogglePassthrough,
-        name_key: "function.virtual.passthrough",
-        category_key: "function.category.virtual",
     },
 ];
 
@@ -361,9 +347,8 @@ mod tests {
 
     #[test]
     fn catalog_has_stable_order_and_all_functions_default_off() {
-        assert_eq!(FUNCTION_CATALOG.len(), 7);
+        assert_eq!(FUNCTION_CATALOG.len(), 6);
         assert_eq!(FUNCTION_CATALOG[0].id, FunctionId::MediaPlayPause);
-        assert_eq!(FUNCTION_CATALOG[6].id, FunctionId::VirtualPassthrough);
         assert!(default_configs().values().all(|config| !config.enabled));
     }
 

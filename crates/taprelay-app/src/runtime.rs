@@ -8,13 +8,12 @@ use crate::{
     platform::{self, InputSource, Transport},
 };
 use anyhow::{Context, Result};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use taprelay_core::{
-    command::{COMMAND_TTL, CommandPhase, MediaCommand, QueuedCommand, QueuedReport},
+    command::{COMMAND_TTL, CommandPhase, MediaCommand, QueuedCommand},
     function::{FunctionAction, FunctionId, Shortcut, complete_configs},
-    hid::{self, ConsumerState, KeyboardState, MouseReport, ReportKind, split_relative},
     input::{InputCode, InputEvent, InputState, Recorder},
-    input_router::{PhysicalInput, RouteResult, RoutedInput, RoutedOutput, RouterReason},
+    input_router::{RouteResult, RoutedInput, RoutedOutput, RouterReason},
     state::Snapshot,
 };
 use tokio::sync::{mpsc, oneshot};
@@ -59,13 +58,21 @@ pub struct Runtime {
     pub test: TestStatus,
     next_test: u64,
     pub bindings_revision: u64,
-    remote_keyboard: KeyboardState,
-    remote_consumer: ConsumerState,
-    remote_mouse_buttons: u8,
     last_transport_ready: bool,
+    invalidating: bool,
 }
 
 impl Runtime {
+    pub fn wake_delay(&self) -> Duration {
+        Duration::from_millis(50)
+    }
+    fn discard_events(&mut self) {
+        while let Ok(input) = self.events.try_recv() {
+            if let RoutedInput::Control(result) = input {
+                self.apply_router_outputs(result);
+            }
+        }
+    }
     pub fn new(mut config: Config) -> Self {
         complete_configs(&mut config.functions);
         // Device selection is session-only. Older config files may still
@@ -98,10 +105,8 @@ impl Runtime {
             test: TestStatus::Idle,
             next_test: 0,
             bindings_revision: 0,
-            remote_keyboard: KeyboardState::default(),
-            remote_consumer: ConsumerState::default(),
-            remote_mouse_buttons: 0,
             last_transport_ready: false,
+            invalidating: false,
         }
     }
 
@@ -209,7 +214,7 @@ impl Runtime {
     fn ensure_input(&mut self) -> Result<()> {
         if self.input.as_ref().is_none_or(|input| input.is_finished()) {
             self.input.take();
-            while self.events.try_recv().is_ok() {}
+            self.discard_events();
             self.capture_state = InputState::default();
             self.epoch = Instant::now();
             self.input = Some(platform::input(self.sender.clone())?);
@@ -226,7 +231,6 @@ impl Runtime {
                     &self.config.functions,
                     self.listening,
                     self.recording(),
-                    self.state.passthrough_ready,
                     self.bindings_revision,
                 )
             });
@@ -249,10 +253,15 @@ impl Runtime {
     }
 
     fn invalidate(&mut self, reason: RouterReason) {
-        let cleanup = self
+        if self.invalidating {
+            return;
+        }
+        self.invalidating = true;
+        let mut cleanup = self
             .input
             .as_ref()
             .map_or_else(RouteResult::default, |input| input.terminate(reason));
+        cleanup.revision = self.bindings_revision;
         self.apply_router_outputs(cleanup);
         self.epoch = Instant::now();
         if matches!(self.test, TestStatus::Pending(_)) {
@@ -260,9 +269,13 @@ impl Runtime {
                 "Test cancelled because the input or connection session changed".into(),
             );
         }
-        if let Some(transport) = &self.transport {
+        if (reason == RouterReason::TransportLost
+            || (reason == RouterReason::ListenerStopped && !self.state.input))
+            && let Some(transport) = &self.transport
+        {
             transport.invalidate();
         }
+        self.invalidating = false;
     }
 
     /// Finish the input session before the transport is dropped. This is a
@@ -275,6 +288,7 @@ impl Runtime {
         self.capture = CapturePhase::Idle;
         self.input.take();
         self.transport.take();
+        self.state.ready = false;
     }
 
     pub fn record(&mut self) -> Result<()> {
@@ -304,7 +318,7 @@ impl Runtime {
         self.epoch = Instant::now();
         self.capture_state = InputState::default();
         self.recorder.reset();
-        while self.events.try_recv().is_ok() {}
+        self.discard_events();
         if !self.listening {
             self.input.take();
         }
@@ -404,24 +418,6 @@ impl Runtime {
         Ok(())
     }
 
-    pub fn shortcut_conflict(
-        &self,
-        id: FunctionId,
-        slot: usize,
-        shortcut: &Shortcut,
-    ) -> Option<FunctionId> {
-        self.config.functions.iter().find_map(|(&other, config)| {
-            config
-                .shortcuts
-                .iter()
-                .enumerate()
-                .any(|(other_slot, candidate)| {
-                    (other, other_slot) != (id, slot) && candidate == shortcut
-                })
-                .then_some(other)
-        })
-    }
-
     pub fn remove_shortcut(&mut self, id: FunctionId, slot: usize) -> Result<()> {
         let mut candidate = self.config.functions.clone();
         let function = candidate.get_mut(&id).context("Unknown function")?;
@@ -481,42 +477,6 @@ impl Runtime {
         Ok(())
     }
 
-    fn enqueue_report(
-        &mut self,
-        kind: ReportKind,
-        bytes: Vec<u8>,
-        created: Instant,
-        must_deliver: bool,
-    ) -> Result<()> {
-        let ready = match kind {
-            ReportKind::Consumer => self.state.ready,
-            ReportKind::Keyboard | ReportKind::Mouse => self.state.passthrough_ready,
-        };
-        anyhow::ensure!(ready, "HID report channel is not ready");
-        let report = QueuedReport {
-            kind,
-            bytes,
-            target: self.state.selected.clone().context("No selected device")?,
-            generation: self.state.generation,
-            created,
-            must_deliver,
-        };
-        anyhow::ensure!(
-            report.valid(
-                self.state.selected.as_deref(),
-                self.state.generation,
-                ready,
-                Instant::now(),
-                self.epoch,
-            ),
-            "HID input report expired"
-        );
-        self.transport
-            .as_ref()
-            .context("Bluetooth not started")?
-            .send_report(report)
-    }
-
     pub fn tick(&mut self) {
         let stopped = self
             .transport
@@ -570,7 +530,7 @@ impl Runtime {
         }
 
         if self.recording() && self.capture_waiting() && !platform::desktop::any_input_held() {
-            while self.events.try_recv().is_ok() {}
+            self.discard_events();
             self.capture_state = InputState::default();
             self.capture = CapturePhase::Recording;
             self.epoch = Instant::now();
@@ -581,11 +541,6 @@ impl Runtime {
             let Ok(input) = self.events.try_recv() else {
                 break;
             };
-            if let Some(previous) = pending.last_mut()
-                && merge_motion(previous, &input)
-            {
-                continue;
-            }
             pending.push(input);
         }
         let window_keys = std::mem::take(&mut self.window_keys);
@@ -597,11 +552,7 @@ impl Runtime {
         }
         for input in pending {
             match input {
-                RoutedInput::Motion { event, result } => {
-                    if !self.recording() && event.captured >= self.epoch {
-                        self.apply_router_outputs(result);
-                    }
-                }
+                RoutedInput::Control(result) => self.apply_router_outputs(result),
                 RoutedInput::Edge { event, result } => {
                     if event.captured < self.epoch {
                         continue;
@@ -672,14 +623,11 @@ impl Runtime {
     }
 
     fn apply_router_outputs(&mut self, result: taprelay_core::input_router::RouteResult) {
-        if result.revision != self.bindings_revision && !result.outputs.is_empty() {
-            tracing::debug!(
-                result_revision = result.revision,
-                current_revision = self.bindings_revision,
-                "Dropping input result from an older configuration revision"
-            );
-            return;
-        }
+        // Hook decisions and configuration barriers share one ordered queue.
+        // A release accepted just before a config edit still belongs to its
+        // earlier press; discarding it by revision would leave the peer stuck.
+        // Connection/input invalidation is handled separately by epoch/target.
+
         for output in result.outputs {
             match output {
                 RoutedOutput::Feedback { binding, action } => {
@@ -707,54 +655,14 @@ impl Runtime {
                         // unavailable; no command is queued for later replay.
                         if self.state.ready {
                             self.error = Some(error.to_string());
+                            if !self.invalidating {
+                                self.invalidate(RouterReason::TransportLost);
+                                return;
+                            }
                         }
                     }
                 }
-                RoutedOutput::Function { .. } => {}
-                RoutedOutput::PassthroughChanged(enabled) => {
-                    tracing::info!(enabled, "Passthrough route changed");
-                }
-                RoutedOutput::ResetRemote => {
-                    self.remote_keyboard.clear();
-                    self.remote_consumer.clear();
-                    self.remote_mouse_buttons = 0;
-                    if self.state.ready {
-                        let now = Instant::now();
-                        if let Err(error) = self.enqueue_report(
-                            ReportKind::Consumer,
-                            self.remote_consumer.report(),
-                            now,
-                            true,
-                        ) {
-                            self.error = Some(error.to_string());
-                        }
-                    }
-                    if self.state.passthrough_ready {
-                        let now = Instant::now();
-                        if let Err(error) = self.enqueue_report(
-                            ReportKind::Keyboard,
-                            vec![0; hid::KEYBOARD_REPORT_LENGTH],
-                            now,
-                            true,
-                        ) {
-                            self.error = Some(error.to_string());
-                        }
-                        if let Err(error) = self.enqueue_report(
-                            ReportKind::Mouse,
-                            MouseReport::neutral().encode().to_vec(),
-                            now,
-                            true,
-                        ) {
-                            self.error = Some(error.to_string());
-                        }
-                    }
-                }
-                RoutedOutput::Remote(input) => {
-                    if let Err(error) = self.send_remote(input) {
-                        self.error = Some(error.to_string());
-                        self.invalidate(RouterReason::TransportLost);
-                    }
-                }
+
                 RoutedOutput::Replay(input) => {
                     if let Some(source) = &self.input
                         && let Err(error) = source.replay(input)
@@ -766,112 +674,6 @@ impl Runtime {
             }
         }
     }
-
-    fn send_remote(&mut self, input: PhysicalInput) -> Result<()> {
-        let now = Instant::now();
-        match input {
-            PhysicalInput::Edge { code, down } => match code {
-                InputCode::Key(key) => {
-                    if let Some(usage) = hid::consumer_usage(key) {
-                        if self.state.ready {
-                            let owner = 0x8000_0000u64 | u64::from(key);
-                            if down {
-                                self.remote_consumer.press_usage(owner, usage);
-                            } else {
-                                self.remote_consumer.release_usage(owner, usage);
-                            }
-                            self.enqueue_report(
-                                ReportKind::Consumer,
-                                self.remote_consumer.report(),
-                                now,
-                                !down,
-                            )?;
-                        }
-                        return Ok(());
-                    }
-                    if let Some(bit) = hid::keyboard_modifier_bit(key) {
-                        self.remote_keyboard.set_modifier(bit, down);
-                    } else if let Some(usage) = hid::keyboard_usage(key) {
-                        self.remote_keyboard.set_key(usage, down).map_err(|_| {
-                            anyhow::anyhow!("More than six keyboard keys are held; input released")
-                        })?;
-                    }
-                    self.enqueue_report(
-                        ReportKind::Keyboard,
-                        self.remote_keyboard
-                            .report()
-                            .map_err(|_| anyhow::anyhow!("Keyboard rollover overflow"))?
-                            .to_vec(),
-                        now,
-                        !down,
-                    )?;
-                }
-                InputCode::Mouse(button) => {
-                    let bit = 1 << button as u8;
-                    if down {
-                        self.remote_mouse_buttons |= bit;
-                    } else {
-                        self.remote_mouse_buttons &= !bit;
-                    }
-                    self.enqueue_report(
-                        ReportKind::Mouse,
-                        MouseReport {
-                            buttons: self.remote_mouse_buttons,
-                            ..MouseReport::neutral()
-                        }
-                        .encode()
-                        .to_vec(),
-                        now,
-                        !down,
-                    )?;
-                }
-            },
-            PhysicalInput::Motion { dx, dy } => {
-                let xs: Vec<_> = split_relative(dx).collect();
-                let ys: Vec<_> = split_relative(dy).collect();
-                let count = xs.len().max(ys.len());
-                for index in 0..count {
-                    self.enqueue_report(
-                        ReportKind::Mouse,
-                        MouseReport {
-                            buttons: self.remote_mouse_buttons,
-                            x: xs.get(index).copied().unwrap_or_default(),
-                            y: ys.get(index).copied().unwrap_or_default(),
-                            ..MouseReport::neutral()
-                        }
-                        .encode()
-                        .to_vec(),
-                        now,
-                        false,
-                    )?;
-                }
-            }
-            PhysicalInput::Wheel {
-                vertical,
-                horizontal,
-            } => {
-                let verticals: Vec<_> = split_wheel(vertical).collect();
-                let horizontals: Vec<_> = split_wheel(horizontal).collect();
-                let count = verticals.len().max(horizontals.len());
-                for index in 0..count {
-                    self.enqueue_report(
-                        ReportKind::Mouse,
-                        MouseReport {
-                            buttons: self.remote_mouse_buttons,
-                            wheel: verticals.get(index).copied().unwrap_or_default(),
-                            horizontal_wheel: horizontals.get(index).copied().unwrap_or_default(),
-                            ..MouseReport::neutral()
-                        }
-                        .encode()
-                        .to_vec(),
-                        now,
-                        false,
-                    )?;
-                }
-            }
-        }
-        Ok(())
-    }
 }
 
 impl Drop for Runtime {
@@ -880,89 +682,10 @@ impl Drop for Runtime {
     }
 }
 
-/// Collapse only adjacent motion reports with the same route and report kind.
-/// Keyboard/button edges, route changes, and pending-modifier replays remain
-/// hard ordering boundaries. The accumulator is deliberately bounded by the
-/// per-tick dispatch drain rather than growing with pointer rate.
-fn merge_motion(previous: &mut RoutedInput, next: &RoutedInput) -> bool {
-    let RoutedInput::Motion {
-        event: previous_event,
-        result: previous_result,
-    } = previous
-    else {
-        return false;
-    };
-    let RoutedInput::Motion {
-        event: next_event,
-        result: next_result,
-    } = next
-    else {
-        return false;
-    };
-    if previous_result.consume != next_result.consume
-        || previous_result.outputs.len() != 1
-        || next_result.outputs.len() != 1
-    {
-        return false;
-    }
-    let (route, previous_input, next_input) =
-        match (&previous_result.outputs[0], &next_result.outputs[0]) {
-            (RoutedOutput::Local(previous), RoutedOutput::Local(next)) => (0u8, previous, next),
-            (RoutedOutput::Remote(previous), RoutedOutput::Remote(next)) => (1u8, previous, next),
-            _ => return false,
-        };
-    let Some(input) = add_motion(*previous_input, *next_input) else {
-        return false;
-    };
-    previous_event.input = input;
-    previous_event.captured = previous_event.captured.max(next_event.captured);
-    previous_result.outputs[0] = if route == 0 {
-        RoutedOutput::Local(input)
-    } else {
-        RoutedOutput::Remote(input)
-    };
-    true
-}
-
-fn add_motion(left: PhysicalInput, right: PhysicalInput) -> Option<PhysicalInput> {
-    match (left, right) {
-        (PhysicalInput::Motion { dx, dy }, PhysicalInput::Motion { dx: rx, dy: ry }) => {
-            Some(PhysicalInput::Motion {
-                dx: dx.checked_add(rx)?,
-                dy: dy.checked_add(ry)?,
-            })
-        }
-        (
-            PhysicalInput::Wheel {
-                vertical,
-                horizontal,
-            },
-            PhysicalInput::Wheel {
-                vertical: rv,
-                horizontal: rh,
-            },
-        ) => Some(PhysicalInput::Wheel {
-            vertical: vertical.checked_add(rv)?,
-            horizontal: horizontal.checked_add(rh)?,
-        }),
-        _ => None,
-    }
-}
-
-fn split_wheel(mut value: i32) -> impl Iterator<Item = i8> {
-    std::iter::from_fn(move || {
-        if value == 0 {
-            return None;
-        }
-        let part = value.clamp(i8::MIN as i32, i8::MAX as i32) as i8;
-        value -= i32::from(part);
-        Some(part)
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use crate::config::Config;
     use taprelay_core::{
         function::{FunctionConfig, FunctionId, ModifierSet, Shortcut},

@@ -1,7 +1,7 @@
 //! Dedicated message-pump thread for WH_KEYBOARD_LL / WH_MOUSE_LL.
 //! Callbacks make a bounded, synchronous core-router decision. They never wait
-//! for Bluetooth or the UI; parsed edges and high-frequency pointer deltas are
-//! copied to one bounded, ordered queue for the application worker.
+//! for Bluetooth or the UI; parsed edges and configuration results are copied
+//! to one bounded, ordered queue. Pointer motion only resolves local prefixes.
 use std::{
     cell::{Cell, RefCell},
     sync::{
@@ -14,9 +14,7 @@ use std::{
 use taprelay_core::{
     function::FunctionConfigs,
     input::{InputCode, InputEvent, MouseButton},
-    input_router::{
-        InputRouter, PhysicalEvent, PhysicalInput, RouteResult, RoutedInput, RoutedOutput,
-    },
+    input_router::{InputRouter, PhysicalInput, RouteResult, RoutedInput, RoutedOutput},
     ports::BackendError,
 };
 use tokio::sync::mpsc::Sender;
@@ -29,12 +27,17 @@ use windows::Win32::{
 use windows::core::w;
 
 thread_local! { static DISPATCH: RefCell<Option<Sender<RoutedInput>>> = const { RefCell::new(None) }; }
-thread_local! { static POLICY: RefCell<Option<Arc<Mutex<HookPolicy>>>> = const { RefCell::new(None) }; }
+thread_local! { static POLICY: RefCell<Option<HookPolicy>> = const { RefCell::new(None) }; }
+thread_local! { static CONSUMER: RefCell<Option<thread::Thread>> = const { RefCell::new(None) }; }
+const POLICY_MESSAGE: u32 = WM_APP + 2;
+type PolicyCommand = Box<dyn FnOnce(&mut HookPolicy) -> RouteResult + Send>;
+struct PolicyRequest {
+    command: PolicyCommand,
+    reply: std::sync::mpsc::SyncSender<RouteResult>,
+    ordered: bool,
+}
 thread_local! { static LAST_MOUSE_POINT: Cell<Option<POINT>> = const { Cell::new(None) }; }
 thread_local! { static TAPRELAY_WINDOW: Cell<HWND> = const { Cell::new(HWND(std::ptr::null_mut())) }; }
-thread_local! { static PENDING_MOTION: RefCell<Option<RoutedInput>> = const { RefCell::new(None) }; }
-thread_local! { static MOTION_FLUSH_POSTED: Cell<bool> = const { Cell::new(false) }; }
-const FLUSH_MOTION_MESSAGE: u32 = WM_APP + 1;
 #[derive(Clone, Copy)]
 enum StopReason {
     Overflow,
@@ -49,9 +52,7 @@ impl StopReason {
             Self::Overflow => "Input queue overflow; listener stopped to avoid a lost release",
             Self::ReceiverClosed => "Input consumer closed; listener stopped",
             Self::CallbackPanic => "Input callback panicked; listener stopped (see panic log)",
-            Self::PolicyUnavailable => {
-                "Input policy was busy; listener stopped to preserve ordering"
-            }
+            Self::PolicyUnavailable => "Input routing state unavailable; listener stopped",
             Self::ReplayFailed => {
                 "Local input replay failed; listener stopped to avoid a stuck key"
             }
@@ -78,7 +79,8 @@ pub struct InputHandle {
     id: u32,
     failed: Arc<AtomicBool>,
     reason: Arc<Mutex<Option<String>>>,
-    policy: Arc<Mutex<HookPolicy>>,
+    commands: std::sync::mpsc::SyncSender<PolicyRequest>,
+    configuration: Mutex<Option<(bool, bool, u64)>>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -87,7 +89,6 @@ struct HookPolicy {
     revision: u64,
     listening: bool,
     recording: bool,
-    remote_ready: bool,
 }
 
 impl HookPolicy {
@@ -99,7 +100,6 @@ impl HookPolicy {
             revision: u64::MAX,
             listening: false,
             recording: false,
-            remote_ready: false,
         }
     }
 
@@ -108,7 +108,6 @@ impl HookPolicy {
         configs: &FunctionConfigs,
         listening: bool,
         recording: bool,
-        remote_ready: bool,
         revision: u64,
     ) -> RouteResult {
         let mut result = RouteResult::default();
@@ -124,10 +123,7 @@ impl HookPolicy {
             append(&mut result, self.router.set_recording(recording));
             self.recording = recording;
         }
-        if remote_ready != self.remote_ready {
-            append(&mut result, self.router.set_remote_ready(remote_ready));
-            self.remote_ready = remote_ready;
-        }
+
         result
     }
 
@@ -175,36 +171,66 @@ impl InputHandle {
         configs: &FunctionConfigs,
         listening: bool,
         recording: bool,
-        remote_ready: bool,
         revision: u64,
     ) -> RouteResult {
-        self.policy
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .configure(configs, listening, recording, remote_ready, revision)
+        let next = (listening, recording, revision);
+        let mut previous = self.configuration.lock().unwrap_or_else(|e| e.into_inner());
+        if *previous == Some(next) {
+            return RouteResult::default();
+        }
+        *previous = Some(next);
+        let configs = configs.clone();
+        self.request(
+            Box::new(move |policy| policy.configure(&configs, listening, recording, revision)),
+            true,
+        )
     }
     pub fn terminate(&self, reason: taprelay_core::input_router::RouterReason) -> RouteResult {
-        self.policy
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .terminate(reason)
+        self.request(Box::new(move |policy| policy.terminate(reason)), false)
     }
-    pub fn start(dispatch: Sender<RoutedInput>) -> Result<Self, BackendError> {
+    fn request(&self, command: PolicyCommand, ordered: bool) -> RouteResult {
+        if self.is_finished() {
+            return RouteResult::default();
+        }
+        let (reply, result) = std::sync::mpsc::sync_channel(1);
+        let outcome = (|| {
+            self.commands
+                .try_send(PolicyRequest {
+                    command,
+                    reply,
+                    ordered,
+                })
+                .ok()?;
+            unsafe {
+                PostThreadMessageW(self.id, POLICY_MESSAGE, WPARAM(0), LPARAM(0)).ok()?;
+            }
+            result.recv_timeout(Duration::from_secs(1)).ok()
+        })();
+        outcome.unwrap_or_else(|| {
+            self.failed.store(true, Ordering::Release);
+            *self.reason.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some("Input policy command failed".into());
+            unsafe {
+                let _ = PostThreadMessageW(self.id, WM_QUIT, WPARAM(1), LPARAM(0));
+            }
+            RouteResult::default()
+        })
+    }
+    pub fn start(sender: Sender<RoutedInput>) -> Result<Self, BackendError> {
         let (started, result) = std::sync::mpsc::sync_channel(1);
         let failed = Arc::new(AtomicBool::new(false));
         let failure = failed.clone();
         let reason = Arc::new(Mutex::new(None));
         let worker_reason = reason.clone();
-        let policy = Arc::new(Mutex::new(HookPolicy::new()));
-        let worker_policy = policy.clone();
+        let (commands, requests) = std::sync::mpsc::sync_channel::<PolicyRequest>(16);
+        let consumer = thread::current();
         let thread = thread::Builder::new()
             .name("taprelay-input".into())
             .spawn(move || {
-                DISPATCH.with(|s| *s.borrow_mut() = Some(dispatch));
-                POLICY.with(|s| *s.borrow_mut() = Some(worker_policy));
+                DISPATCH.with(|s| *s.borrow_mut() = Some(sender));
+                POLICY.with(|s| *s.borrow_mut() = Some(HookPolicy::new()));
+                CONSUMER.with(|s| *s.borrow_mut() = Some(consumer));
                 LAST_MOUSE_POINT.with(|point| point.set(None));
-                PENDING_MOTION.with(|pending| *pending.borrow_mut() = None);
-                MOTION_FLUSH_POSTED.with(|posted| posted.set(false));
                 STOP_REASON.with(|r| r.set(None));
                 let outcome = unsafe {
                     (|| -> windows::core::Result<()> {
@@ -224,6 +250,31 @@ impl InputHandle {
                             Some(module.into()),
                             0,
                         )?);
+                        // Snapshot keys already held before the listener was
+                        // installed so shortcut prefixes retain their local ownership.
+                        POLICY.with(|p| {
+                            let mut p = p.borrow_mut();
+                            let p = p.as_mut().expect("policy");
+                            for key in 1..=254 {
+                                if matches!(key, 3 | 7 | 0x10..=0x12) || GetAsyncKeyState(key) >= 0
+                                {
+                                    continue;
+                                }
+                                let code = match key {
+                                    1 => InputCode::Mouse(MouseButton::Left),
+                                    2 => InputCode::Mouse(MouseButton::Right),
+                                    4 => InputCode::Mouse(MouseButton::Middle),
+                                    5 => InputCode::Mouse(MouseButton::Side1),
+                                    6 => InputCode::Mouse(MouseButton::Side2),
+                                    _ => InputCode::Key(key as u8),
+                                };
+                                p.local_edge(InputEvent {
+                                    code,
+                                    down: true,
+                                    captured: Instant::now(),
+                                });
+                            }
+                        });
                         if started.send(Ok(GetCurrentThreadId())).is_err() {
                             return Ok(());
                         }
@@ -244,10 +295,26 @@ impl InputHandle {
                                     break;
                                 }
                                 _ => {
-                                    if message.message == FLUSH_MOTION_MESSAGE {
-                                        flush_motion();
+                                    if message.message == POLICY_MESSAGE {
+                                        while let Ok(request) = requests.try_recv() {
+                                            let mut result = POLICY.with(|p| {
+                                                (request.command)(
+                                                    p.borrow_mut().as_mut().expect("policy"),
+                                                )
+                                            });
+                                            prepare_hook_result(&mut result);
+                                            if request.ordered {
+                                                if !result.outputs.is_empty() {
+                                                    dispatch(RoutedInput::Control(result));
+                                                }
+                                                let _ = request.reply.send(RouteResult::default());
+                                            } else {
+                                                let _ = request.reply.send(result);
+                                            }
+                                        }
                                         continue;
                                     }
+
                                     let _ = TranslateMessage(&message);
                                     DispatchMessageW(&message);
                                 }
@@ -264,7 +331,24 @@ impl InputHandle {
                     tracing::error!("{e}");
                     let _ = started.send(Err(e));
                 }
+                let mut cleanup = POLICY.with(|p| {
+                    p.borrow_mut()
+                        .as_mut()
+                        .map(|p| {
+                            p.terminate(taprelay_core::input_router::RouterReason::ListenerStopped)
+                        })
+                        .unwrap_or_default()
+                });
+                prepare_hook_result(&mut cleanup);
+                if !cleanup.outputs.is_empty() {
+                    dispatch(RoutedInput::Control(cleanup));
+                }
                 DISPATCH.with(|s| *s.borrow_mut() = None);
+                CONSUMER.with(|s| {
+                    if let Some(t) = s.borrow_mut().take() {
+                        t.unpark();
+                    }
+                });
                 POLICY.with(|s| *s.borrow_mut() = None);
                 LAST_MOUSE_POINT.with(|point| point.set(None));
             })
@@ -274,7 +358,8 @@ impl InputHandle {
                 id,
                 failed,
                 reason,
-                policy,
+                commands,
+                configuration: Mutex::new(None),
                 thread: Some(thread),
             }),
             Ok(Err(e)) => {
@@ -299,16 +384,7 @@ impl InputHandle {
                 InputCode::Key(key) => inputs.push(INPUT {
                     r#type: INPUT_KEYBOARD,
                     Anonymous: INPUT_0 {
-                        ki: KEYBDINPUT {
-                            wVk: VIRTUAL_KEY(key as u16),
-                            dwFlags: if down {
-                                KEYBD_EVENT_FLAGS(0)
-                            } else {
-                                KEYEVENTF_KEYUP
-                            },
-                            dwExtraInfo: REPLAY_TAG,
-                            ..Default::default()
-                        },
+                        ki: replay_key(key, down),
                     },
                 }),
                 InputCode::Mouse(button) => {
@@ -422,12 +498,8 @@ impl Drop for Hook {
     }
 }
 fn emit(event: InputEvent, result: RouteResult) {
-    // Motion held in the coalescer must be visible before the next edge. A
-    // full queue is a listener failure, not permission to drop a release.
-    if !flush_pending_motion() {
-        stop(StopReason::Overflow);
-        return;
-    }
+    // A full queue is a listener failure, not permission to drop a release.
+
     DISPATCH.with(|s| {
         if let Some(tx) = s.borrow().as_ref()
             && let Err(error) = tx.try_send(RoutedInput::Edge { event, result })
@@ -439,31 +511,15 @@ fn emit(event: InputEvent, result: RouteResult) {
             });
         }
     });
+    wake_consumer();
 }
-fn emit_motion(motion: PhysicalEvent, result: RouteResult) {
-    let next = RoutedInput::Motion {
-        event: motion,
-        result,
-    };
-    let merged = PENDING_MOTION.with(|pending| {
-        let mut pending = pending.borrow_mut();
-        pending
-            .as_mut()
-            .is_some_and(|previous| merge_motion(previous, &next))
-    });
-    if merged {
-        schedule_motion_flush();
-        return;
-    }
-    if !flush_pending_motion() {
-        stop(StopReason::Overflow);
-        return;
-    }
-    if is_coalescible_motion(&next) {
-        PENDING_MOTION.with(|pending| *pending.borrow_mut() = Some(next));
-        schedule_motion_flush();
-    } else {
-        dispatch(next);
+
+fn emit_motion(mut result: RouteResult) {
+    result
+        .outputs
+        .retain(|output| !matches!(output, RoutedOutput::Local(_)));
+    if !result.outputs.is_empty() {
+        dispatch(RoutedInput::Control(result));
     }
 }
 fn dispatch(input: RoutedInput) {
@@ -477,134 +533,14 @@ fn dispatch(input: RoutedInput) {
             });
         }
     });
+    wake_consumer();
 }
-fn flush_pending_motion() -> bool {
-    MOTION_FLUSH_POSTED.with(|posted| posted.set(false));
-    let pending = PENDING_MOTION.with(|slot| slot.borrow_mut().take());
-    let Some(input) = pending else {
-        return true;
-    };
-    let mut sent = true;
-    DISPATCH.with(|s| {
-        if let Some(tx) = s.borrow().as_ref()
-            && let Err(error) = tx.try_send(input.clone())
-        {
-            sent = false;
-            tracing::error!(?error, "Unable to flush coalesced input");
+fn wake_consumer() {
+    CONSUMER.with(|s| {
+        if let Some(t) = s.borrow().as_ref() {
+            t.unpark();
         }
     });
-    if !sent {
-        PENDING_MOTION.with(|slot| *slot.borrow_mut() = Some(input));
-    }
-    sent
-}
-fn flush_motion() {
-    if !flush_pending_motion() {
-        stop(StopReason::Overflow);
-    }
-}
-fn schedule_motion_flush() {
-    let should_post = MOTION_FLUSH_POSTED.with(|posted| {
-        if posted.get() {
-            false
-        } else {
-            posted.set(true);
-            true
-        }
-    });
-    if should_post {
-        let posted = unsafe {
-            PostThreadMessageW(
-                GetCurrentThreadId(),
-                FLUSH_MOTION_MESSAGE,
-                WPARAM(0),
-                LPARAM(0),
-            )
-        };
-        if let Err(error) = posted {
-            MOTION_FLUSH_POSTED.with(|flag| flag.set(false));
-            tracing::error!(?error, "Unable to schedule coalesced input");
-            stop(StopReason::ReceiverClosed);
-        }
-    }
-}
-fn is_coalescible_motion(input: &RoutedInput) -> bool {
-    let RoutedInput::Motion { event, result } = input else {
-        return false;
-    };
-    matches!(
-        event.input,
-        PhysicalInput::Motion { .. } | PhysicalInput::Wheel { .. }
-    ) && result.outputs.len() == 1
-        && matches!(
-            result.outputs[0],
-            RoutedOutput::Local(_) | RoutedOutput::Remote(_)
-        )
-}
-fn merge_motion(previous: &mut RoutedInput, next: &RoutedInput) -> bool {
-    if !is_coalescible_motion(previous) || !is_coalescible_motion(next) {
-        return false;
-    }
-    let RoutedInput::Motion {
-        event: previous_event,
-        result: previous_result,
-    } = previous
-    else {
-        return false;
-    };
-    let RoutedInput::Motion {
-        event: next_event,
-        result: next_result,
-    } = next
-    else {
-        return false;
-    };
-    if previous_result.consume != next_result.consume {
-        return false;
-    }
-    let (previous_input, next_input, remote) =
-        match (&previous_result.outputs[0], &next_result.outputs[0]) {
-            (RoutedOutput::Local(previous), RoutedOutput::Local(next)) => (*previous, *next, false),
-            (RoutedOutput::Remote(previous), RoutedOutput::Remote(next)) => {
-                (*previous, *next, true)
-            }
-            _ => return false,
-        };
-    let Some(input) = add_motion(previous_input, next_input) else {
-        return false;
-    };
-    previous_event.input = input;
-    previous_event.captured = previous_event.captured.max(next_event.captured);
-    previous_result.outputs[0] = if remote {
-        RoutedOutput::Remote(input)
-    } else {
-        RoutedOutput::Local(input)
-    };
-    true
-}
-fn add_motion(left: PhysicalInput, right: PhysicalInput) -> Option<PhysicalInput> {
-    match (left, right) {
-        (PhysicalInput::Motion { dx, dy }, PhysicalInput::Motion { dx: rx, dy: ry }) => {
-            Some(PhysicalInput::Motion {
-                dx: dx.checked_add(rx)?,
-                dy: dy.checked_add(ry)?,
-            })
-        }
-        (
-            PhysicalInput::Wheel {
-                vertical,
-                horizontal,
-            },
-            PhysicalInput::Wheel {
-                vertical: rv,
-                horizontal: rh,
-            },
-        ) => Some(PhysicalInput::Wheel {
-            vertical: vertical.checked_add(rv)?,
-            horizontal: horizontal.checked_add(rh)?,
-        }),
-        _ => None,
-    }
 }
 
 fn taprelay_foreground() -> bool {
@@ -639,40 +575,34 @@ fn taprelay_window_at(point: POINT) -> bool {
 
 fn policy_edge(event: InputEvent) -> RouteResult {
     POLICY.with(|policy| {
-        let Some(policy) = policy.borrow().as_ref().cloned() else {
+        let mut borrowed = policy.borrow_mut();
+        let Some(policy) = borrowed.as_mut() else {
             stop(StopReason::PolicyUnavailable);
             return RouteResult::default();
         };
-        let Ok(mut policy) = policy.try_lock() else {
-            stop(StopReason::PolicyUnavailable);
-            return RouteResult::default();
-        };
+
         policy.edge(event)
     })
 }
 fn policy_local_edge(event: InputEvent) -> RouteResult {
     POLICY.with(|policy| {
-        let Some(policy) = policy.borrow().as_ref().cloned() else {
+        let mut borrowed = policy.borrow_mut();
+        let Some(policy) = borrowed.as_mut() else {
             stop(StopReason::PolicyUnavailable);
             return RouteResult::default();
         };
-        let Ok(mut policy) = policy.try_lock() else {
-            stop(StopReason::PolicyUnavailable);
-            return RouteResult::default();
-        };
+
         policy.local_edge(event)
     })
 }
 fn policy_motion(motion: PhysicalInput) -> RouteResult {
     POLICY.with(|policy| {
-        let Some(policy) = policy.borrow().as_ref().cloned() else {
+        let mut borrowed = policy.borrow_mut();
+        let Some(policy) = borrowed.as_mut() else {
             stop(StopReason::PolicyUnavailable);
             return RouteResult::default();
         };
-        let Ok(mut policy) = policy.try_lock() else {
-            stop(StopReason::PolicyUnavailable);
-            return RouteResult::default();
-        };
+
         policy.motion(motion)
     })
 }
@@ -698,6 +628,24 @@ fn prepare_hook_result(result: &mut RouteResult) -> bool {
     true
 }
 
+fn replay_key(key: u8, down: bool) -> KEYBDINPUT {
+    let extended =
+        matches!(key, 0xe0 | 0xa3 | 0xa5 | 0x21..=0x28 | 0x2d..=0x2e | 0x5b..=0x5c | 0x6f | 0x90);
+    KEYBDINPUT {
+        wVk: VIRTUAL_KEY(if key == 0xe0 { 0x0d } else { key as u16 }),
+        dwFlags: (if down {
+            KEYBD_EVENT_FLAGS(0)
+        } else {
+            KEYEVENTF_KEYUP
+        }) | if extended {
+            KEYEVENTF_EXTENDEDKEY
+        } else {
+            KEYBD_EVENT_FLAGS(0)
+        },
+        dwExtraInfo: REPLAY_TAG,
+        ..Default::default()
+    }
+}
 fn keyboard_code(event: &KBDLLHOOKSTRUCT) -> Option<InputCode> {
     if event.vkCode > 254 {
         return None;
@@ -751,6 +699,7 @@ unsafe extern "system" fn keyboard_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LR
                     } else {
                         policy_edge(input)
                     };
+
                     if prepare_hook_result(&mut result) {
                         consume = result.consume;
                         emit(input, result);
@@ -788,6 +737,7 @@ unsafe extern "system" fn mouse_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESU
         let mut consume = false;
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let event = unsafe { &*(lp.0 as *const MSLLHOOKSTRUCT) };
+
             if event.flags & LLMHF_INJECTED == 0 {
                 let local_window = taprelay_window_at(event.pt);
                 if let Some((b, down)) = mouse_edge(wp.0 as u32, event.mouseData) {
@@ -820,13 +770,7 @@ unsafe extern "system" fn mouse_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESU
                             let mut result = policy_motion(motion);
                             if prepare_hook_result(&mut result) {
                                 consume = result.consume;
-                                emit_motion(
-                                    PhysicalEvent {
-                                        input: motion,
-                                        captured: Instant::now(),
-                                    },
-                                    result,
-                                );
+                                emit_motion(result);
                             }
                         }
                     }
@@ -842,13 +786,7 @@ unsafe extern "system" fn mouse_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESU
                     let mut result = policy_motion(motion);
                     if prepare_hook_result(&mut result) {
                         consume = result.consume;
-                        emit_motion(
-                            PhysicalEvent {
-                                input: motion,
-                                captured: Instant::now(),
-                            },
-                            result,
-                        );
+                        emit_motion(result);
                     }
                 } else if wp.0 as u32 == WM_MOUSEHWHEEL {
                     if local_window {
@@ -862,13 +800,7 @@ unsafe extern "system" fn mouse_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESU
                     let mut result = policy_motion(motion);
                     if prepare_hook_result(&mut result) {
                         consume = result.consume;
-                        emit_motion(
-                            PhysicalEvent {
-                                input: motion,
-                                captured: Instant::now(),
-                            },
-                            result,
-                        );
+                        emit_motion(result);
                     }
                 }
             }
@@ -885,6 +817,23 @@ unsafe extern "system" fn mouse_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESU
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_release_preserves_keypad_enter_and_right_modifier_identity() {
+        let enter = replay_key(0xe0, false);
+        assert_eq!(enter.wVk, VK_RETURN);
+        assert_ne!(enter.dwFlags.0 & KEYEVENTF_EXTENDEDKEY.0, 0);
+        assert_ne!(enter.dwFlags.0 & KEYEVENTF_KEYUP.0, 0);
+        assert_ne!(
+            replay_key(0xa3, false).dwFlags.0 & KEYEVENTF_EXTENDEDKEY.0,
+            0
+        );
+        assert_eq!(
+            replay_key(0x0d, false).dwFlags.0 & KEYEVENTF_EXTENDEDKEY.0,
+            0
+        );
+    }
+
     #[test]
     #[ignore = "requires an interactive Windows desktop; sends a tagged F24 probe"]
     fn keyboard_hook_receives_os_events_but_rejects_injected_input() {

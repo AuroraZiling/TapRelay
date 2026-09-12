@@ -1,7 +1,7 @@
 //! Platform boundary. Views and the session never import Windows APIs.
 use anyhow::Result;
 use taprelay_core::{
-    command::{QueuedCommand, QueuedReport},
+    command::QueuedCommand,
     function::FunctionConfigs,
     input_router::{PhysicalInput, RouteResult, RoutedInput, RouterReason},
     state::Snapshot,
@@ -14,7 +14,6 @@ pub trait InputSource {
         _functions: &FunctionConfigs,
         _listening: bool,
         _recording: bool,
-        _remote_ready: bool,
         _revision: u64,
     ) -> RouteResult {
         RouteResult::default()
@@ -51,9 +50,6 @@ pub trait Transport {
     }
     fn invalidate(&self);
     fn send(&self, command: QueuedCommand) -> Result<oneshot::Receiver<Result<(), String>>>;
-    fn send_report(&self, _report: QueuedReport) -> Result<()> {
-        anyhow::bail!("HID input reports unavailable")
-    }
 }
 #[cfg(windows)]
 impl InputSource for taprelay_windows::input::InputHandle {
@@ -71,10 +67,9 @@ impl InputSource for taprelay_windows::input::InputHandle {
         functions: &FunctionConfigs,
         listening: bool,
         recording: bool,
-        remote_ready: bool,
         revision: u64,
     ) -> RouteResult {
-        self.configure(functions, listening, recording, remote_ready, revision)
+        self.configure(functions, listening, recording, revision)
     }
     fn terminate(&self, reason: RouterReason) -> RouteResult {
         self.terminate(reason)
@@ -83,13 +78,11 @@ impl InputSource for taprelay_windows::input::InputHandle {
 #[cfg(windows)]
 impl Transport for taprelay_windows::bluetooth::BleHandle {
     fn pair(&self, id: String) -> Result<()> {
-        self.commands
-            .try_send(taprelay_windows::bluetooth::Request::Pair(id))?;
+        self.request(taprelay_windows::bluetooth::Request::Pair(id))?;
         Ok(())
     }
     fn disconnect(&self) -> Result<u64> {
-        self.commands
-            .try_send(taprelay_windows::bluetooth::Request::Select(None))?;
+        self.request(taprelay_windows::bluetooth::Request::Select(None))?;
         Ok(self.invalidate_commands())
     }
     fn bluetooth_settings(&self) -> Result<()> {
@@ -103,18 +96,15 @@ impl Transport for taprelay_windows::bluetooth::BleHandle {
     }
     fn restart(&self) -> Result<u64> {
         let generation = self.invalidate_commands();
-        self.commands
-            .try_send(taprelay_windows::bluetooth::Request::Restart)?;
+        self.request(taprelay_windows::bluetooth::Request::Restart)?;
         Ok(generation)
     }
     fn refresh(&self) -> Result<()> {
-        self.commands
-            .try_send(taprelay_windows::bluetooth::Request::Refresh)?;
+        self.request(taprelay_windows::bluetooth::Request::Refresh)?;
         Ok(())
     }
     fn select(&self, id: String) -> Result<u64> {
-        self.commands
-            .try_send(taprelay_windows::bluetooth::Request::Select(Some(id)))?;
+        self.request(taprelay_windows::bluetooth::Request::Select(Some(id)))?;
         Ok(self.invalidate_commands())
     }
     fn invalidate(&self) {
@@ -122,14 +112,8 @@ impl Transport for taprelay_windows::bluetooth::BleHandle {
     }
     fn send(&self, c: QueuedCommand) -> Result<oneshot::Receiver<Result<(), String>>> {
         let (tx, rx) = oneshot::channel();
-        self.commands
-            .try_send(taprelay_windows::bluetooth::Request::Send(c, tx))?;
+        self.request(taprelay_windows::bluetooth::Request::Send(c, tx))?;
         Ok(rx)
-    }
-    fn send_report(&self, report: QueuedReport) -> Result<()> {
-        self.commands
-            .try_send(taprelay_windows::bluetooth::Request::Report(report))?;
-        Ok(())
     }
 }
 /// A closed watch can still contain an unread terminal error. Always read it,

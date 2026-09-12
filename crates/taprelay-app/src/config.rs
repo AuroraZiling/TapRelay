@@ -14,7 +14,7 @@ use taprelay_core::{
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub schema: u32,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "read_functions")]
     pub functions: FunctionConfigs,
     /// Legacy receiver record. Device selection is session-only and is never persisted.
     #[serde(default, skip_serializing)]
@@ -22,6 +22,27 @@ pub struct Config {
     pub wizard: Wizard,
     pub options: Options,
     pub window: Geometry,
+}
+fn read_functions<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<FunctionConfigs, D::Error> {
+    let entries =
+        std::collections::BTreeMap::<String, serde_json::Value>::deserialize(deserializer)?;
+    let mut functions = FunctionConfigs::new();
+    for (id, value) in entries {
+        // Ignore the removed feature in old files without discarding working
+        // media bindings or unrelated preferences. Never write it back.
+        if id == "virtual.passthrough" {
+            continue;
+        }
+        let function = function::FunctionId::from_stable_id(&id)
+            .ok_or_else(|| serde::de::Error::custom(format!("Unknown function: {id}")))?;
+        functions.insert(
+            function,
+            serde_json::from_value(value).map_err(serde::de::Error::custom)?,
+        );
+    }
+    Ok(functions)
 }
 impl Default for Config {
     fn default() -> Self {
@@ -203,6 +224,31 @@ impl SaveQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn removed_function_is_discarded_without_losing_media_bindings() {
+        let mut config = Config::default();
+        let media = config
+            .functions
+            .get_mut(&function::FunctionId::MediaNext)
+            .unwrap();
+        media.enabled = true;
+        media.shortcuts = vec![function::Shortcut::keyboard(
+            function::ModifierSet::empty(),
+            0x70,
+        )];
+        config.options.notifications = false;
+        let mut json = serde_json::to_value(&config).unwrap();
+        json["functions"]["virtual.passthrough"] =
+            serde_json::json!({"enabled": true, "shortcuts": []});
+        let loaded: Config = serde_json::from_value(json).unwrap();
+        assert_eq!(loaded.functions, config.functions);
+        assert!(!loaded.options.notifications);
+        assert!(
+            serde_json::to_value(loaded).unwrap()["functions"]
+                .get("virtual.passthrough")
+                .is_none()
+        );
+    }
     #[test]
     fn legacy_receiver_record_is_ignored_on_load() {
         let mut json = serde_json::to_value(Config::default()).unwrap();

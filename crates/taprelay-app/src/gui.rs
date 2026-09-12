@@ -8,7 +8,7 @@ use crate::{
     i18n::{self, keys},
     logging::{self, Filter, Logs},
     platform::desktop::{self, Desktop, DesktopEvent},
-    runtime::Runtime,
+    runtime_worker::RuntimeHandle as Runtime,
 };
 use anyhow::{Context, Result, bail};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
@@ -102,7 +102,7 @@ pub fn run() -> Result<()> {
         a.borrow_mut().push((Action::Close, 0, String::new()));
         slint::CloseRequestResponse::KeepWindowShown
     });
-    let mut controller = Controller::new(config, path, logs, desktop, status, startup_error);
+    let mut controller = Controller::new(config, path, logs, desktop, status, startup_error)?;
     ui.set_log_lines(controller.log_model.clone().into());
     controller.sync(&ui);
     if controller.fatal.is_none() {
@@ -368,11 +368,11 @@ impl Controller {
         desktop: Desktop,
         status: administrator::Status,
         fatal: Option<String>,
-    ) -> Self {
+    ) -> Result<Self> {
         config.options.autostart = desktop::autostart_enabled();
         let now = Instant::now();
-        Self {
-            runtime: Runtime::new(config),
+        Ok(Self {
+            runtime: Runtime::new(config)?,
             path,
             logs,
             desktop,
@@ -406,7 +406,7 @@ impl Controller {
             last_log_filter: Filter::default(),
             last_dropped_logs: 0,
             log_model: Rc::new(VecModel::default()),
-        }
+        })
     }
     fn zh(&self) -> bool {
         match self.runtime.config.options.language {

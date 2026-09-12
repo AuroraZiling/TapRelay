@@ -43,58 +43,47 @@ fn render_all_views_without_hardware() {
             enabled: true,
         },
     ])));
-    ui.set_function_cards(ModelRc::new(VecModel::from(vec![
-        FunctionCard {
-            title: "Media".into(),
-            items: ModelRc::new(VecModel::from(vec![
-                FunctionItem {
-                    id: "media.play-pause".into(),
-                    label: "Play / Pause".into(),
-                    enabled: false,
-                    activation: "Press".into(),
-                },
-                FunctionItem {
-                    id: "media.previous".into(),
-                    label: "Previous".into(),
-                    enabled: false,
-                    activation: "Press".into(),
-                },
-                FunctionItem {
-                    id: "media.next".into(),
-                    label: "Next".into(),
-                    enabled: false,
-                    activation: "Press".into(),
-                },
-                FunctionItem {
-                    id: "media.mute".into(),
-                    label: "Mute / Unmute".into(),
-                    enabled: false,
-                    activation: "Press".into(),
-                },
-                FunctionItem {
-                    id: "media.rewind".into(),
-                    label: "Rewind".into(),
-                    enabled: false,
-                    activation: "Hold".into(),
-                },
-                FunctionItem {
-                    id: "media.fast-forward".into(),
-                    label: "Fast Forward".into(),
-                    enabled: false,
-                    activation: "Hold".into(),
-                },
-            ])),
-        },
-        FunctionCard {
-            title: "Virtual".into(),
-            items: ModelRc::new(VecModel::from(vec![FunctionItem {
-                id: "virtual.passthrough".into(),
-                label: "Toggle Passthrough".into(),
+    ui.set_function_cards(ModelRc::new(VecModel::from(vec![FunctionCard {
+        title: "Media".into(),
+        items: ModelRc::new(VecModel::from(vec![
+            FunctionItem {
+                id: "media.play-pause".into(),
+                label: "Play / Pause".into(),
                 enabled: false,
                 activation: "Press".into(),
-            }])),
-        },
-    ])));
+            },
+            FunctionItem {
+                id: "media.previous".into(),
+                label: "Previous".into(),
+                enabled: false,
+                activation: "Press".into(),
+            },
+            FunctionItem {
+                id: "media.next".into(),
+                label: "Next".into(),
+                enabled: false,
+                activation: "Press".into(),
+            },
+            FunctionItem {
+                id: "media.mute".into(),
+                label: "Mute / Unmute".into(),
+                enabled: false,
+                activation: "Press".into(),
+            },
+            FunctionItem {
+                id: "media.rewind".into(),
+                label: "Rewind".into(),
+                enabled: false,
+                activation: "Hold".into(),
+            },
+            FunctionItem {
+                id: "media.fast-forward".into(),
+                label: "Fast Forward".into(),
+                enabled: false,
+                activation: "Hold".into(),
+            },
+        ])),
+    }])));
     ui.set_paired_devices(ModelRc::new(VecModel::from(vec![DeviceRow {
         name: "Living room tablet".into(),
         detail: "Connected; preparing media controls".into(),
@@ -185,11 +174,6 @@ fn render_all_views_without_hardware() {
                         pixel(100, 150),
                         pixel(80, 150),
                         "Function category panels must be visible below the introduction"
-                    );
-                    assert_ne!(
-                        pixel(550, 150),
-                        pixel(80, 150),
-                        "The second category must occupy the right column"
                     );
                 }
                 if mode == 2 && page == 5 && dark {
@@ -743,7 +727,7 @@ fn preview_function_layouts(ui: &AppWindow, out: &std::path::Path) {
             ThemeMode::Light
         });
         ui.window().set_size(slint::LogicalSize::new(width, height));
-        let cards = [CategoryId::Media, CategoryId::Virtual].map(|category| {
+        let cards = [CategoryId::Media].map(|category| {
             let definitions: Vec<_> = FUNCTION_CATALOG
                 .iter()
                 .filter(|d| d.category == category)
@@ -814,7 +798,7 @@ fn preview_function_layouts(ui: &AppWindow, out: &std::path::Path) {
         ])));
         ui.set_disabled_bindings(ModelRc::new(VecModel::from(vec![
             rows[3].clone(),
-            rows[6].clone(),
+            rows[2].clone(),
         ])));
         for mode in [2, 1] {
             ui.set_mode(mode);

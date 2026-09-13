@@ -375,17 +375,6 @@ impl Runtime {
         Ok(())
     }
 
-    pub fn unbind_function(&mut self, id: FunctionId) -> Result<()> {
-        let function = self
-            .config
-            .functions
-            .get_mut(&id)
-            .context("Unknown function")?;
-        function.shortcuts.clear();
-        self.bindings_changed();
-        Ok(())
-    }
-
     pub fn replace_shortcut(
         &mut self,
         id: FunctionId,
@@ -753,6 +742,26 @@ mod tests {
         runtime.tick();
         assert_eq!(runtime.delivered, 1);
         assert!(!runtime.listening);
+    }
+
+    #[test]
+    fn toggling_function_preserves_saved_shortcuts() {
+        let mut runtime = Runtime::new(Config::default());
+        let id = FunctionId::MediaNext;
+        let shortcuts = vec![Shortcut::mouse(ModifierSet::empty(), MouseButton::Side1)];
+        runtime.config.functions.insert(
+            id,
+            FunctionConfig {
+                enabled: true,
+                shortcuts: shortcuts.clone(),
+            },
+        );
+        runtime.set_function_enabled(id, false).unwrap();
+        assert!(!runtime.config.functions[&id].enabled);
+        assert_eq!(runtime.config.functions[&id].shortcuts, shortcuts);
+        runtime.set_function_enabled(id, true).unwrap();
+        assert!(runtime.config.functions[&id].enabled);
+        assert_eq!(runtime.config.functions[&id].shortcuts, shortcuts);
     }
 
     #[test]

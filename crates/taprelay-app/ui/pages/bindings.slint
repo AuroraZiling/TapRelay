@@ -1,3 +1,4 @@
+import { Switch } from "../vendor/components/switch.slint";
 import { Button } from "../vendor/components/button.slint";
 import { FocusRing } from "../vendor/components/focus-ring.slint";
 import { ScrollArea } from "../vendor/components/scroll-area.slint";
@@ -6,7 +7,6 @@ import { I18n } from "@i18n";
 import { FunctionBindingRow, ShortcutItem } from "../types.slint";
 import { IconDisplay, IconSet } from "@lucide";
 import { Caption, Label } from "../components/primitives.slint";
-import { Panel } from "../components/primitives.slint";
 import { Badge } from "../vendor/components/badge.slint";
 
 
@@ -331,10 +331,10 @@ component DisabledShortcutChip inherits Rectangle {
     }
 }
 
-// Shared row geometry keeps active and disabled sections on the same columns.
+// Keep every function in catalog order, including disabled functions.
 component FunctionBindingRowView inherits Rectangle {
     in property <FunctionBindingRow> binding-row;
-    in property <bool> inactive: false;
+    property <bool> inactive: !root.binding-row.enabled;
     in property <string> capture-function;
     in property <int> capture-slot: -1;
     in property <string> capture-text;
@@ -351,15 +351,26 @@ component FunctionBindingRowView inherits Rectangle {
         height: 64px;
         spacing: 16px;
         cross-axis-alignment: center;
+        Switch {
+            width: 36px;
+            height: 20px;
+            checked: root.binding-row.enabled;
+            disabled: root.capture-function != "";
+            accessible-role: checkbox;
+            accessible-checked: root.binding-row.enabled;
+            accessible-enabled: root.capture-function == "";
+            accessible-label: root.binding-row.label;
+            toggled(enabled) => { root.action("toggle-function", enabled ? 1 : 0, root.binding-row.id); }
+        }
         left := HorizontalLayout {
-            width: root.width - 364px;
+            width: root.width - 416px;
 
             spacing: 8px;
             alignment: start;
             cross-axis-alignment: center;
             // Present one slot for now; the model retains all saved shortcuts.
             if !root.inactive && root.binding-row.shortcuts.length > 0: BindingChip {
-                available-width: root.has-error ? (root.width - 372px) / 2 : root.width - 364px;
+                available-width: root.has-error ? (root.width - 424px) / 2 : root.width - 416px;
                 label: root.capture-function == root.binding-row.id && root.capture-slot == root.first-shortcut.slot
                     ? root.capture-text : root.first-shortcut.text;
                 recording: root.capture-function == root.binding-row.id && root.capture-slot == root.first-shortcut.slot;
@@ -369,8 +380,12 @@ component FunctionBindingRowView inherits Rectangle {
                 cancel => { root.action("cancel-capture", 0, ""); }
                 remove => { root.action("delete", root.first-shortcut.slot, root.binding-row.id); }
             }
+            if root.inactive && root.binding-row.shortcuts.length == 0: Caption {
+                text: I18n.text.bindings-unset;
+                opacity: 0.5;
+            }
             if root.inactive && root.binding-row.shortcuts.length > 0: DisabledShortcutChip {
-                available-width: root.width - 364px;
+                available-width: root.width - 416px;
                 shortcut: root.first-shortcut;
             }
             if !root.inactive && root.binding-row.shortcuts.length == 0
@@ -384,7 +399,7 @@ component FunctionBindingRowView inherits Rectangle {
             if !root.inactive && root.binding-row.shortcuts.length == 0
                     && root.capture-function == root.binding-row.id
                     && root.capture-slot == root.binding-row.shortcuts.length: BindingChip {
-                available-width: root.has-error ? (root.width - 372px) / 2 : root.width - 364px;
+                available-width: root.has-error ? (root.width - 424px) / 2 : root.width - 416px;
                 label: root.capture-text;
                 recording: true;
                 removable: false;
@@ -424,23 +439,14 @@ component FunctionBindingRowView inherits Rectangle {
                 horizontal-stretch: 0;
             }
             Rectangle { horizontal-stretch: 1; }
-            if root.inactive: Button {
-                text: I18n.text.bindings-unbind;
-                variant: destructive;
-                destructive-outline: true;
-                horizontal-stretch: 0;
-                size: sm;
-                disabled: root.capture-function != "";
-                clicked => { root.action("unbind-function", 0, root.binding-row.id); }
-            }
+
         }
     }
 
 }
 
 export component FunctionBindingsPage inherits VerticalLayout {
-    in property <[FunctionBindingRow]> active-rows;
-    in property <[FunctionBindingRow]> disabled-rows;
+    in property <[FunctionBindingRow]> rows;
     in property <string> capture-function;
     in property <int> capture-slot: -1;
     in property <string> capture-text;
@@ -458,47 +464,22 @@ export component FunctionBindingsPage inherits VerticalLayout {
             height: self.preferred-height;
             spacing: 8px;
             alignment: start;
-            if root.active-rows.length == 0: Panel {
-                height: empty-content.preferred-height;
-                empty-content := HorizontalLayout {
-                    padding: 20px;
-                    spacing: 20px;
-                    cross-axis-alignment: center;
-                    Label { text: I18n.text.bindings-empty; horizontal-stretch: 1; }
-                    Button {
-                        text: I18n.text.functions-open;
-                        variant: outline;
-                        horizontal-stretch: 0;
-                        clicked => { root.action("navigate", 1, ""); }
-                    }
-                }
-            }
-            if root.active-rows.length > 0: HorizontalLayout {
+            if root.rows.length > 0: HorizontalLayout {
                 height: 28px;
                 padding-left: 16px;
                 padding-right: 16px;
                 spacing: 16px;
+                Caption { text: I18n.text.bindings-column-enabled; width: 36px; }
                 Caption { text: I18n.text.bindings-column-shortcut; horizontal-stretch: 1; }
                 Caption { text: I18n.text.bindings-column-activation; width: 80px; }
                 Caption { text: I18n.text.bindings-column-function; width: 220px; }
             }
-            for row in root.active-rows: FunctionBindingRowView {
+            for row in root.rows: FunctionBindingRowView {
                 binding-row: row;
                 capture-function: root.capture-function;
                 capture-slot: root.capture-slot;
                 capture-text: root.capture-text;
                 capture-error: root.capture-error;
-                action(name, index, value) => { root.action(name, index, value); }
-            }
-            if root.disabled-rows.length > 0: VerticalLayout {
-                padding-top: 16px;
-                padding-bottom: 4px;
-                Caption { text: I18n.text.bindings-disabled; }
-            }
-            for row in root.disabled-rows: FunctionBindingRowView {
-                binding-row: row;
-                inactive: true;
-                capture-function: root.capture-function;
                 action(name, index, value) => { root.action(name, index, value); }
             }
         }

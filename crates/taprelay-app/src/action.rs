@@ -16,7 +16,7 @@ actions! {
     Resume => "resume", TrayReset => "tray-reset", BluetoothSettings => "bluetooth-settings",
     DataFolder => "data-folder", LogsFolder => "logs-folder", Capture => "capture",
     CancelCapture => "cancel-capture", Delete => "delete", Device => "device",
-    ToggleFunction => "toggle-function", UnbindFunction => "unbind-function",
+    ToggleFunction => "toggle-function",
     PairDevice => "pair-device", DisconnectDevice => "disconnect-device",
     Wizard => "wizard", WizardNext => "wizard-next", WizardBack => "wizard-back",
     WizardFinish => "wizard-finish", Theme => "theme", Language => "language",

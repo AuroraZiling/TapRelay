@@ -238,9 +238,6 @@ impl RuntimeHandle {
     pub fn set_function_enabled(&mut self, id: FunctionId, enabled: bool) -> Result<()> {
         self.update(move |r| r.set_function_enabled(id, enabled))
     }
-    pub fn unbind_function(&mut self, id: FunctionId) -> Result<()> {
-        self.update(move |r| r.unbind_function(id))
-    }
     pub fn replace_shortcut(
         &mut self,
         id: FunctionId,

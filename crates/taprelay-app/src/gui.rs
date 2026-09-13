@@ -1,6 +1,5 @@
 use crate::{
-    AppWindow, BindingRow, CheckRow, FunctionBindingRow, FunctionCard, FunctionItem, LogLine,
-    ShortcutItem, Theme, ThemeMode,
+    AppWindow, BindingRow, CheckRow, FunctionBindingRow, LogLine, ShortcutItem, Theme, ThemeMode,
     action::{Action, CaptureTarget},
     administrator,
     config::{self, Config, Language, SaveQueue, Theme as ThemeSetting},
@@ -19,7 +18,7 @@ use std::{
     time::{Duration, Instant},
 };
 use taprelay_core::{
-    function::{self, Activation, CategoryId, FunctionId},
+    function::{self, Activation, FunctionId},
     state::{Target, TransportActivity},
 };
 
@@ -571,12 +570,6 @@ impl Controller {
                 self.runtime.set_function_enabled(id, index != 0)?;
                 self.saves.changed();
             }
-            Action::UnbindFunction => {
-                self.cancel_capture();
-                let id = FunctionId::from_stable_id(value).context("Unknown function")?;
-                self.runtime.unbind_function(id)?;
-                self.saves.changed();
-            }
             Action::Device | Action::PairDevice => {
                 if let Some(target) = self
                     .runtime
@@ -611,6 +604,12 @@ impl Controller {
                 }
                 let page = (ui.get_wizard_page() + if name == Action::WizardNext { 1 } else { -1 })
                     .clamp(0, 3);
+                // Preserve step IDs saved by the former four-step wizard.
+                let page = if page == 1 {
+                    if name == Action::WizardNext { 2 } else { 0 }
+                } else {
+                    page
+                };
                 ui.set_wizard_page(page);
                 self.runtime.config.wizard.page = page as u8;
                 self.saves.changed();
@@ -958,9 +957,7 @@ impl Controller {
         ui.set_diagnostics(format!("Adapter={} · Peripheral={} · Service={} · Advertising={}\nLink={:?} · Subscription={:?} · Input={}\n{}: {}",s.adapter,s.peripheral,s.service,s.broadcasting,target.map(|t|t.link),target.map(|t|t.subscribed),s.input,self.tr(keys::DIAGNOSTICS_INPUTS),self.runtime.matched).into());
         if self.previous_bindings != Some((self.runtime.bindings_revision, zh)) {
             self.previous_bindings = Some((self.runtime.bindings_revision, zh));
-            let mut cards: Vec<(CategoryId, Vec<FunctionItem>, &'static str)> = Vec::new();
-            let mut active_rows = Vec::new();
-            let mut disabled_rows = Vec::new();
+            let mut rows = Vec::new();
             let mut summary = Vec::new();
             for definition in taprelay_core::function::FUNCTION_CATALOG {
                 let Some(config) = self.runtime.config.functions.get(&definition.id) else {
@@ -970,23 +967,6 @@ impl Controller {
                     Activation::Press => self.tr(keys::BINDINGS_ACTIVATION_PRESS),
                     Activation::Hold => self.tr(keys::BINDINGS_ACTIVATION_HOLD),
                 };
-                let item = FunctionItem {
-                    id: definition.id.stable_id().into(),
-                    label: self.tr(definition.name_key).into(),
-                    enabled: config.enabled,
-                    activation: activation.into(),
-                };
-                let category = if let Some(index) = cards
-                    .iter()
-                    .position(|(category, _, _)| *category == definition.category)
-                {
-                    index
-                } else {
-                    cards.push((definition.category, Vec::new(), definition.category_key));
-                    cards.len() - 1
-                };
-                cards[category].1.push(item);
-
                 let shortcuts = config
                     .shortcuts
                     .iter()
@@ -1026,23 +1006,9 @@ impl Controller {
                     enabled: config.enabled,
                     shortcuts: ModelRc::new(VecModel::from(shortcuts)),
                 };
-                if config.enabled {
-                    active_rows.push(row);
-                } else if !config.shortcuts.is_empty() {
-                    disabled_rows.push(row);
-                }
+                rows.push(row);
             }
-            ui.set_function_cards(ModelRc::new(VecModel::from(
-                cards
-                    .into_iter()
-                    .map(|(_, items, category_key)| FunctionCard {
-                        title: self.tr(category_key).into(),
-                        items: ModelRc::new(VecModel::from(items)),
-                    })
-                    .collect::<Vec<_>>(),
-            )));
-            ui.set_active_bindings(ModelRc::new(VecModel::from(active_rows)));
-            ui.set_disabled_bindings(ModelRc::new(VecModel::from(disabled_rows)));
+            ui.set_function_bindings(ModelRc::new(VecModel::from(rows)));
             ui.set_bindings(ModelRc::new(VecModel::from(summary)));
         }
         if self

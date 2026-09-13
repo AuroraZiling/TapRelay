@@ -43,47 +43,6 @@ fn render_all_views_without_hardware() {
             enabled: true,
         },
     ])));
-    ui.set_function_cards(ModelRc::new(VecModel::from(vec![FunctionCard {
-        title: "Media".into(),
-        items: ModelRc::new(VecModel::from(vec![
-            FunctionItem {
-                id: "media.play-pause".into(),
-                label: "Play / Pause".into(),
-                enabled: false,
-                activation: "Press".into(),
-            },
-            FunctionItem {
-                id: "media.previous".into(),
-                label: "Previous".into(),
-                enabled: false,
-                activation: "Press".into(),
-            },
-            FunctionItem {
-                id: "media.next".into(),
-                label: "Next".into(),
-                enabled: false,
-                activation: "Press".into(),
-            },
-            FunctionItem {
-                id: "media.mute".into(),
-                label: "Mute / Unmute".into(),
-                enabled: false,
-                activation: "Press".into(),
-            },
-            FunctionItem {
-                id: "media.rewind".into(),
-                label: "Rewind".into(),
-                enabled: false,
-                activation: "Hold".into(),
-            },
-            FunctionItem {
-                id: "media.fast-forward".into(),
-                label: "Fast Forward".into(),
-                enabled: false,
-                activation: "Hold".into(),
-            },
-        ])),
-    }])));
     ui.set_paired_devices(ModelRc::new(VecModel::from(vec![DeviceRow {
         name: "Living room tablet".into(),
         detail: "Connected; preparing media controls".into(),
@@ -168,14 +127,6 @@ fn render_all_views_without_hardware() {
                 let shot = ui.window().take_snapshot().unwrap();
                 assert_eq!(shot.width(), width as u32);
                 assert_eq!(shot.height(), height as u32);
-                if mode == 2 && page == 1 && dark {
-                    let pixel = |x: usize, y: usize| shot.as_slice()[y * shot.width() as usize + x];
-                    assert_ne!(
-                        pixel(100, 150),
-                        pixel(80, 150),
-                        "Function category panels must be visible below the introduction"
-                    );
-                }
                 if mode == 2 && page == 5 && dark {
                     let width = shot.width() as usize;
                     let background = shot.as_slice()[300 * width + 70];
@@ -412,8 +363,7 @@ fn render_all_views_without_hardware() {
         enabled: true,
         shortcuts: ModelRc::new(VecModel::from(vec![shortcut])),
     };
-    ui.set_active_bindings(ModelRc::new(VecModel::from(vec![row.clone()])));
-    ui.set_disabled_bindings(ModelRc::new(VecModel::default()));
+    ui.set_function_bindings(ModelRc::new(VecModel::from(vec![row.clone()])));
     ui.set_capture_text("请按下快捷键，松开完成".into());
     for (name, function, slot) in [
         ("edit", "media.play-pause", 0),
@@ -425,7 +375,7 @@ fn render_all_views_without_hardware() {
         if name == "new" {
             preview_row.shortcuts = ModelRc::new(VecModel::default());
         }
-        ui.set_active_bindings(ModelRc::new(VecModel::from(vec![preview_row])));
+        ui.set_function_bindings(ModelRc::new(VecModel::from(vec![preview_row])));
         ui.set_capture_function(function.into());
         ui.set_capture_slot(slot);
         ui.set_capture_error(if name == "error" { "无效组合" } else { "" }.into());
@@ -466,7 +416,7 @@ fn render_all_views_without_hardware() {
     });
     let mut empty_row = row.clone();
     empty_row.shortcuts = ModelRc::new(VecModel::default());
-    ui.set_active_bindings(ModelRc::new(VecModel::from(vec![empty_row])));
+    ui.set_function_bindings(ModelRc::new(VecModel::from(vec![empty_row])));
     ui.set_capture_function("media.play-pause".into());
     ui.set_capture_slot(0);
     let _ = ui.window().take_snapshot().unwrap();
@@ -709,7 +659,7 @@ fn log_rows(count: usize, offset: usize) -> Vec<LogLine> {
 // Use the real catalog and deliberately long shortcuts, rather than English
 // placeholders in every locale. This exercises the actual nested page layouts.
 fn preview_function_layouts(ui: &AppWindow, out: &std::path::Path) {
-    use taprelay_core::function::{Activation, CategoryId, FUNCTION_CATALOG};
+    use taprelay_core::function::{Activation, FUNCTION_CATALOG};
     ui.set_capture_function("".into());
     ui.set_capture_slot(-1);
     ui.set_capture_error("".into());
@@ -727,36 +677,6 @@ fn preview_function_layouts(ui: &AppWindow, out: &std::path::Path) {
             ThemeMode::Light
         });
         ui.window().set_size(slint::LogicalSize::new(width, height));
-        let cards = [CategoryId::Media].map(|category| {
-            let definitions: Vec<_> = FUNCTION_CATALOG
-                .iter()
-                .filter(|d| d.category == category)
-                .collect();
-            FunctionCard {
-                title: i18n::text(zh, definitions[0].category_key).into(),
-                items: ModelRc::new(VecModel::from(
-                    definitions
-                        .iter()
-                        .enumerate()
-                        .map(|(i, d)| FunctionItem {
-                            id: d.id.stable_id().into(),
-                            label: i18n::text(zh, d.name_key).into(),
-                            enabled: i % 2 == 0,
-                            activation: i18n::text(
-                                zh,
-                                if d.activation == Activation::Hold {
-                                    "bindings.activation.hold"
-                                } else {
-                                    "bindings.activation.press"
-                                },
-                            )
-                            .into(),
-                        })
-                        .collect::<Vec<_>>(),
-                )),
-            }
-        });
-        ui.set_function_cards(ModelRc::new(VecModel::from(cards.to_vec())));
         let rows: Vec<_> = FUNCTION_CATALOG
             .iter()
             .enumerate()
@@ -790,21 +710,16 @@ fn preview_function_layouts(ui: &AppWindow, out: &std::path::Path) {
                 )),
             })
             .collect();
-        ui.set_active_bindings(ModelRc::new(VecModel::from(vec![
-            rows[0].clone(),
-            rows[1].clone(),
-            rows[4].clone(),
-            rows[5].clone(),
-        ])));
-        ui.set_disabled_bindings(ModelRc::new(VecModel::from(vec![
-            rows[3].clone(),
-            rows[2].clone(),
-        ])));
+        let mut rows = rows;
+        rows[3].enabled = false;
+        rows[2].enabled = false;
+        ui.set_function_bindings(ModelRc::new(VecModel::from(rows)));
         for mode in [2, 1] {
             ui.set_mode(mode);
-            for page in [1, 2] {
+            {
+                let page = 2;
                 ui.set_page(page);
-                ui.set_wizard_page(page - 1);
+                ui.set_wizard_page(0);
                 let _ = ui.window().take_snapshot().unwrap();
                 i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
                 slint::platform::update_timers_and_animations();
@@ -858,15 +773,15 @@ fn preview_function_layouts(ui: &AppWindow, out: &std::path::Path) {
     ui.set_mode(2);
     ui.set_page(2);
     let _ = ui.window().take_snapshot().unwrap();
-    click(400., 188.);
-    click(383., 260.);
+    click(452., 188.);
+    click(435., 260.);
     assert!(
         actions.borrow().is_empty(),
         "Neither a saved second shortcut nor an add-second button should be interactive"
     );
     use slint::Model;
     assert_eq!(
-        ui.get_active_bindings()
+        ui.get_function_bindings()
             .row_data(0)
             .unwrap()
             .shortcuts
@@ -876,19 +791,19 @@ fn preview_function_layouts(ui: &AppWindow, out: &std::path::Path) {
     );
     ui.window()
         .dispatch_event(slint::platform::WindowEvent::PointerMoved {
-            position: slint::LogicalPosition::new(343., 188.),
+            position: slint::LogicalPosition::new(395., 188.),
         });
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
     slint::platform::update_timers_and_animations();
     let hovered = ui.window().take_snapshot().unwrap();
     assert!(
-        (178..198).any(|y| (333..353).any(|x| {
+        (178..198).any(|y| (385..405).any(|x| {
             let p = hovered.as_slice()[y * hovered.width() as usize + x];
             i16::from(p.r) > i16::from(p.g) + 20
         })),
         "The delete icon must show its destructive hover feedback"
     );
-    click(343., 188.);
+    click(395., 188.);
     assert!(
         actions
             .borrow()
@@ -902,53 +817,37 @@ fn preview_function_layouts(ui: &AppWindow, out: &std::path::Path) {
             .any(|(name, _, _)| name == "capture"),
         "Deleting a shortcut must not start recording"
     );
-    ui.window()
-        .dispatch_event(slint::platform::WindowEvent::PointerMoved {
-            position: slint::LogicalPosition::new(1045., 522.),
-        });
-    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
-    slint::platform::update_timers_and_animations();
-    let unbind_hover = ui.window().take_snapshot().unwrap();
-    let tint = unbind_hover.as_slice()[510 * unbind_hover.width() as usize + 1070];
-    assert!(
-        tint.r > tint.g,
-        "The right-aligned unbind button must have a red-tinted hover background"
+    actions.borrow_mut().clear();
+    click(122., 188.);
+    click(122., 332.);
+    assert_eq!(
+        *actions.borrow(),
+        vec![
+            ("toggle-function".into(), 0, "media.play-pause".into()),
+            ("toggle-function".into(), 1, "media.next".into()),
+        ],
+        "Switches must disable active functions and enable disabled unbound functions"
     );
-    let mut bytes = format!(
-        "P6\n{} {}\n255\n",
-        unbind_hover.width(),
-        unbind_hover.height()
-    )
-    .into_bytes();
-    for pixel in unbind_hover.as_slice() {
-        bytes.extend_from_slice(&[pixel.r, pixel.g, pixel.b]);
-    }
-    std::fs::write(out.join("bindings-unbind-hover.ppm"), bytes).unwrap();
-    click(1045., 522.);
-    assert!(
-        actions
-            .borrow()
-            .contains(&("unbind-function".into(), 0, "media.mute".into())),
-        "Disabled rows must keep their whole-row unbind button usable"
+    assert_eq!(
+        ui.get_function_bindings().row_count(),
+        FUNCTION_CATALOG.len()
     );
-    ui.set_page(1);
+    assert_eq!(
+        ui.get_function_bindings()
+            .row_data(0)
+            .unwrap()
+            .shortcuts
+            .row_count(),
+        2
+    );
+    ui.set_capture_function("media.play-pause".into());
+    ui.set_capture_slot(0);
     let _ = ui.window().take_snapshot().unwrap();
-    click(140., 190.);
+    actions.borrow_mut().clear();
+    click(122., 332.);
     assert!(
-        actions
-            .borrow()
-            .contains(&("toggle-function".into(), 0, "media.play-pause".into())),
-        "A category capsule must toggle its stable function id"
+        actions.borrow().is_empty(),
+        "Recording must lock function switches"
     );
-    ui.set_active_bindings(ModelRc::new(VecModel::default()));
-    ui.set_disabled_bindings(ModelRc::new(VecModel::default()));
-    ui.set_page(2);
-    let _ = ui.window().take_snapshot().unwrap();
-    click(1020., 158.);
-    assert!(
-        actions
-            .borrow()
-            .contains(&("navigate".into(), 1, String::new())),
-        "The empty-state action must be clickable inside its panel"
-    );
+    ui.set_capture_function("".into());
 }

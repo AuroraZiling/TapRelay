@@ -2,19 +2,16 @@ import { Button } from "../vendor/components/button.slint";
 import { Tokens } from "../vendor/theme/tokens.slint";
 import { ScrollArea } from "../vendor/components/scroll-area.slint";
 import { I18n } from "@i18n";
-import { DeviceRow, FunctionBindingRow, FunctionCard, RelayStatus } from "../types.slint";
+import { DeviceRow, FunctionBindingRow, RelayStatus } from "../types.slint";
 import { Heading, Label, ErrorBanner } from "../components/primitives.slint";
 import { RelayStatusCard, AdminAlert } from "../components/runtime-panels.slint";
-import { FunctionsPage } from "functions.slint";
 import { FunctionBindingsPage } from "bindings.slint";
 import { DevicesPage } from "devices.slint";
 import { BluetoothStatus } from "../components/bluetooth-status.slint";
 import { ReceiverActions } from "../components/receiver-actions.slint";
 
 export component WizardPage inherits VerticalLayout {
-    in property <[FunctionCard]> function-cards;
-    in property <[FunctionBindingRow]> active-bindings;
-    in property <[FunctionBindingRow]> disabled-bindings;
+    in property <[FunctionBindingRow]> function-bindings;
     in property <string> capture-function;
     in property <int> capture-slot: -1;
     in property <string> capture-error;
@@ -43,7 +40,7 @@ export component WizardPage inherits VerticalLayout {
         Rectangle {
             x: 0;
             y: 0;
-            width: parent.width * clamp(root.step, 0, 3) / 3;
+            width: parent.width * clamp(root.step, 0, 2) / 2;
             height: parent.height;
             border-radius: 2px;
             background: Tokens.color-primary;
@@ -53,36 +50,29 @@ export component WizardPage inherits VerticalLayout {
         spacing: 12px;
         Heading {
             horizontal-stretch: 0;
-            text: [I18n.text.wizard-functions,I18n.text.wizard-bindings,I18n.text.wizard-receiver,I18n.text.wizard-test][root.step];
+            text: [I18n.text.wizard-bindings,I18n.text.wizard-receiver,I18n.text.wizard-test][root.step];
         }
-        if root.step == 2: BluetoothStatus {
+        if root.step == 1: BluetoothStatus {
             available: root.bluetooth-available;
             busy: root.busy;
             status-label: root.adapter-label;
         }
-        if root.step == 2: Rectangle { horizontal-stretch: 1; }
-        if root.step == 2: ReceiverActions {
+        if root.step == 1: Rectangle { horizontal-stretch: 1; }
+        if root.step == 1: ReceiverActions {
             action(name, index, value) => { root.action(name, index, value); }
         }
     }
-    if root.step == 3 && !root.elevated: AdminAlert {
+    if root.step == 2 && !root.elevated: AdminAlert {
         action(name, index, value) => { root.action(name, index, value); }
     }
-    if root.problem != "" && root.step != 2: ErrorBanner {
+    if root.problem != "" && root.step != 1: ErrorBanner {
         problem: root.problem;
         action(name,index,value) => {
             root.action(name,index,value);
         }
     }
-    if root.step == 0: FunctionsPage {
-        cards: root.function-cards;
-        action(name, index, value) => {
-            root.action(name, index, value);
-        }
-    }
-    if root.step == 1: FunctionBindingsPage {
-        active-rows: root.active-bindings;
-        disabled-rows: root.disabled-bindings;
+    if root.step == 0: FunctionBindingsPage {
+        rows: root.function-bindings;
         capture-function: root.capture-function;
         capture-slot: root.capture-slot;
         capture-error: root.capture-error;
@@ -91,7 +81,7 @@ export component WizardPage inherits VerticalLayout {
             root.action(name, index, value);
         }
     }
-    if root.step == 2: DevicesPage {
+    if root.step == 1: DevicesPage {
         discovery-status: root.discovery-status;
         scanning: root.scanning;
         paired-devices: root.paired-devices;
@@ -99,7 +89,7 @@ export component WizardPage inherits VerticalLayout {
             root.action(name, index, value);
         }
     }
-    if root.step == 3: ScrollArea {
+    if root.step == 2: ScrollArea {
         content-height: max(self.height, content.preferred-height);
         content := VerticalLayout {
             x: 0;
@@ -135,10 +125,10 @@ export component WizardPage inherits VerticalLayout {
             }
         }
         Button {
-            text: root.step == 3 ? I18n.text.wizard-finish : I18n.text.wizard-next;
-            disabled: root.capture-function != "" || (root.step == 2 && !root.receiver-next-allowed);
+            text: root.step == 2 ? I18n.text.wizard-finish : I18n.text.wizard-next;
+            disabled: root.capture-function != "" || (root.step == 1 && !root.receiver-next-allowed);
             clicked=> {
-                root.action(root.step == 3 ? "wizard-finish" : "wizard-next",0,"");
+                root.action(root.step == 2 ? "wizard-finish" : "wizard-next",0,"");
             }
         }
     }

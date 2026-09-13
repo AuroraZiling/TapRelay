@@ -1,8 +1,6 @@
 // Log severity as shown by the log page; TRACE is reported as debug.
 export enum LogLevel { debug, info, warning, error }
 export struct LogLine { text: string, level: LogLevel }
-export struct FunctionItem { id: string, label: string, enabled: bool, activation: string }
-export struct FunctionCard { title: string, items: [FunctionItem] }
 export struct ShortcutItem { text: string, keys: [string], slot: int, enabled: bool }
 export struct FunctionBindingRow {
     id: string,

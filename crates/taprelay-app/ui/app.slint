@@ -1,21 +1,20 @@
 import { Tokens, Theme, ThemeMode } from "vendor/theme/tokens.slint";
 import { BluetoothStatus } from "components/bluetooth-status.slint";
 import { I18n, TranslationText } from "@i18n";
-import { BindingRow, DeviceRow, CheckRow, FunctionBindingRow, FunctionCard, FunctionItem, ShortcutItem, RelayStatus, LogLevel, LogLine } from "types.slint";
+import { BindingRow, DeviceRow, CheckRow, FunctionBindingRow, ShortcutItem, RelayStatus, LogLevel, LogLine } from "types.slint";
 import { Heading, ErrorBanner } from "components/primitives.slint";
 import { Sidebar } from "components/sidebar.slint";
 import { Toast } from "components/toast.slint";
 import { EnvironmentPage } from "pages/environment.slint";
 import { WizardPage } from "pages/wizard.slint";
 import { OverviewPage } from "pages/overview.slint";
-import { FunctionsPage } from "pages/functions.slint";
 import { FunctionBindingsPage } from "pages/bindings.slint";
 import { DevicesPage } from "pages/devices.slint";
 import { ReceiverActions } from "components/receiver-actions.slint";
 import { LogClearButton, LogLevelFilters } from "components/log-level-filters.slint";
 import { LogsPage } from "pages/logs.slint";
 import { SettingsPage } from "pages/settings.slint";
-export { Theme, ThemeMode, I18n, TranslationText, BindingRow, DeviceRow, CheckRow, FunctionBindingRow, FunctionCard, FunctionItem, ShortcutItem, RelayStatus, LogLevel, LogLine }
+export { Theme, ThemeMode, I18n, TranslationText, BindingRow, DeviceRow, CheckRow, FunctionBindingRow, ShortcutItem, RelayStatus, LogLevel, LogLine }
 
 // Window shell: public Rust interface, navigation and page composition only.
 export component AppWindow inherits Window {
@@ -35,9 +34,7 @@ export component AppWindow inherits Window {
     in-out property <int> page: 0;
     in-out property <int> wizard-page: 0;
     in property <[BindingRow]> bindings;
-    in property <[FunctionCard]> function-cards;
-    in property <[FunctionBindingRow]> active-bindings;
-    in property <[FunctionBindingRow]> disabled-bindings;
+    in property <[FunctionBindingRow]> function-bindings;
     in property <[CheckRow]> checks;
     in property <bool> listening;
     in property <bool> ready;
@@ -116,9 +113,7 @@ export component AppWindow inherits Window {
                 adapter-label: root.adapter-label;
                 bluetooth-available: root.bluetooth-available;
                 busy: root.busy;
-                function-cards: root.function-cards;
-                active-bindings: root.active-bindings;
-                disabled-bindings: root.disabled-bindings;
+                function-bindings: root.function-bindings;
                 capture-function: root.capture-function;
                 capture-slot: root.capture-slot;
                 capture-error: root.capture-error;
@@ -130,7 +125,7 @@ export component AppWindow inherits Window {
                 problem: root.problem;
                 relay-status: root.relay-status;
                 receiver-next-allowed: root.receiver-next-allowed;
-                step: root.wizard-page;
+                step: root.wizard-page <= 1 ? 0 : root.wizard-page - 1;
                 action(name, index, value) => {
                     root.action(name, index, value);
                 }
@@ -141,7 +136,7 @@ export component AppWindow inherits Window {
                     spacing: 12px;
                     Heading {
                         horizontal-stretch: 0;
-                        text: [I18n.text.nav-overview,I18n.text.nav-functions,I18n.text.nav-bindings,I18n.text.nav-receiver,I18n.text.nav-logs,I18n.text.nav-settings][root.page];
+                        text: [I18n.text.nav-overview,I18n.text.nav-bindings,I18n.text.nav-bindings,I18n.text.nav-receiver,I18n.text.nav-logs,I18n.text.nav-settings][root.page];
                     }
                     if root.page == 4: LogClearButton {
                         cleared => { root.action("clear-logs", 0, ""); }
@@ -179,15 +174,8 @@ export component AppWindow inherits Window {
                         root.action(name, index, value);
                     }
                 }
-                if root.page == 1: FunctionsPage {
-                    cards: root.function-cards;
-                    action(name, index, value) => {
-                        root.action(name, index, value);
-                    }
-                }
-                if root.page == 2: FunctionBindingsPage {
-                    active-rows: root.active-bindings;
-                    disabled-rows: root.disabled-bindings;
+                if root.page == 1 || root.page == 2: FunctionBindingsPage {
+                    rows: root.function-bindings;
                     capture-function: root.capture-function;
                     capture-slot: root.capture-slot;
                     capture-error: root.capture-error;

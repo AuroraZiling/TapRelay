@@ -43,16 +43,16 @@ export component Sidebar inherits Rectangle {
     VerticalLayout {
         padding: 12px;
         spacing: 10px;
-        for item[i] in [I18n.text.nav-overview,I18n.text.nav-functions,I18n.text.nav-bindings,I18n.text.nav-receiver,I18n.text.nav-logs]: NavButton {
+        for item[i] in [I18n.text.nav-overview,I18n.text.nav-bindings,I18n.text.nav-receiver,I18n.text.nav-logs]: NavButton {
             hint: item;
-            icon: [IconSet.LayoutDashboard, IconSet.ToggleLeft, IconSet.Keyboard, IconSet.Bluetooth, IconSet.ScrollText][i];
+            icon: [IconSet.LayoutDashboard, IconSet.Keyboard, IconSet.Bluetooth, IconSet.ScrollText][i];
             size: icon;
             width: 36px;
             horizontal-stretch: 0;
             text: "";
-            variant: root.page == i ? ButtonVariant.default: ButtonVariant.ghost;
+            variant: root.page == [0,2,3,4][i] ? ButtonVariant.default: ButtonVariant.ghost;
             clicked => {
-                root.action("navigate",i,"");
+                root.action("navigate",[0,2,3,4][i],"");
             }
             accessible-role: button;
             accessible-label: item;

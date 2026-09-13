@@ -11,7 +11,12 @@ use crate::{
     input::{InputCode, InputEvent, InputState, modifier},
 };
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+/// How long a merged press/hold shortcut must stay down before its long-press
+/// gesture takes over. Time is the only thing that separates a tapped
+/// "previous" from a held "rewind", so the router must be able to wait.
+pub const HOLD_THRESHOLD: Duration = Duration::from_millis(400);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RouterReason {
@@ -86,12 +91,17 @@ impl RouteResult {
 struct ActiveToken {
     binding: BindingKey,
     shortcut: crate::function::Shortcut,
+    /// The tap gesture, emitted on release unless the hold gesture took over.
     action: FunctionAction,
-    activation: Activation,
+    hold_action: Option<FunctionAction>,
     token: u64,
     revision: u64,
     created: Instant,
-    hold_counted: bool,
+    /// When the hold gesture becomes due. `None` when there is nothing left to
+    /// wait for, either because it was emitted or because there is none.
+    deadline: Option<Instant>,
+    /// The hold gesture was emitted and owns one held output.
+    hold_started: bool,
 }
 
 /// Owns physical state, exact shortcut matching, captured lifetimes, and the
@@ -179,15 +189,19 @@ impl InputRouter {
                     .find(token.binding)
                     .and_then(|index| next_index.binding(index))
                     .is_none_or(|binding| {
-                        binding.shortcut != token.shortcut || binding.action != token.action
+                        binding.shortcut != token.shortcut
+                            || binding.action != token.action
+                            || binding.hold_action != token.hold_action
                     });
                 replacement.then_some(code)
             })
             .collect();
         for code in active_codes {
             if let Some(active) = self.active.remove(&code) {
-                if active.activation == Activation::Hold && active.hold_counted {
-                    self.release_function(&active, &mut cleanup, Instant::now());
+                // A pending tap never produced an output, so dropping it needs
+                // no cleanup; only an escalated hold owns a held key.
+                if active.hold_started {
+                    self.release_hold(&active, &mut cleanup, Instant::now());
                 }
                 self.suppressed_until_up.insert(code);
             }
@@ -229,11 +243,13 @@ impl InputRouter {
             // the application has applied the cleanup outputs.
             self.suppressed_until_up
                 .insert(active.shortcut.primary_code());
-            if active.activation == Activation::Hold && active.hold_counted {
+            if active.hold_started
+                && let Some(action) = active.hold_action
+            {
                 result.outputs.push(RoutedOutput::Function {
                     binding: active.binding,
-                    action: active.action,
-                    activation: active.activation,
+                    action,
+                    activation: Activation::Hold,
                     down: false,
                     token: active.token,
                     revision: active.revision,
@@ -291,7 +307,7 @@ impl InputRouter {
             };
             if !event.down {
                 self.active.remove(&event.code);
-                self.release_function(&active, &mut result, event.captured);
+                self.finish(&active, &mut result, event.captured);
             }
             return self.stamp(result);
         }
@@ -437,9 +453,7 @@ impl InputRouter {
             };
             if !event.down {
                 self.active.remove(&event.code);
-                if active.activation == Activation::Hold && active.hold_counted {
-                    self.release_function(&active, &mut result, event.captured);
-                }
+                self.finish(&active, &mut result, event.captured);
             }
             return result;
         }
@@ -550,27 +564,16 @@ impl InputRouter {
             }],
         };
 
-        let activation = binding_activation(binding.key.function);
-        let hold_counted = activation == Activation::Hold;
-        if hold_counted {
-            let count = self.held_functions.entry(binding.key.function).or_default();
-            if *count == 0 {
-                result.outputs.push(RoutedOutput::Function {
-                    binding: binding.key,
-                    action: binding.action,
-                    activation,
-                    down: true,
-                    token,
-                    revision: self.revision,
-                    created,
-                });
-            }
-            *count += 1;
-        } else {
+        // A merged function cannot know which of its two gestures the user
+        // meant yet: the tap is emitted on release, and the hold gesture
+        // becomes due at the threshold. A plain tap has nothing to wait for,
+        // so it keeps firing on the press edge.
+        let deadline = binding.hold_action.map(|_| created + HOLD_THRESHOLD);
+        if deadline.is_none() {
             result.outputs.push(RoutedOutput::Function {
                 binding: binding.key,
                 action: binding.action,
-                activation,
+                activation: Activation::Press,
                 down: true,
                 token,
                 revision: self.revision,
@@ -590,23 +593,106 @@ impl InputRouter {
                 binding: binding.key,
                 shortcut: binding.shortcut,
                 action: binding.action,
-                activation,
+                hold_action: binding.hold_action,
                 token,
                 revision: self.revision,
                 created,
-                hold_counted,
+                deadline,
+                hold_started: false,
             },
         );
         result
     }
 
-    fn release_function(
-        &mut self,
-        active: &ActiveToken,
-        result: &mut RouteResult,
-        created: Instant,
-    ) {
-        if active.activation != Activation::Hold || !active.hold_counted {
+    /// The earliest instant at which [`InputRouter::tick`] would emit an
+    /// output. The platform arms its wake-up from this and owns the clock;
+    /// the router never reads the current time itself.
+    pub fn next_deadline(&self) -> Option<Instant> {
+        self.active
+            .values()
+            .filter_map(|token| token.deadline)
+            .min()
+    }
+
+    /// Promote every shortcut that has been held past [`HOLD_THRESHOLD`].
+    /// Returns no outputs while nothing is due, so a platform timer may call
+    /// this freely.
+    pub fn tick(&mut self, now: Instant) -> RouteResult {
+        let mut result = RouteResult {
+            revision: self.revision,
+            consume: false,
+            outputs: Vec::new(),
+        };
+        let due: Vec<InputCode> = self
+            .active
+            .iter()
+            .filter(|(_, token)| token.deadline.is_some_and(|deadline| deadline <= now))
+            .map(|(&code, _)| code)
+            .collect();
+        for code in due {
+            let Some((binding, action, token, revision)) =
+                self.active.get(&code).and_then(|active| {
+                    active
+                        .hold_action
+                        .map(|action| (active.binding, action, active.token, active.revision))
+                })
+            else {
+                continue;
+            };
+            if let Some(active) = self.active.get_mut(&code) {
+                active.deadline = None;
+                active.hold_started = true;
+            }
+            // Two shortcuts of one function share a single held output: the
+            // receiver must not see the same key pressed twice.
+            let count = self.held_functions.entry(binding.function).or_default();
+            if *count == 0 {
+                result.outputs.push(RoutedOutput::Function {
+                    binding,
+                    action,
+                    activation: Activation::Hold,
+                    down: true,
+                    token,
+                    revision,
+                    created: now,
+                });
+            }
+            *count += 1;
+        }
+        self.stamp(result)
+    }
+
+    /// Resolve a captured shortcut on its release edge. A merged function that
+    /// was released before its threshold is a tap; one that already escalated
+    /// releases the held seek instead.
+    fn finish(&mut self, active: &ActiveToken, result: &mut RouteResult, released: Instant) {
+        if active.hold_started {
+            self.release_hold(active, result, released);
+            return;
+        }
+        if active.hold_action.is_none() {
+            // The tap was already emitted on the press edge.
+            return;
+        }
+        result.outputs.push(RoutedOutput::Function {
+            binding: active.binding,
+            action: active.action,
+            activation: Activation::Press,
+            down: true,
+            token: active.token,
+            revision: active.revision,
+            // The intent is fresh at the decision, not at the press.
+            // Otherwise a deferred tap would already have outlived the press
+            // admission deadline by the time the application queues it.
+            created: released,
+        });
+    }
+
+    fn release_hold(&mut self, active: &ActiveToken, result: &mut RouteResult, created: Instant) {
+        let Some(action) = active.hold_action else {
+            return;
+        };
+        if !active.hold_started {
             return;
         }
         if let Some(count) = self.held_functions.get_mut(&active.binding.function) {
@@ -615,8 +701,8 @@ impl InputRouter {
                 self.held_functions.remove(&active.binding.function);
                 result.outputs.push(RoutedOutput::Function {
                     binding: active.binding,
-                    action: active.action,
-                    activation: active.activation,
+                    action,
+                    activation: Activation::Hold,
                     down: false,
                     token: active.token,
                     revision: active.revision,
@@ -657,26 +743,44 @@ impl InputRouter {
     }
 }
 
-fn binding_activation(function: FunctionId) -> Activation {
-    crate::function::function_definition(function).activation
-}
-
 #[cfg(test)]
 mod tests {
 
     use super::*;
     use crate::{
+        command::MediaCommand,
         function::{FunctionConfig, ModifierSet, Shortcut, default_configs},
         input::MouseButton,
     };
     use std::time::Instant;
 
-    fn event(code: InputCode, down: bool) -> InputEvent {
+    fn event_at(code: InputCode, down: bool, captured: Instant) -> InputEvent {
         InputEvent {
             code,
             down,
-            captured: Instant::now(),
+            captured,
         }
+    }
+
+    fn event(code: InputCode, down: bool) -> InputEvent {
+        event_at(code, down, Instant::now())
+    }
+
+    /// Every function output as `(action, down)`, so a test can assert both the
+    /// gesture the router chose and its edge without matching the whole struct.
+    fn outputs(result: &RouteResult) -> Vec<(FunctionAction, bool)> {
+        result
+            .outputs
+            .iter()
+            .filter_map(|output| match output {
+                RoutedOutput::Function { action, down, .. } => Some((*action, *down)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn media(command: MediaCommand) -> FunctionAction {
+        FunctionAction::Media(command)
     }
 
     fn router_with(shortcut: Shortcut, function: FunctionId) -> InputRouter {
@@ -694,6 +798,101 @@ mod tests {
     }
 
     #[test]
+    fn a_tap_only_function_still_fires_on_the_press_edge() {
+        let mut router = router_with(
+            Shortcut::keyboard(ModifierSet::empty(), 0x58),
+            FunctionId::MediaPlayPause,
+        );
+        assert!(router.next_deadline().is_none());
+        let pressed = router.route_event(event(InputCode::Key(0x58), true));
+        assert_eq!(
+            outputs(&pressed),
+            vec![(media(MediaCommand::PlayPause), true)]
+        );
+        // Nothing waits for the release, so the platform never arms a timer.
+        assert!(router.next_deadline().is_none());
+        let released = router.route_event(event(InputCode::Key(0x58), false));
+        assert!(released.consume && outputs(&released).is_empty());
+    }
+
+    #[test]
+    fn a_quick_release_taps_the_press_gesture_instead_of_seeking() {
+        let mut router = router_with(
+            Shortcut::keyboard(ModifierSet::empty(), 0x58),
+            FunctionId::MediaPrevious,
+        );
+        let pressed = Instant::now();
+        let down = router.route_event(event_at(InputCode::Key(0x58), true, pressed));
+        assert!(down.consume);
+        assert!(
+            outputs(&down).is_empty(),
+            "a merged function must not commit to a gesture on the press edge"
+        );
+        assert!(router.next_deadline().is_some());
+
+        let released = pressed + Duration::from_millis(80);
+        let up = router.route_event(event_at(InputCode::Key(0x58), false, released));
+        assert_eq!(outputs(&up), vec![(media(MediaCommand::Previous), true)]);
+        assert!(router.next_deadline().is_none());
+        // The deferred tap is decided on release, so its admission deadline
+        // must start there rather than at the press.
+        let RoutedOutput::Function { created, .. } = up.outputs.last().expect("tap") else {
+            panic!("expected a function output");
+        };
+        assert_eq!(*created, released);
+    }
+
+    #[test]
+    fn holding_past_the_threshold_escalates_to_the_hold_gesture() {
+        let mut router = router_with(
+            Shortcut::keyboard(ModifierSet::empty(), 0x58),
+            FunctionId::MediaPrevious,
+        );
+        let pressed = Instant::now();
+        router.route_event(event_at(InputCode::Key(0x58), true, pressed));
+        assert!(
+            outputs(&router.tick(pressed + HOLD_THRESHOLD - Duration::from_millis(1))).is_empty(),
+            "the hold gesture is not due before the threshold"
+        );
+        let escalated = router.tick(pressed + HOLD_THRESHOLD);
+        assert_eq!(
+            outputs(&escalated),
+            vec![(media(MediaCommand::Rewind), true)]
+        );
+        assert!(router.next_deadline().is_none());
+        // A second tick must not press the held key twice.
+        assert!(outputs(&router.tick(pressed + HOLD_THRESHOLD * 2)).is_empty());
+
+        let up = router.route_event(event_at(
+            InputCode::Key(0x58),
+            false,
+            pressed + HOLD_THRESHOLD * 2,
+        ));
+        assert_eq!(outputs(&up), vec![(media(MediaCommand::Rewind), false)]);
+        assert!(
+            !outputs(&up).contains(&(media(MediaCommand::Previous), true)),
+            "a long press must not also skip a track"
+        );
+    }
+
+    #[test]
+    fn a_held_shortcut_release_after_its_window_closed_still_releases_the_seek() {
+        let mut router = router_with(
+            Shortcut::keyboard(ModifierSet::empty(), 0x58),
+            FunctionId::MediaNext,
+        );
+        router.route_event(event(InputCode::Key(0x58), true));
+        assert_eq!(
+            outputs(&router.tick(Instant::now() + HOLD_THRESHOLD)),
+            vec![(media(MediaCommand::FastForward), true)]
+        );
+        assert_eq!(
+            outputs(&router.route_event(event(InputCode::Key(0x58), false))),
+            vec![(media(MediaCommand::FastForward), false)]
+        );
+    }
+
+    #[test]
     fn exact_primary_edge_matches_and_repeat_is_consumed_once() {
         let mut router = router_with(
             Shortcut::keyboard(
@@ -703,7 +902,7 @@ mod tests {
                 },
                 0x58,
             ),
-            FunctionId::MediaNext,
+            FunctionId::MediaPlayPause,
         );
         assert!(
             router
@@ -739,7 +938,7 @@ mod tests {
                 },
                 0x58,
             ),
-            FunctionId::MediaNext,
+            FunctionId::MediaPlayPause,
         );
         router.route_event(event(InputCode::Key(0xa2), true));
         let plain = router.route_event(event(InputCode::Key(0x58), true));
@@ -819,28 +1018,27 @@ mod tests {
         let mut configs = default_configs();
         let shortcut_a = Shortcut::mouse(ModifierSet::empty(), MouseButton::Side1);
         let shortcut_b = Shortcut::keyboard(ModifierSet::empty(), 0x58);
-        configs.get_mut(&FunctionId::MediaRewind).unwrap().enabled = true;
-        configs.get_mut(&FunctionId::MediaRewind).unwrap().shortcuts = vec![shortcut_a, shortcut_b];
+        configs.get_mut(&FunctionId::MediaPrevious).unwrap().enabled = true;
+        configs
+            .get_mut(&FunctionId::MediaPrevious)
+            .unwrap()
+            .shortcuts = vec![shortcut_a, shortcut_b];
         let mut router = InputRouter::new(&configs, 1);
         router.set_listening(true);
         let first = router.route_event(event(InputCode::Mouse(MouseButton::Side1), true));
         let second = router.route_event(event(InputCode::Key(0x58), true));
-        assert_eq!(
-            first
-                .outputs
-                .iter()
-                .filter(|o| matches!(o, RoutedOutput::Function { down: true, .. }))
-                .count(),
-            1
+        assert!(
+            outputs(&first).is_empty() && outputs(&second).is_empty(),
+            "both shortcuts are still inside their tap window"
         );
+
+        // Two shortcuts of one function share a single held seek.
+        let escalated = router.tick(Instant::now() + HOLD_THRESHOLD);
         assert_eq!(
-            second
-                .outputs
-                .iter()
-                .filter(|o| matches!(o, RoutedOutput::Function { down: true, .. }))
-                .count(),
-            0
+            outputs(&escalated),
+            vec![(media(MediaCommand::Rewind), true)]
         );
+
         let release_one = router.route_event(event(InputCode::Mouse(MouseButton::Side1), false));
         assert!(
             !release_one
@@ -944,26 +1142,56 @@ mod tests {
         let old = Shortcut::keyboard(ModifierSet::empty(), 0x58);
         let new = Shortcut::keyboard(ModifierSet::empty(), 0x59);
         let mut configs = default_configs();
-        configs.get_mut(&FunctionId::MediaRewind).unwrap().enabled = true;
-        configs.get_mut(&FunctionId::MediaRewind).unwrap().shortcuts = vec![old.clone()];
+        configs.get_mut(&FunctionId::MediaPrevious).unwrap().enabled = true;
+        configs
+            .get_mut(&FunctionId::MediaPrevious)
+            .unwrap()
+            .shortcuts = vec![old.clone()];
         let mut router = InputRouter::new(&configs, 1);
         router.set_listening(true);
-        let pressed = router.route_event(event(InputCode::Key(0x58), true));
-        assert!(
-            pressed
-                .outputs
-                .iter()
-                .any(|output| matches!(output, RoutedOutput::Function { down: true, .. }))
+        router.route_event(event(InputCode::Key(0x58), true));
+        assert_eq!(
+            outputs(&router.tick(Instant::now() + HOLD_THRESHOLD)),
+            vec![(media(MediaCommand::Rewind), true)]
         );
 
-        configs.get_mut(&FunctionId::MediaRewind).unwrap().shortcuts = vec![new];
+        configs
+            .get_mut(&FunctionId::MediaPrevious)
+            .unwrap()
+            .shortcuts = vec![new];
+        let cleanup = router.update_config(&configs, 2);
+        assert_eq!(
+            outputs(&cleanup),
+            vec![(media(MediaCommand::Rewind), false)]
+        );
+        let old_up = router.route_event(event(InputCode::Key(0x58), false));
+        assert!(old_up.consume && old_up.outputs.is_empty());
+    }
+
+    #[test]
+    fn editing_a_pending_tap_window_cancels_it_without_cleanup() {
+        let old = Shortcut::keyboard(ModifierSet::empty(), 0x58);
+        let new = Shortcut::keyboard(ModifierSet::empty(), 0x59);
+        let mut configs = default_configs();
+        configs.get_mut(&FunctionId::MediaPrevious).unwrap().enabled = true;
+        configs
+            .get_mut(&FunctionId::MediaPrevious)
+            .unwrap()
+            .shortcuts = vec![old];
+        let mut router = InputRouter::new(&configs, 1);
+        router.set_listening(true);
+        router.route_event(event(InputCode::Key(0x58), true));
+
+        configs
+            .get_mut(&FunctionId::MediaPrevious)
+            .unwrap()
+            .shortcuts = vec![new];
         let cleanup = router.update_config(&configs, 2);
         assert!(
-            cleanup
-                .outputs
-                .iter()
-                .any(|output| matches!(output, RoutedOutput::Function { down: false, .. }))
+            outputs(&cleanup).is_empty(),
+            "a tap that never became a hold owns no key to release"
         );
+        assert!(router.next_deadline().is_none());
         let old_up = router.route_event(event(InputCode::Key(0x58), false));
         assert!(old_up.consume && old_up.outputs.is_empty());
     }
@@ -977,12 +1205,12 @@ mod tests {
             },
             0x58,
         );
-        let mut router = router_with(shortcut, FunctionId::MediaRewind);
+        let mut router = router_with(shortcut, FunctionId::MediaPrevious);
         router.route_event(event(InputCode::Key(0xa2), true));
         router.route_event(event(InputCode::Key(0x58), true));
 
         let mut configs = default_configs();
-        configs.get_mut(&FunctionId::MediaRewind).unwrap().enabled = false;
+        configs.get_mut(&FunctionId::MediaPrevious).unwrap().enabled = false;
         let cleanup = router.update_config(&configs, 2);
         assert!(!cleanup.outputs.iter().any(|output| matches!(
             output,

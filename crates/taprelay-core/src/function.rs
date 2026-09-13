@@ -20,7 +20,9 @@ pub enum CategoryId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Activation {
+    /// A tap: the output is a single momentary press.
     Press,
+    /// A long press: the output stays pressed until the shortcut is released.
     Hold,
 }
 
@@ -29,12 +31,25 @@ pub enum FunctionAction {
     Media(MediaCommand),
 }
 
+impl FunctionAction {
+    pub const fn name_key(self) -> &'static str {
+        match self {
+            Self::Media(command) => command.name_key(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FunctionDefinition {
     pub id: FunctionId,
     pub category: CategoryId,
-    pub activation: Activation,
+    /// Emitted when the shortcut is tapped, or immediately when the function
+    /// has no hold gesture.
     pub action: FunctionAction,
+    /// Emitted once the shortcut stays held past
+    /// [`crate::input_router::HOLD_THRESHOLD`]. `None` makes the function a
+    /// plain tap that never waits for the release edge.
+    pub hold_action: Option<FunctionAction>,
     pub name_key: &'static str,
     pub category_key: &'static str,
 }
@@ -49,10 +64,6 @@ pub enum FunctionId {
     MediaNext,
     #[serde(rename = "media.mute")]
     MediaMute,
-    #[serde(rename = "media.rewind")]
-    MediaRewind,
-    #[serde(rename = "media.fast-forward")]
-    MediaFastForward,
 }
 
 impl FunctionId {
@@ -62,8 +73,6 @@ impl FunctionId {
             Self::MediaPrevious => "media.previous",
             Self::MediaNext => "media.next",
             Self::MediaMute => "media.mute",
-            Self::MediaRewind => "media.rewind",
-            Self::MediaFastForward => "media.fast-forward",
         }
     }
 
@@ -73,60 +82,47 @@ impl FunctionId {
             "media.previous" => Self::MediaPrevious,
             "media.next" => Self::MediaNext,
             "media.mute" => Self::MediaMute,
-            "media.rewind" => Self::MediaRewind,
-            "media.fast-forward" => Self::MediaFastForward,
             _ => return None,
         })
     }
 }
 
-pub const FUNCTION_CATALOG: [FunctionDefinition; 6] = [
+/// A tap and its optional long press share one shortcut because they share one
+/// physical key: the app, not the receiver, decides which gesture the user
+/// meant. `media.previous` / `media.next` keep their stable ids so an existing
+/// configuration survives the merge; the removed `media.rewind` and
+/// `media.fast-forward` ids are folded into them while loading.
+pub const FUNCTION_CATALOG: [FunctionDefinition; 4] = [
     FunctionDefinition {
         id: FunctionId::MediaPlayPause,
         category: CategoryId::Media,
-        activation: Activation::Press,
         action: FunctionAction::Media(MediaCommand::PlayPause),
+        hold_action: None,
         name_key: "function.media.playpause",
         category_key: "function.category.media",
     },
     FunctionDefinition {
         id: FunctionId::MediaPrevious,
         category: CategoryId::Media,
-        activation: Activation::Press,
         action: FunctionAction::Media(MediaCommand::Previous),
+        hold_action: Some(FunctionAction::Media(MediaCommand::Rewind)),
         name_key: "function.media.previous",
         category_key: "function.category.media",
     },
     FunctionDefinition {
         id: FunctionId::MediaNext,
         category: CategoryId::Media,
-        activation: Activation::Press,
         action: FunctionAction::Media(MediaCommand::Next),
+        hold_action: Some(FunctionAction::Media(MediaCommand::FastForward)),
         name_key: "function.media.next",
         category_key: "function.category.media",
     },
     FunctionDefinition {
         id: FunctionId::MediaMute,
         category: CategoryId::Media,
-        activation: Activation::Press,
         action: FunctionAction::Media(MediaCommand::Mute),
+        hold_action: None,
         name_key: "function.media.mute",
-        category_key: "function.category.media",
-    },
-    FunctionDefinition {
-        id: FunctionId::MediaRewind,
-        category: CategoryId::Media,
-        activation: Activation::Hold,
-        action: FunctionAction::Media(MediaCommand::Rewind),
-        name_key: "function.media.rewind",
-        category_key: "function.category.media",
-    },
-    FunctionDefinition {
-        id: FunctionId::MediaFastForward,
-        category: CategoryId::Media,
-        activation: Activation::Hold,
-        action: FunctionAction::Media(MediaCommand::FastForward),
-        name_key: "function.media.fastforward",
         category_key: "function.category.media",
     },
 ];
@@ -347,9 +343,42 @@ mod tests {
 
     #[test]
     fn catalog_has_stable_order_and_all_functions_default_off() {
-        assert_eq!(FUNCTION_CATALOG.len(), 6);
+        assert_eq!(FUNCTION_CATALOG.len(), 4);
         assert_eq!(FUNCTION_CATALOG[0].id, FunctionId::MediaPlayPause);
         assert!(default_configs().values().all(|config| !config.enabled));
+    }
+
+    #[test]
+    fn skip_functions_pair_a_tap_with_a_held_seek() {
+        let previous = function_definition(FunctionId::MediaPrevious);
+        assert_eq!(
+            previous.action,
+            FunctionAction::Media(MediaCommand::Previous)
+        );
+        assert_eq!(
+            previous.hold_action,
+            Some(FunctionAction::Media(MediaCommand::Rewind))
+        );
+        let next = function_definition(FunctionId::MediaNext);
+        assert_eq!(next.action, FunctionAction::Media(MediaCommand::Next));
+        assert_eq!(
+            next.hold_action,
+            Some(FunctionAction::Media(MediaCommand::FastForward))
+        );
+        // Everything else stays a plain tap that never waits for a release.
+        for id in [FunctionId::MediaPlayPause, FunctionId::MediaMute] {
+            assert_eq!(function_definition(id).hold_action, None);
+        }
+    }
+
+    #[test]
+    fn merged_function_ids_are_still_accepted_but_the_removed_ones_are_not() {
+        assert_eq!(
+            FunctionId::from_stable_id("media.previous"),
+            Some(FunctionId::MediaPrevious)
+        );
+        assert_eq!(FunctionId::from_stable_id("media.rewind"), None);
+        assert_eq!(FunctionId::from_stable_id("media.fast-forward"), None);
     }
 
     #[test]

@@ -18,7 +18,10 @@ pub struct BindingKey {
 pub struct IndexedBinding {
     pub key: BindingKey,
     pub shortcut: Shortcut,
+    /// The tap gesture, emitted on release for a merged function.
     pub action: FunctionAction,
+    /// The long-press gesture, emitted once the hold threshold elapses.
+    pub hold_action: Option<FunctionAction>,
 }
 
 /// Disabled entries remain in the config and therefore remain in this global
@@ -63,6 +66,7 @@ impl BindingIndex {
                     key: BindingKey { function: id, slot },
                     shortcut,
                     action: definition.action,
+                    hold_action: definition.hold_action,
                 });
             }
         }

@@ -359,7 +359,10 @@ fn render_all_views_without_hardware() {
     let row = FunctionBindingRow {
         id: "media.play-pause".into(),
         label: "Play / Pause".into(),
-        activation: "Press".into(),
+        gestures: ModelRc::new(VecModel::from(vec![GestureAction {
+            gesture: "Tap".into(),
+            action: "Play / Pause".into(),
+        }])),
         enabled: true,
         shortcuts: ModelRc::new(VecModel::from(vec![shortcut])),
     };
@@ -660,7 +663,7 @@ fn log_rows(count: usize, offset: usize) -> Vec<LogLine> {
 // Use the real catalog and deliberately long shortcuts, rather than English
 // placeholders in every locale. This exercises the actual nested page layouts.
 fn preview_function_layouts(ui: &AppWindow, out: &std::path::Path) {
-    use taprelay_core::function::{Activation, FUNCTION_CATALOG};
+    use taprelay_core::function::FUNCTION_CATALOG;
     ui.set_capture_function("".into());
     ui.set_capture_slot(-1);
     ui.set_capture_error("".into());
@@ -684,15 +687,19 @@ fn preview_function_layouts(ui: &AppWindow, out: &std::path::Path) {
             .map(|(i, d)| FunctionBindingRow {
                 id: d.id.stable_id().into(),
                 label: i18n::text(zh, d.name_key).into(),
-                activation: i18n::text(
-                    zh,
-                    if d.activation == Activation::Hold {
-                        "bindings.activation.hold"
-                    } else {
-                        "bindings.activation.press"
-                    },
-                )
-                .into(),
+                gestures: ModelRc::new(VecModel::from({
+                    let mut gestures = vec![GestureAction {
+                        gesture: i18n::text(zh, "bindings.gesture.press").into(),
+                        action: i18n::text(zh, d.action.name_key()).into(),
+                    }];
+                    if let Some(hold) = d.hold_action {
+                        gestures.push(GestureAction {
+                            gesture: i18n::text(zh, "bindings.gesture.hold").into(),
+                            action: i18n::text(zh, hold.name_key()).into(),
+                        });
+                    }
+                    gestures
+                })),
                 enabled: true,
                 shortcuts: ModelRc::new(VecModel::from(
                     (0..(2 - i % 3))

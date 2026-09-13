@@ -363,14 +363,14 @@ component FunctionBindingRowView inherits Rectangle {
             toggled(enabled) => { root.action("toggle-function", enabled ? 1 : 0, root.binding-row.id); }
         }
         left := HorizontalLayout {
-            width: root.width - 416px;
+            width: root.width - 400px;
 
             spacing: 8px;
             alignment: start;
             cross-axis-alignment: center;
             // Present one slot for now; the model retains all saved shortcuts.
             if !root.inactive && root.binding-row.shortcuts.length > 0: BindingChip {
-                available-width: root.has-error ? (root.width - 424px) / 2 : root.width - 416px;
+                available-width: root.has-error ? (root.width - 408px) / 2 : root.width - 400px;
                 label: root.capture-function == root.binding-row.id && root.capture-slot == root.first-shortcut.slot
                     ? root.capture-text : root.first-shortcut.text;
                 recording: root.capture-function == root.binding-row.id && root.capture-slot == root.first-shortcut.slot;
@@ -385,7 +385,7 @@ component FunctionBindingRowView inherits Rectangle {
                 opacity: 0.5;
             }
             if root.inactive && root.binding-row.shortcuts.length > 0: DisabledShortcutChip {
-                available-width: root.width - 416px;
+                available-width: root.width - 400px;
                 shortcut: root.first-shortcut;
             }
             if !root.inactive && root.binding-row.shortcuts.length == 0
@@ -399,7 +399,7 @@ component FunctionBindingRowView inherits Rectangle {
             if !root.inactive && root.binding-row.shortcuts.length == 0
                     && root.capture-function == root.binding-row.id
                     && root.capture-slot == root.binding-row.shortcuts.length: BindingChip {
-                available-width: root.has-error ? (root.width - 424px) / 2 : root.width - 416px;
+                available-width: root.has-error ? (root.width - 408px) / 2 : root.width - 400px;
                 label: root.capture-text;
                 recording: true;
                 removable: false;
@@ -416,30 +416,35 @@ component FunctionBindingRowView inherits Rectangle {
                 overflow: elide;
             }
         }
+        // One gesture per line, trigger first: a merged function reads as
+        // "Tap → Previous" over "Hold → Rewind" without asking the reader to
+        // map a shared trigger word onto a pair of slashed action names.
         HorizontalLayout {
-            width: 80px;
-            spacing: 8px;
-            opacity: root.inactive ? 0.5 : 1;
-            Label {
-                text: root.binding-row.activation;
-                color: Tokens.color-muted-foreground;
-                vertical-alignment: center;
-                horizontal-stretch: 0;
+            width: 300px;
+            vertical-stretch: 1;
+            VerticalLayout {
+                alignment: center;
+                spacing: 0px;
+                for gesture in root.binding-row.gestures: HorizontalLayout {
+                    height: 24px;
+                    spacing: 8px;
+                    cross-axis-alignment: center;
+                    Label {
+                        text: gesture.gesture;
+                        color: Tokens.color-muted-foreground;
+                        width: 40px;
+                        vertical-alignment: center;
+                        opacity: root.inactive ? 0.5 : 1;
+                    }
+                    IconDisplay { icon: IconSet.ArrowRight; size: 16px; stroke: Tokens.color-muted-foreground; }
+                    Badge {
+                        text: gesture.action;
+                        variant: secondary;
+                        opacity: root.inactive ? 0.5 : 1;
+                        horizontal-stretch: 0;
+                    }
+                }
             }
-            IconDisplay { icon: IconSet.ArrowRight; size: 16px; stroke: Tokens.color-muted-foreground; }
-        }
-        HorizontalLayout {
-            width: 220px;
-            spacing: 8px;
-            cross-axis-alignment: center;
-            Badge {
-                text: root.binding-row.label;
-                variant: secondary;
-                opacity: root.inactive ? 0.5 : 1;
-                horizontal-stretch: 0;
-            }
-            Rectangle { horizontal-stretch: 1; }
-
         }
     }
 
@@ -471,8 +476,7 @@ export component FunctionBindingsPage inherits VerticalLayout {
                 spacing: 16px;
                 Caption { text: I18n.text.bindings-column-enabled; width: 36px; }
                 Caption { text: I18n.text.bindings-column-shortcut; horizontal-stretch: 1; }
-                Caption { text: I18n.text.bindings-column-activation; width: 80px; }
-                Caption { text: I18n.text.bindings-column-function; width: 220px; }
+                Caption { text: I18n.text.bindings-column-function; width: 300px; }
             }
             for row in root.rows: FunctionBindingRowView {
                 binding-row: row;

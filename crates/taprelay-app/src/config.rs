@@ -23,24 +23,61 @@ pub struct Config {
     pub options: Options,
     pub window: Geometry,
 }
+/// A function id that a tap and its long press used to own separately. The
+/// merged function kept the skip id, so an old file names the hold half by an
+/// id that no longer exists and must be folded in rather than rejected.
+fn folded_function(id: &str) -> Option<function::FunctionId> {
+    Some(match id {
+        "media.rewind" => function::FunctionId::MediaPrevious,
+        "media.fast-forward" => function::FunctionId::MediaNext,
+        _ => return None,
+    })
+}
+
+/// A merged function inherits the hold-only binding it replaced, because that
+/// was the same physical key the user already pressed to seek. The skip half
+/// wins when both were bound: one shortcut can only carry two slots.
+fn fold_into(target: &mut function::FunctionConfig, legacy: function::FunctionConfig) {
+    target.enabled |= legacy.enabled;
+    for shortcut in legacy.shortcuts {
+        if target.shortcuts.len() >= binding::MAX_SHORTCUTS_PER_FUNCTION {
+            break;
+        }
+        if !target.shortcuts.contains(&shortcut) {
+            target.shortcuts.push(shortcut);
+        }
+    }
+}
+
 fn read_functions<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<FunctionConfigs, D::Error> {
     let entries =
         std::collections::BTreeMap::<String, serde_json::Value>::deserialize(deserializer)?;
     let mut functions = FunctionConfigs::new();
+    // Entries arrive in key order, so a folded id can precede the id it folds
+    // into ("media.fast-forward" sorts before "media.next"). Collect both and
+    // merge afterwards instead of depending on that order.
+    let mut folded = Vec::new();
     for (id, value) in entries {
         // Ignore the removed feature in old files without discarding working
         // media bindings or unrelated preferences. Never write it back.
         if id == "virtual.passthrough" {
             continue;
         }
-        let function = function::FunctionId::from_stable_id(&id)
-            .ok_or_else(|| serde::de::Error::custom(format!("Unknown function: {id}")))?;
-        functions.insert(
-            function,
-            serde_json::from_value(value).map_err(serde::de::Error::custom)?,
-        );
+        let config: function::FunctionConfig =
+            serde_json::from_value(value).map_err(serde::de::Error::custom)?;
+        match folded_function(&id) {
+            Some(function) => folded.push((function, config)),
+            None => {
+                let function = function::FunctionId::from_stable_id(&id)
+                    .ok_or_else(|| serde::de::Error::custom(format!("Unknown function: {id}")))?;
+                functions.insert(function, config);
+            }
+        }
+    }
+    for (function, legacy) in folded {
+        fold_into(functions.entry(function).or_default(), legacy);
     }
     Ok(functions)
 }
@@ -326,6 +363,94 @@ mod tests {
         std::fs::write(&p, "{\"verified\":true}").unwrap();
         assert!(Config::load(&p).is_err());
         assert_eq!(std::fs::read_to_string(p).unwrap(), "{\"verified\":true}");
+    }
+
+    fn legacy_hold_binding(key: u8) -> serde_json::Value {
+        serde_json::json!({
+            "enabled": true,
+            "shortcuts": [{ "primary": { "kind": "keyboard", "key": key } }]
+        })
+    }
+
+    #[test]
+    fn a_removed_hold_function_folds_into_the_merged_shortcut() {
+        let mut config = Config::default();
+        let previous = config
+            .functions
+            .get_mut(&function::FunctionId::MediaPrevious)
+            .unwrap();
+        previous.shortcuts = vec![function::Shortcut::keyboard(
+            function::ModifierSet::empty(),
+            0x76,
+        )];
+        let mut json = serde_json::to_value(&config).unwrap();
+        json["functions"]["media.rewind"] = legacy_hold_binding(0x77);
+
+        let loaded: Config = serde_json::from_value(json).unwrap();
+        let merged = &loaded.functions[&function::FunctionId::MediaPrevious];
+        assert!(merged.enabled, "the hold half was the enabled one");
+        assert_eq!(
+            merged.shortcuts,
+            vec![
+                function::Shortcut::keyboard(function::ModifierSet::empty(), 0x76),
+                function::Shortcut::keyboard(function::ModifierSet::empty(), 0x77),
+            ],
+            "the skip shortcut stays first and the seek shortcut is adopted"
+        );
+        loaded.validate().unwrap();
+        assert!(
+            serde_json::to_value(&loaded).unwrap()["functions"]
+                .get("media.rewind")
+                .is_none(),
+            "the removed id must not be written back"
+        );
+    }
+
+    #[test]
+    fn a_hold_only_configuration_still_enables_the_merged_function() {
+        let mut json = serde_json::to_value(Config::default()).unwrap();
+        json["functions"]
+            .as_object_mut()
+            .unwrap()
+            .remove("media.previous");
+        json["functions"]["media.rewind"] = legacy_hold_binding(0x77);
+
+        let loaded: Config = serde_json::from_value(json).unwrap();
+        let merged = &loaded.functions[&function::FunctionId::MediaPrevious];
+        assert!(merged.enabled);
+        assert_eq!(
+            merged.shortcuts,
+            vec![function::Shortcut::keyboard(
+                function::ModifierSet::empty(),
+                0x77
+            )]
+        );
+        loaded.validate().unwrap();
+    }
+
+    #[test]
+    fn folding_never_exceeds_the_shortcut_slots_of_one_function() {
+        let mut config = Config::default();
+        let previous = config
+            .functions
+            .get_mut(&function::FunctionId::MediaPrevious)
+            .unwrap();
+        previous.shortcuts = vec![
+            function::Shortcut::keyboard(function::ModifierSet::empty(), 0x76),
+            function::Shortcut::keyboard(function::ModifierSet::empty(), 0x77),
+        ];
+        let mut json = serde_json::to_value(&config).unwrap();
+        json["functions"]["media.rewind"] = legacy_hold_binding(0x78);
+
+        let loaded: Config = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            loaded.functions[&function::FunctionId::MediaPrevious]
+                .shortcuts
+                .len(),
+            2,
+            "a third shortcut has no slot and must not invalidate the file"
+        );
+        loaded.validate().unwrap();
     }
 
     #[test]

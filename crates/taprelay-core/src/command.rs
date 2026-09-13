@@ -29,6 +29,21 @@ impl MediaCommand {
             Self::FastForward => 0x00b3,
         }
     }
+
+    /// Localization key for this command used on its own, as one gesture of a
+    /// function. The function's own label is a separate key: a merged
+    /// press/hold function reads as "Previous / Rewind" while the tap gesture
+    /// still reads as plain "Previous".
+    pub const fn name_key(self) -> &'static str {
+        match self {
+            Self::PlayPause => "command.media.playpause",
+            Self::Previous => "command.media.previous",
+            Self::Next => "command.media.next",
+            Self::Mute => "command.media.mute",
+            Self::Rewind => "command.media.rewind",
+            Self::FastForward => "command.media.fastforward",
+        }
+    }
 }
 
 /// Interactive input loses intent quickly: discard queued presses after 250ms.

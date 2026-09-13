@@ -1323,6 +1323,9 @@ impl Server {
             .ok_or_else(|| BackendError::Unavailable("No selected subscriber".into()))?;
         let owner = command.action.usage() as u64;
         let report = match command.phase {
+            // Seeking is only ever produced as the long press of a merged
+            // shortcut, so it is the one press the receiver must see held.
+            // Every other press is a self-contained tap.
             CommandPhase::Press
                 if matches!(
                     command.action,

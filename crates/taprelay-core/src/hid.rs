@@ -89,8 +89,9 @@ pub fn consumer_release() -> Vec<u8> {
     neutral(ReportKind::Consumer)
 }
 
-/// Media usages are owned by independent function activations.
-/// Removing one owner never releases another.
+/// Media usages are owned by independent gestures.
+/// Removing one owner never releases another, which is what lets a tapped
+/// pulse and a held seek share a shortcut without releasing each other.
 #[derive(Debug, Default, Clone)]
 pub struct ConsumerState {
     owners: BTreeMap<u16, BTreeSet<u64>>,

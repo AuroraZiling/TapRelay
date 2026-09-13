@@ -1,7 +1,7 @@
 import { Tokens, Theme, ThemeMode } from "vendor/theme/tokens.slint";
 import { BluetoothStatus } from "components/bluetooth-status.slint";
 import { I18n, TranslationText } from "@i18n";
-import { BindingRow, DeviceRow, CheckRow, FunctionBindingRow, ShortcutItem, RelayStatus, LogLevel, LogLine } from "types.slint";
+import { BindingRow, DeviceRow, CheckRow, FunctionBindingRow, GestureAction, ShortcutItem, RelayStatus, LogLevel, LogLine } from "types.slint";
 import { Heading, ErrorBanner } from "components/primitives.slint";
 import { Sidebar } from "components/sidebar.slint";
 import { Toast } from "components/toast.slint";
@@ -14,7 +14,7 @@ import { ReceiverActions } from "components/receiver-actions.slint";
 import { LogClearButton, LogLevelFilters } from "components/log-level-filters.slint";
 import { LogsPage } from "pages/logs.slint";
 import { SettingsPage } from "pages/settings.slint";
-export { Theme, ThemeMode, I18n, TranslationText, BindingRow, DeviceRow, CheckRow, FunctionBindingRow, ShortcutItem, RelayStatus, LogLevel, LogLine }
+export { Theme, ThemeMode, I18n, TranslationText, BindingRow, DeviceRow, CheckRow, FunctionBindingRow, GestureAction, ShortcutItem, RelayStatus, LogLevel, LogLine }
 
 // Window shell: public Rust interface, navigation and page composition only.
 export component AppWindow inherits Window {

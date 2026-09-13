@@ -1,5 +1,6 @@
 use crate::{
-    AppWindow, BindingRow, CheckRow, FunctionBindingRow, LogLine, ShortcutItem, Theme, ThemeMode,
+    AppWindow, BindingRow, CheckRow, FunctionBindingRow, GestureAction, LogLine, ShortcutItem,
+    Theme, ThemeMode,
     action::{Action, CaptureTarget},
     administrator,
     config::{self, Config, Language, SaveQueue, Theme as ThemeSetting},
@@ -18,7 +19,7 @@ use std::{
     time::{Duration, Instant},
 };
 use taprelay_core::{
-    function::{self, Activation, FunctionId},
+    function::{self, FunctionId},
     state::{Target, TransportActivity},
 };
 
@@ -963,10 +964,19 @@ impl Controller {
                 let Some(config) = self.runtime.config.functions.get(&definition.id) else {
                     continue;
                 };
-                let activation = match definition.activation {
-                    Activation::Press => self.tr(keys::BINDINGS_ACTIVATION_PRESS),
-                    Activation::Hold => self.tr(keys::BINDINGS_ACTIVATION_HOLD),
-                };
+                // The catalog states a function as up to two gestures, so the
+                // row shows exactly what each one does instead of naming the
+                // pair and leaving the reader to guess which half is the hold.
+                let mut gestures = vec![GestureAction {
+                    gesture: self.tr(keys::BINDINGS_GESTURE_PRESS).into(),
+                    action: self.tr(definition.action.name_key()).into(),
+                }];
+                if let Some(hold) = definition.hold_action {
+                    gestures.push(GestureAction {
+                        gesture: self.tr(keys::BINDINGS_GESTURE_HOLD).into(),
+                        action: self.tr(hold.name_key()).into(),
+                    });
+                }
                 let shortcuts = config
                     .shortcuts
                     .iter()
@@ -1002,7 +1012,7 @@ impl Controller {
                 let row = FunctionBindingRow {
                     id: definition.id.stable_id().into(),
                     label: self.tr(definition.name_key).into(),
-                    activation: activation.into(),
+                    gestures: ModelRc::new(VecModel::from(gestures)),
                     enabled: config.enabled,
                     shortcuts: ModelRc::new(VecModel::from(shortcuts)),
                 };

@@ -38,6 +38,11 @@ struct PolicyRequest {
 }
 thread_local! { static LAST_MOUSE_POINT: Cell<Option<POINT>> = const { Cell::new(None) }; }
 thread_local! { static TAPRELAY_WINDOW: Cell<HWND> = const { Cell::new(HWND(std::ptr::null_mut())) }; }
+// The router decides a tap from a hold by elapsed time alone, so this thread
+// must be woken at the pending threshold instead of at the next physical edge.
+// The deadline is cached so an unchanged one costs no syscall.
+thread_local! { static TIMER_DEADLINE: Cell<Option<Instant>> = const { Cell::new(None) }; }
+const POLICY_TIMER: usize = 1;
 #[derive(Clone, Copy)]
 enum StopReason {
     Overflow,
@@ -149,6 +154,53 @@ impl HookPolicy {
     fn terminate(&mut self, reason: taprelay_core::input_router::RouterReason) -> RouteResult {
         self.router.terminate(reason)
     }
+
+    fn tick(&mut self, now: Instant) -> RouteResult {
+        self.router.tick(now)
+    }
+
+    fn next_deadline(&self) -> Option<Instant> {
+        self.router.next_deadline()
+    }
+}
+
+/// Arm the thread timer for the router's next hold threshold. Re-arming the
+/// same timer id replaces it, so only a change in the earliest deadline costs
+/// a call. Without this the router would never learn that a held shortcut
+/// crossed its threshold, because no further physical edge arrives.
+fn arm_policy_timer() {
+    let deadline = POLICY.with(|policy| {
+        policy
+            .borrow()
+            .as_ref()
+            .and_then(|policy| policy.next_deadline())
+    });
+    if TIMER_DEADLINE.with(Cell::get) == deadline {
+        return;
+    }
+    TIMER_DEADLINE.with(|current| current.set(deadline));
+    unsafe {
+        match deadline {
+            Some(deadline) => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                let elapsed = remaining.as_millis().clamp(1, u32::MAX as u128) as u32;
+                SetTimer(None, POLICY_TIMER, elapsed, None);
+            }
+            None => {
+                let _ = KillTimer(None, POLICY_TIMER);
+            }
+        }
+    }
+}
+
+fn policy_tick(now: Instant) -> RouteResult {
+    POLICY.with(|policy| {
+        policy
+            .borrow_mut()
+            .as_mut()
+            .map(|policy| policy.tick(now))
+            .unwrap_or_default()
+    })
 }
 
 fn append(target: &mut RouteResult, mut next: RouteResult) {
@@ -312,6 +364,20 @@ impl InputHandle {
                                                 let _ = request.reply.send(result);
                                             }
                                         }
+                                        // A configuration change can cancel a
+                                        // pending gesture, which must retire
+                                        // the wake-up with it.
+                                        arm_policy_timer();
+                                        continue;
+                                    }
+                                    if message.message == WM_TIMER && message.hwnd.0.is_null() {
+                                        let mut result = policy_tick(Instant::now());
+                                        if prepare_hook_result(&mut result)
+                                            && !result.outputs.is_empty()
+                                        {
+                                            dispatch(RoutedInput::Control(result));
+                                        }
+                                        arm_policy_timer();
                                         continue;
                                     }
 
@@ -699,6 +765,9 @@ unsafe extern "system" fn keyboard_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LR
                     } else {
                         policy_edge(input)
                     };
+                    // A merged shortcut starts a hold window on its press edge
+                    // and ends one on its release edge.
+                    arm_policy_timer();
 
                     if prepare_hook_result(&mut result) {
                         consume = result.consume;
@@ -752,6 +821,7 @@ unsafe extern "system" fn mouse_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESU
                     } else {
                         policy_edge(input)
                     };
+                    arm_policy_timer();
                     if prepare_hook_result(&mut result) {
                         consume = result.consume;
                         emit(input, result);

@@ -1,5 +1,4 @@
 import { Button } from "../vendor/components/button.slint";
-import { ScrollArea } from "../vendor/components/scroll-area.slint";
 import { Tokens } from "../vendor/theme/tokens.slint";
 import { I18n } from "@i18n";
 import { BindingRow, RelayStatus } from "../types.slint";
@@ -8,84 +7,108 @@ import { RelayStatusCard, AdminAlert } from "../components/runtime-panels.slint"
 import { IconDisplay, IconSet } from "@lucide";
 import { ShortcutPill } from "../components/shortcut-keys.slint";
 
-export component OverviewPage inherits ScrollArea {
+export component OverviewPage inherits Rectangle {
+    min-width: 0px;
+    min-height: 0px;
+    preferred-width: 0px;
+    preferred-height: 0px;
+    vertical-stretch: 1;
     in property <[BindingRow]> bindings;
     in property <int> binding-count;
     in property <bool> elevated;
     in property <RelayStatus> relay-status;
     callback action(string, int, string);
-    content-height: max(self.height, content.preferred-height);
     content := VerticalLayout {
         width: parent.width;
-        height: root.content-height;
-        alignment: start;
+        height: root.height;
         spacing: 16px;
         if !root.elevated: AdminAlert {
             action(name, index, value) => { root.action(name, index, value); }
         }
-        RelayStatusCard {
-            relay-status: root.relay-status;
-            action(name, index, value) => {
-                root.action(name, index, value);
-            }
-        }
-        Panel {
+        // Both rows belong to the page; child content cannot change their size.
+        Rectangle {
+            min-height: 0px;
+            preferred-height: 0px;
             vertical-stretch: 1;
-            VerticalLayout {
+            GridLayout {
                 width: parent.width;
                 height: parent.height;
-                padding: 20px;
-                spacing: 12px;
-                HorizontalLayout {
-                    width: parent.width;
-                    spacing: 8px;
-                    Label {
-                        text: I18n.text.overview-bindings;
+                spacing: 16px;
+                Row {
+                    Rectangle {
+                        height: 180px;
+                        clip: true;
+                        RelayStatusCard {
+                            width: parent.width;
+                            height: parent.height;
+                            relay-status: root.relay-status;
+                            action(name, index, value) => { root.action(name, index, value); }
+                        }
                     }
                 }
-                if root.binding-count > 0: FlexboxLayout {
-                    width: parent.width;
-                    spacing-horizontal: Tokens.spacing-sm;
-                    spacing-vertical: Tokens.spacing-sm;
-                    flex-direction: row;
-                    flex-wrap: wrap;
-                    alignment: start;
-                    align-content: start;
-                    cross-axis-alignment: center;
-                    for binding in root.bindings: ShortcutPill {
-                        text: binding.text;
-                        visible: binding.enabled;
-                    }
-                }
-            }
-            settings-button := Button {
-                x: parent.width - self.width - Tokens.spacing-sm;
-                y: Tokens.spacing-sm;
-                z: 1;
-                size: icon;
-                width: 36px;
-                text: "";
-                variant: ghost;
-                accessible-role: button;
-                accessible-label: I18n.text.overview-manage;
-                accessible-enabled: true;
-                clicked=> {
-                    root.action("navigate",2,"");
-                }
-                settings-icon := Rectangle {
-                    width: parent.width;
-                    height: parent.height;
-                    IconDisplay {
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                        icon: IconSet.Settings;
-                        size: 16px;
-                        stroke: Tokens.color-muted-foreground;
-                        stroke-width: 1.75;
+                Row {
+                    Panel {
+                        min-height: 0px;
+                        preferred-height: 0px;
+                        vertical-stretch: 1;
+                        clip: true;
+                        Label {
+                            x: 20px;
+                            y: 20px;
+                            text: I18n.text.overview-bindings;
+                        }
+                        if root.binding-count > 0: Rectangle {
+                            x: 20px;
+                            y: 52px;
+                            width: max(0px, parent.width - 40px);
+                            height: max(0px, parent.height - self.y - 20px);
+                            clip: true;
+                            FlexboxLayout {
+                                width: parent.width;
+                                height: parent.height;
+                                spacing-horizontal: Tokens.spacing-sm;
+                                spacing-vertical: Tokens.spacing-sm;
+                                flex-direction: row;
+                                flex-wrap: wrap;
+                                alignment: start;
+                                align-content: start;
+                                cross-axis-alignment: center;
+                                for binding in root.bindings: ShortcutPill {
+                                    text: binding.text;
+                                    visible: binding.enabled;
+                                }
+                            }
+                        }
+                        settings-button := Button {
+                            x: parent.width - self.width - Tokens.spacing-sm;
+                            y: Tokens.spacing-sm;
+                            z: 1;
+                            size: icon;
+                            width: 36px;
+                            text: "";
+                            variant: ghost;
+                            accessible-role: button;
+                            accessible-label: I18n.text.overview-manage;
+                            accessible-enabled: true;
+                            clicked=> {
+                                root.action("navigate",2,"");
+                            }
+                            settings-icon := Rectangle {
+                                width: parent.width;
+                                height: parent.height;
+                                IconDisplay {
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                    icon: IconSet.Settings;
+                                    size: 16px;
+                                    stroke: Tokens.color-muted-foreground;
+                                    stroke-width: 1.75;
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
-
     }
 }

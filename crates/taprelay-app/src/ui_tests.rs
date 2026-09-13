@@ -632,6 +632,7 @@ fn render_all_views_without_hardware() {
         }
     }
     preview_function_layouts(&ui, &out);
+    preview_fixed_overview(&ui, &out);
 }
 
 /// Wrapped, Unicode and severity-cycled log rows as the controller publishes them.
@@ -850,4 +851,62 @@ fn preview_function_layouts(ui: &AppWindow, out: &std::path::Path) {
         "Recording must lock function switches"
     );
     ui.set_capture_function("".into());
+}
+
+// Content may be clipped, but cannot resize the two page-owned grid rows.
+fn preview_fixed_overview(ui: &AppWindow, out: &std::path::Path) {
+    ui.set_mode(2);
+    ui.set_page(0);
+    ui.set_elevated(false);
+    ui.set_bindings(ModelRc::new(VecModel::from(
+        (0..12)
+            .map(|_| BindingRow {
+                text: "Ctrl + Shift + Alt + Win + PageDown".into(),
+                enabled: true,
+                ..Default::default()
+            })
+            .collect::<Vec<_>>(),
+    )));
+    for (name, zh, height) in [
+        ("zh-min", true, 500.),
+        ("en-min", false, 500.),
+        ("zh-tall", true, 700.),
+    ] {
+        i18n::apply(ui, zh);
+        ui.set_problem("Bluetooth service unavailable".into());
+        ui.window().set_size(slint::LogicalSize::new(900., height));
+        let _ = ui.window().take_snapshot().unwrap();
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
+        slint::platform::update_timers_and_animations();
+        let shot = ui.window().take_snapshot().unwrap();
+        assert_eq!((shot.width(), shot.height()), (900, height as u32));
+        let stride = shot.width() as usize;
+        let background = shot.as_slice()[(height as usize - 1) * stride + 80];
+        assert!(
+            (height as usize - 24..height as usize)
+                .all(|y| (80..900).all(|x| shot.as_slice()[y * stride + x] == background)),
+            "Overview content must stay above the bottom window padding"
+        );
+        assert!(
+            (200..height as usize - 28)
+                .filter(|&y| shot.as_slice()[y * stride + 90] != background)
+                .count()
+                > 150,
+            "Both grid cards must occupy the available page space"
+        );
+        let saved_bindings = ui.get_bindings();
+        ui.set_bindings(ModelRc::new(VecModel::default()));
+        let empty = ui.window().take_snapshot().unwrap();
+        assert!(
+            (140..height as usize - 28)
+                .all(|y| shot.as_slice()[y * stride + 90] == empty.as_slice()[y * stride + 90]),
+            "Changing binding content must not move either card boundary"
+        );
+        ui.set_bindings(saved_bindings);
+        let mut bytes = format!("P6\n{} {}\n255\n", shot.width(), shot.height()).into_bytes();
+        for pixel in shot.as_slice() {
+            bytes.extend_from_slice(&[pixel.r, pixel.g, pixel.b]);
+        }
+        std::fs::write(out.join(format!("overview-fixed-{name}.ppm")), bytes).unwrap();
+    }
 }

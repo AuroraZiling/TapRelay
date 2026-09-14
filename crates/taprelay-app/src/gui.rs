@@ -3,7 +3,7 @@ use crate::{
     ThemeMode,
     action::{Action, CaptureTarget},
     administrator,
-    config::{self, Config, Language, SaveQueue, Theme as ThemeSetting},
+    config::{self, Config, Device, Language, SaveQueue, Theme as ThemeSetting},
     feedback::{TestStatus, WaitWarning},
     i18n::{self, keys},
     logging,
@@ -345,6 +345,7 @@ struct Controller {
     last_system_poll: Instant,
     last_ui_sync: Instant,
     last_dropped_logs: usize,
+    persisted_remembered_device: Option<Device>,
 }
 impl Controller {
     fn new(
@@ -356,6 +357,7 @@ impl Controller {
         fatal: Option<String>,
     ) -> Result<Self> {
         config.options.autostart = desktop::autostart_enabled();
+        let persisted_remembered_device = config.remembered_device.clone();
         let now = Instant::now();
         Ok(Self {
             runtime: Runtime::new(config)?,
@@ -389,6 +391,7 @@ impl Controller {
             last_system_poll: now,
             last_ui_sync: now,
             last_dropped_logs: 0,
+            persisted_remembered_device,
         })
     }
     fn zh(&self) -> bool {
@@ -419,8 +422,15 @@ impl Controller {
         if self.fatal.is_some() {
             return;
         }
+        self.track_remembered_device();
         if let Err(e) = self.saves.flush(&self.runtime.config, &self.path, force) {
             self.error(&format!("{}: {e:#}", self.tr(keys::ERROR_SAVE)));
+        }
+    }
+    fn track_remembered_device(&mut self) {
+        if self.persisted_remembered_device != self.runtime.config.remembered_device {
+            self.persisted_remembered_device = self.runtime.config.remembered_device.clone();
+            self.saves.changed();
         }
     }
     fn recording(&self) -> bool {
@@ -659,6 +669,7 @@ impl Controller {
         if self.fatal.is_none() {
             self.runtime.tick();
         }
+        self.track_remembered_device();
         if self.recording() {
             if !desktop::foreground_is_ours() || self.runtime.capture_cancelled {
                 self.cancel_capture();

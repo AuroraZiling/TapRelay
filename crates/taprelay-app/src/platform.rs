@@ -147,13 +147,16 @@ pub fn input(sender: mpsc::Sender<RoutedInput>) -> Result<Box<dyn InputSource>> 
         anyhow::bail!("Input is not implemented on this platform")
     }
 }
-pub fn transport() -> Result<Box<dyn Transport>> {
+pub fn transport(remembered: Option<taprelay_core::state::Target>) -> Result<Box<dyn Transport>> {
     #[cfg(windows)]
     {
-        Ok(Box::new(taprelay_windows::bluetooth::BleHandle::start()?))
+        Ok(Box::new(taprelay_windows::bluetooth::BleHandle::start(
+            remembered,
+        )?))
     }
     #[cfg(not(windows))]
     {
+        let _ = remembered;
         anyhow::bail!("Bluetooth is not implemented on this platform")
     }
 }

@@ -19,6 +19,10 @@ pub struct Config {
     /// Legacy receiver record. Device selection is session-only and is never persisted.
     #[serde(default, skip_serializing)]
     pub device: Option<Device>,
+    /// The last receiver that reached a usable HID session. This is only a
+    /// hint for one passive restore check during the next application start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remembered_device: Option<Device>,
     pub wizard: Wizard,
     pub options: Options,
     pub window: Geometry,
@@ -87,6 +91,7 @@ impl Default for Config {
             schema: 3,
             functions: function::default_configs(),
             device: None,
+            remembered_device: None,
             wizard: Wizard::default(),
             options: Options::default(),
             window: Geometry::default(),
@@ -177,6 +182,31 @@ pub struct Device {
     /// Compatibility is no longer a persisted or runtime decision.
     #[serde(default, rename = "verified", skip_serializing)]
     pub legacy_verified: bool,
+}
+impl Device {
+    pub fn from_target(target: &taprelay_core::state::Target) -> Self {
+        Self {
+            id: target.id.clone(),
+            name: target.name.clone(),
+            identity: target.identity.clone(),
+            aliases: target.aliases.clone(),
+            legacy_verified: false,
+        }
+    }
+
+    pub fn as_target(&self) -> taprelay_core::state::Target {
+        taprelay_core::state::Target {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            identity: self.identity.clone(),
+            aliases: self.aliases.clone(),
+            ..Default::default()
+        }
+    }
+
+    pub fn matches(&self, target: &taprelay_core::state::Target) -> bool {
+        self.as_target().same_device(target)
+    }
 }
 impl Config {
     pub fn validate(&self) -> Result<()> {
@@ -325,6 +355,30 @@ mod tests {
         let path = dir.path().join("config.json");
         config.save(&path).unwrap();
         assert!(Config::load(&path).unwrap().options.connection_wait_warning);
+    }
+    #[test]
+    fn remembered_device_defaults_empty_and_round_trips() {
+        let mut json = serde_json::to_value(Config::default()).unwrap();
+        assert!(json.get("remembered_device").is_none());
+        json["remembered_device"] = serde_json::json!({
+            "id": "gatt-endpoint",
+            "name": "Tablet",
+            "identity": ["container:tablet"],
+            "aliases": ["classic-endpoint"]
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+        let config = Config::load(&path).unwrap();
+        assert_eq!(
+            config.remembered_device.as_ref().unwrap().id,
+            "gatt-endpoint"
+        );
+        config.save(&path).unwrap();
+        assert_eq!(
+            Config::load(&path).unwrap().remembered_device,
+            config.remembered_device
+        );
     }
     #[test]
     fn drafts_and_empty_functions_persist_without_verification() {

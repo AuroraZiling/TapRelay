@@ -60,6 +60,7 @@ pub struct Runtime {
     pub bindings_revision: u64,
     last_transport_ready: bool,
     invalidating: bool,
+    startup_restore: Option<taprelay_core::state::Target>,
 }
 
 impl Runtime {
@@ -78,6 +79,10 @@ impl Runtime {
         // Device selection is session-only. Older config files may still
         // deserialize a device record, but it must never be restored or used.
         config.device = None;
+        let startup_restore = config
+            .remembered_device
+            .as_ref()
+            .map(|device| device.as_target());
         let (sender, events) = mpsc::channel(1024);
         Self {
             config,
@@ -107,6 +112,7 @@ impl Runtime {
             bindings_revision: 0,
             last_transport_ready: false,
             invalidating: false,
+            startup_restore,
         }
     }
 
@@ -116,7 +122,7 @@ impl Runtime {
 
     fn start_bluetooth_with(
         &mut self,
-        create: impl FnOnce() -> Result<Box<dyn Transport>>,
+        create: impl FnOnce(Option<taprelay_core::state::Target>) -> Result<Box<dyn Transport>>,
     ) -> Result<()> {
         self.state.ready = false;
         self.state.service = false;
@@ -138,11 +144,13 @@ impl Runtime {
             return Ok(());
         }
         self.required_generation = 0;
-        self.transport = Some(create()?);
+        let remembered = self.startup_restore.take();
+        self.transport = Some(create(remembered)?);
         Ok(())
     }
 
     pub fn pair(&mut self, id: String) -> Result<()> {
+        self.startup_restore = None;
         if self.state.selected.as_ref() == Some(&id)
             && self.state.pairing_handoff == taprelay_core::devices::PairingHandoff::WaitingForOS
         {
@@ -158,6 +166,8 @@ impl Runtime {
     }
 
     pub fn disconnect(&mut self) -> Result<()> {
+        self.startup_restore = None;
+        self.config.remembered_device = None;
         let result = self
             .transport
             .as_ref()
@@ -186,6 +196,7 @@ impl Runtime {
     }
 
     pub fn choose(&mut self, id: String) -> Result<()> {
+        self.startup_restore = None;
         if self.state.selected.as_ref() == Some(&id)
             && self.state.target_status.as_ref().is_some_and(|target| {
                 matches!(
@@ -477,12 +488,27 @@ impl Runtime {
             .and_then(|transport| transport.snapshot())
             && (stopped
                 || (snapshot.generation >= self.required_generation
-                    && (snapshot.selected == self.state.selected || snapshot.selected.is_none())))
+                    && (snapshot.selected == self.state.selected
+                        || snapshot.selected.is_none()
+                        || (self.state.selected.is_none()
+                            && self.config.remembered_device.as_ref().is_some_and(
+                                |remembered| {
+                                    snapshot
+                                        .target_status
+                                        .as_ref()
+                                        .is_some_and(|target| remembered.matches(target))
+                                },
+                            )))))
         {
             self.state = snapshot;
             if self.state.selected.is_none() {
                 self.state.ready = false;
                 self.state.target_status = None;
+            }
+            if self.state.ready
+                && let Some(target) = self.state.target_status.as_ref()
+            {
+                self.config.remembered_device = Some(crate::config::Device::from_target(target));
             }
         }
         if stopped {
@@ -710,6 +736,26 @@ mod tests {
         }
     }
 
+    struct SnapshotTransport(Option<Snapshot>);
+    impl Transport for SnapshotTransport {
+        fn snapshot(&mut self) -> Option<Snapshot> {
+            self.0.take()
+        }
+        fn refresh(&self) -> Result<()> {
+            Ok(())
+        }
+        fn restart(&self) -> Result<u64> {
+            Ok(1)
+        }
+        fn select(&self, _: String) -> Result<u64> {
+            Ok(1)
+        }
+        fn invalidate(&self) {}
+        fn send(&self, _: QueuedCommand) -> Result<oneshot::Receiver<Result<(), String>>> {
+            unreachable!()
+        }
+    }
+
     #[test]
     fn new_runtime_keeps_functions_disabled_and_does_not_restore_device() {
         let mut config = Config::default();
@@ -730,6 +776,114 @@ mod tests {
                 .all(|function| !function.enabled)
         );
         assert!(runtime.state.selected.is_none());
+    }
+
+    #[test]
+    fn startup_offers_remembered_device_only_once() {
+        let mut config = Config::default();
+        config.remembered_device = Some(crate::config::Device {
+            id: "remembered".into(),
+            name: "Tablet".into(),
+            identity: vec!["container:tablet".into()],
+            aliases: vec![],
+            legacy_verified: false,
+        });
+        let mut runtime = Runtime::new(config);
+        let mut offered = None;
+        runtime
+            .start_bluetooth_with(|remembered| {
+                offered = remembered;
+                Ok(Box::new(FakeTransport))
+            })
+            .unwrap();
+        assert_eq!(offered.unwrap().id, "remembered");
+        runtime.start_bluetooth().unwrap();
+        assert!(runtime.startup_restore.is_none());
+    }
+
+    #[test]
+    fn ready_session_updates_memory_and_explicit_disconnect_clears_it() {
+        let target = taprelay_core::state::Target {
+            id: "gatt-endpoint".into(),
+            name: "Tablet".into(),
+            identity: vec!["container:tablet".into()],
+            aliases: vec!["classic-endpoint".into()],
+            ..Default::default()
+        };
+        let mut runtime = Runtime::new(Config::default());
+        runtime.state.selected = Some(target.id.clone());
+        runtime.transport = Some(Box::new(SnapshotTransport(Some(Snapshot {
+            generation: 1,
+            selected: Some(target.id.clone()),
+            target_status: Some(target.clone()),
+            targets: vec![target],
+            ready: true,
+            ..Default::default()
+        }))));
+        runtime.tick();
+        let remembered = runtime.config.remembered_device.as_ref().unwrap();
+        assert_eq!(remembered.id, "gatt-endpoint");
+        assert_eq!(remembered.identity, ["container:tablet"]);
+        assert!(runtime.disconnect().is_err());
+        assert!(runtime.config.remembered_device.is_none());
+    }
+
+    #[test]
+    fn startup_snapshot_is_accepted_only_for_the_remembered_physical_device() {
+        let remembered = crate::config::Device {
+            id: "classic-endpoint".into(),
+            name: "Tablet".into(),
+            identity: vec!["container:tablet".into()],
+            aliases: vec![],
+            legacy_verified: false,
+        };
+        let restored = taprelay_core::state::Target {
+            id: "gatt-endpoint".into(),
+            name: "Renamed tablet".into(),
+            identity: remembered.identity.clone(),
+            ..Default::default()
+        };
+        let config = Config {
+            remembered_device: Some(remembered),
+            ..Default::default()
+        };
+        let mut runtime = Runtime::new(config);
+        runtime.transport = Some(Box::new(SnapshotTransport(Some(Snapshot {
+            generation: 1,
+            selected: Some(restored.id.clone()),
+            target_status: Some(restored.clone()),
+            targets: vec![restored],
+            ready: true,
+            ..Default::default()
+        }))));
+        runtime.tick();
+        assert!(runtime.state.ready);
+        assert_eq!(
+            runtime.config.remembered_device.as_ref().unwrap().id,
+            "gatt-endpoint"
+        );
+
+        let unrelated = taprelay_core::state::Target {
+            id: "other".into(),
+            name: "Tablet".into(),
+            identity: vec!["container:other".into()],
+            ..Default::default()
+        };
+        runtime.state = Snapshot::default();
+        runtime.transport = Some(Box::new(SnapshotTransport(Some(Snapshot {
+            generation: 2,
+            selected: Some(unrelated.id.clone()),
+            target_status: Some(unrelated.clone()),
+            targets: vec![unrelated],
+            ready: true,
+            ..Default::default()
+        }))));
+        runtime.tick();
+        assert!(!runtime.state.ready);
+        assert_eq!(
+            runtime.config.remembered_device.as_ref().unwrap().id,
+            "gatt-endpoint"
+        );
     }
 
     #[test]

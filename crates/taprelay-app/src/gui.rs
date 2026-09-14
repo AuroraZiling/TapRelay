@@ -1,17 +1,17 @@
 use crate::{
-    AppWindow, BindingRow, CheckRow, FunctionBindingRow, GestureAction, LogLine, ShortcutItem,
-    Theme, ThemeMode,
+    AppWindow, BindingRow, CheckRow, FunctionBindingRow, GestureAction, ShortcutItem, Theme,
+    ThemeMode,
     action::{Action, CaptureTarget},
     administrator,
     config::{self, Config, Language, SaveQueue, Theme as ThemeSetting},
     feedback::{TestStatus, WaitWarning},
     i18n::{self, keys},
-    logging::{self, Filter, Logs},
+    logging,
     platform::desktop::{self, Desktop, DesktopEvent},
     runtime_worker::RuntimeHandle as Runtime,
 };
 use anyhow::{Context, Result, bail};
-use slint::{ComponentHandle, Model, ModelRc, VecModel};
+use slint::{ComponentHandle, ModelRc, VecModel};
 use std::{
     cell::RefCell,
     path::PathBuf,
@@ -70,10 +70,10 @@ pub fn run() -> Result<()> {
     let config = loaded.unwrap_or_default();
     let log_init = logging::init(&path);
     let (logs, _guard) = match log_init {
-        Ok((l, g)) => (l, Some(g)),
+        Ok((l, g)) => (Some(l), Some(g)),
         Err(e) => {
             startup_error = Some(format!("Cannot open logs: {e:#}"));
-            (Logs::default(), None)
+            (None, None)
         }
     };
     tracing::info!(
@@ -103,7 +103,6 @@ pub fn run() -> Result<()> {
         slint::CloseRequestResponse::KeepWindowShown
     });
     let mut controller = Controller::new(config, path, logs, desktop, status, startup_error)?;
-    ui.set_log_lines(controller.log_model.clone().into());
     controller.sync(&ui);
     if controller.fatal.is_none() {
         controller.runtime.start_bluetooth()?;
@@ -309,20 +308,10 @@ mod startup_option_tests {
     }
 }
 
-/// Log severity toggles as selected on the log page title bar.
-fn log_filter(ui: &AppWindow) -> Filter {
-    Filter {
-        debug: ui.get_log_debug(),
-        info: ui.get_log_info(),
-        warning: ui.get_log_warning(),
-        error: ui.get_log_error(),
-    }
-}
-
 struct Controller {
     runtime: Runtime,
     path: PathBuf,
-    logs: Logs,
+    logs: Option<tracing_appender::non_blocking::ErrorCounter>,
     desktop: Desktop,
     saves: SaveQueue,
     status: administrator::Status,
@@ -355,16 +344,13 @@ struct Controller {
     system_language: bool,
     last_system_poll: Instant,
     last_ui_sync: Instant,
-    last_log_revision: u64,
-    last_log_filter: Filter,
     last_dropped_logs: usize,
-    log_model: Rc<VecModel<LogLine>>,
 }
 impl Controller {
     fn new(
         mut config: Config,
         path: PathBuf,
-        logs: Logs,
+        logs: Option<tracing_appender::non_blocking::ErrorCounter>,
         desktop: Desktop,
         status: administrator::Status,
         fatal: Option<String>,
@@ -402,10 +388,7 @@ impl Controller {
             system_language: desktop::system_chinese(),
             last_system_poll: now,
             last_ui_sync: now,
-            last_log_revision: 0,
-            last_log_filter: Filter::default(),
             last_dropped_logs: 0,
-            log_model: Rc::new(VecModel::default()),
         })
     }
     fn zh(&self) -> bool {
@@ -501,7 +484,7 @@ impl Controller {
                 if self.recording() {
                     self.cancel_capture();
                 }
-                ui.set_page(index.clamp(0, 5));
+                ui.set_page(index.clamp(0, 4));
             }
             Action::Listen => {
                 self.runtime.set_listening(!self.runtime.listening)?;
@@ -664,26 +647,6 @@ impl Controller {
                     slint::quit_event_loop()?;
                 }
             }
-            Action::Logs => self.update_logs(ui),
-            Action::ClearLogs => {
-                self.logs.clear();
-                self.log_model.set_vec(Vec::new());
-                self.last_log_revision = self
-                    .logs
-                    .revision
-                    .load(std::sync::atomic::Ordering::Acquire);
-            }
-            Action::CopyLogs => {
-                let text = self
-                    .logs
-                    .filtered(log_filter(ui))
-                    .iter()
-                    .map(|line| line.text.as_str())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                self.desktop.copy_text(&text)?;
-                self.say(self.tr(keys::LOGS_COPIED).into());
-            }
         }
         self.sync(ui);
         Ok(())
@@ -792,8 +755,10 @@ impl Controller {
                 self.runtime.listening,
                 i18n::tray_labels(self.zh()),
             );
-            self.update_logs(ui);
-            let dropped = self.logs.dropped_lines();
+            let dropped = self
+                .logs
+                .as_ref()
+                .map_or(0, |counter| counter.dropped_lines());
             if dropped != self.last_dropped_logs {
                 tracing::warn!(
                     dropped_since_last_check = dropped.saturating_sub(self.last_dropped_logs),
@@ -1088,40 +1053,6 @@ impl Controller {
         } else {
             "".into()
         });
-    }
-    fn update_logs(&mut self, ui: &AppWindow) {
-        let revision = self
-            .logs
-            .revision
-            .load(std::sync::atomic::Ordering::Acquire);
-        let filter = log_filter(ui);
-        if revision == self.last_log_revision && filter == self.last_log_filter {
-            return;
-        }
-        self.last_log_revision = revision;
-        self.last_log_filter = filter;
-        let lines = self.logs.filtered(filter);
-        // A full ring evicts its oldest line, which shifts every remaining row.
-        // Replaying that as a removal keeps the update proportional to the new
-        // lines instead of re-laying out the whole log on every refresh.
-        if self.log_model.row_count() == lines.len()
-            && let (Some(line), Some(first)) = (lines.first(), self.log_model.row_data(0))
-            && (line.text != first.text || line.level != first.level)
-        {
-            self.log_model.remove(0);
-        }
-        for (index, line) in lines.iter().enumerate() {
-            match self.log_model.row_data(index) {
-                None => self.log_model.push(line.clone()),
-                Some(previous) if previous.text != line.text || previous.level != line.level => {
-                    self.log_model.set_row_data(index, line.clone());
-                }
-                _ => {}
-            }
-        }
-        while self.log_model.row_count() > lines.len() {
-            self.log_model.remove(self.log_model.row_count() - 1);
-        }
     }
     fn save_geometry(&mut self, ui: &AppWindow) {
         if self.hidden || self.fatal.is_some() {

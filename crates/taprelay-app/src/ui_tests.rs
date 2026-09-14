@@ -70,24 +70,6 @@ fn render_all_views_without_hardware() {
             state: 0,
         },
     ])));
-    ui.set_log_lines(ModelRc::new(VecModel::from(vec![
-        LogLine {
-            text: "22:00:00 INFO  HID service initialized".into(),
-            level: LogLevel::Info,
-        },
-        LogLine {
-            text: "22:00:01 DEBUG Receiver discovery started".into(),
-            level: LogLevel::Debug,
-        },
-        LogLine {
-            text: "22:00:24 WARN  Receiver has not subscribed yet".into(),
-            level: LogLevel::Warning,
-        },
-        LogLine {
-            text: "22:00:31 ERROR Advertising stopped".into(),
-            level: LogLevel::Error,
-        },
-    ])));
     ui.set_data_directory("D:\\Apps\\TapRelay".into());
     ui.set_app_version("0.1.0".into());
     let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/gui-previews");
@@ -111,7 +93,7 @@ fn render_all_views_without_hardware() {
             } else if mode == 1 {
                 4
             } else {
-                6
+                5
             } {
                 ui.set_page(page);
                 ui.set_wizard_page(page.min(3));
@@ -127,7 +109,7 @@ fn render_all_views_without_hardware() {
                 let shot = ui.window().take_snapshot().unwrap();
                 assert_eq!(shot.width(), width as u32);
                 assert_eq!(shot.height(), height as u32);
-                if mode == 2 && page == 5 && dark {
+                if mode == 2 && page == 4 && dark {
                     let width = shot.width() as usize;
                     let background = shot.as_slice()[300 * width + 70];
                     let mut longest = 0;
@@ -483,100 +465,33 @@ fn render_all_views_without_hardware() {
         button: PointerEventButton::Left,
     });
     assert!(
-        actions.borrow().contains(&("navigate".into(), 5)),
+        actions.borrow().contains(&("navigate".into(), 4)),
         "Sidebar tooltip must not consume navigation clicks"
     );
-    // Page-local edits and callbacks must cross the shell interface after extraction.
     ui.set_page(4);
-    ui.global::<Theme>().set_mode(ThemeMode::Dark);
-    let log_header = ui.window().take_snapshot().unwrap();
-    let info_dot_visible = (882..=886).any(|x| {
-        (39..=42).any(|y| {
-            let pixel = log_header.as_slice()[y * log_header.width() as usize + x];
-            pixel.r > 180 && pixel.g > 180 && pixel.b > 180
-        })
+    let _ = ui.window().take_snapshot().unwrap();
+
+    // The remaining log UI opens the on-disk directory from Settings.
+    ui.window().dispatch_event(WindowEvent::PointerScrolled {
+        position: slint::LogicalPosition::new(500., 500.),
+        delta_x: 0.,
+        delta_y: -2000.,
     });
-    assert!(
-        info_dot_visible,
-        "The Info icon must render a visible dot above its vertical stem"
-    );
-    let click = |x, y| {
-        let position = slint::LogicalPosition::new(x, y);
-        ui.window()
-            .dispatch_event(WindowEvent::PointerMoved { position });
-        ui.window().dispatch_event(WindowEvent::PointerPressed {
-            position,
-            button: PointerEventButton::Left,
-        });
-        ui.window().dispatch_event(WindowEvent::PointerReleased {
-            position,
-            button: PointerEventButton::Left,
-        });
-    };
-    click(170., 45.);
-    assert!(
-        actions.borrow().contains(&("clear-logs".into(), 0)),
-        "The log header must expose a clear action beside its title"
-    );
-    click(848., 45.);
-    assert!(
-        ui.get_log_debug(),
-        "The debug severity toggle must propagate to the window"
-    );
-    assert!(actions.borrow().contains(&("logs".into(), 0)));
-    ui.set_page(0);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(100));
     let _ = ui.window().take_snapshot().unwrap();
-    ui.set_page(4);
+    let position = slint::LogicalPosition::new(260., 654.);
+    ui.window()
+        .dispatch_event(WindowEvent::PointerMoved { position });
+    ui.window().dispatch_event(WindowEvent::PointerPressed {
+        position,
+        button: PointerEventButton::Left,
+    });
+    ui.window().dispatch_event(WindowEvent::PointerReleased {
+        position,
+        button: PointerEventButton::Left,
+    });
+    assert!(actions.borrow().contains(&("logs-folder".into(), 0)));
     let _ = ui.window().take_snapshot().unwrap();
-    assert!(
-        ui.get_log_debug(),
-        "Navigation must preserve the severity toggles"
-    );
-    // Exercise the bounded log model with wrapping and Unicode at full capacity.
-    let logs = std::rc::Rc::new(VecModel::from(log_rows(1000, 0)));
-    ui.set_log_lines(logs.clone().into());
-    // Log updates reach the layout through instantiation and change handlers,
-    // so each step is drained (mock time plus a snapshot) before it is asserted.
-    let settle = || {
-        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(16));
-        let _ = ui.window().take_snapshot().unwrap();
-        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(16));
-    };
-    settle();
-    let shot = ui.window().take_snapshot().unwrap();
-    assert_eq!((shot.width(), shot.height()), (1000, 700));
-    // The page opens at the newest lines and follows the tail from there.
-    let tail = ui.get_log_viewport_y();
-    assert!(
-        tail < -1000.,
-        "Opening the log page must start at the newest lines: {tail}"
-    );
-    for row in log_rows(200, 1000) {
-        logs.push(row);
-    }
-    settle();
-    let followed = ui.get_log_viewport_y();
-    assert!(
-        followed < tail,
-        "A reader parked at the tail must follow new lines: {followed} !< {tail}"
-    );
-    // A reader who scrolled up keeps their position through later updates.
-    ui.set_log_viewport_y(-40.);
-    settle();
-    assert_eq!(ui.get_log_viewport_y(), -40.);
-    for row in log_rows(200, 1200) {
-        logs.push(row);
-    }
-    settle();
-    assert_eq!(
-        ui.get_log_viewport_y(),
-        -40.,
-        "Log updates must not move a reader who scrolled up"
-    );
-    // Shortening the log must not leave the viewport out of range.
-    ui.set_log_lines(ModelRc::new(VecModel::<LogLine>::default()));
-    settle();
-    assert_eq!(ui.get_log_viewport_y(), 0.);
 
     // Seed the retained renderer cache and confirm unchanged UI has no damage.
     use slint::platform::software_renderer::PremultipliedRgbaColor;
@@ -636,28 +551,6 @@ fn render_all_views_without_hardware() {
     }
     preview_function_layouts(&ui, &out);
     preview_fixed_overview(&ui, &out);
-}
-
-/// Wrapped, Unicode and severity-cycled log rows as the controller publishes them.
-fn log_rows(count: usize, offset: usize) -> Vec<LogLine> {
-    (0..count)
-        .map(|i| {
-            let index = offset + i;
-            LogLine {
-                text: format!(
-                    "12:00:00 INFO 日志 {index}: {}",
-                    "wrapped message ".repeat(index % 7 + 1)
-                )
-                .into(),
-                level: [
-                    LogLevel::Debug,
-                    LogLevel::Info,
-                    LogLevel::Warning,
-                    LogLevel::Error,
-                ][index % 4],
-            }
-        })
-        .collect()
 }
 
 // Use the real catalog and deliberately long shortcuts, rather than English

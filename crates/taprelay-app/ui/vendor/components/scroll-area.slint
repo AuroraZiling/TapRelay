@@ -8,9 +8,6 @@ export component ScrollArea inherits Rectangle {
     in property <length> content-height;
     // Capture editors need immediate presses; wheel scrolling remains available.
     in property <bool> drag-to-scroll: true;
-    // TapRelay integration: allow log follow-tail without replacing the scrollbar.
-    in-out property <length> viewport-y <=> flick.viewport-y;
-    out property <length> viewport-height: flick.viewport-height;
 
     clip: true;
     background: transparent;

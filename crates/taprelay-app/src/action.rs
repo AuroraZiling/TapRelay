@@ -20,8 +20,7 @@ actions! {
     PairDevice => "pair-device", DisconnectDevice => "disconnect-device",
     Wizard => "wizard", WizardNext => "wizard-next", WizardBack => "wizard-back",
     WizardFinish => "wizard-finish", Theme => "theme", Language => "language",
-    Setting => "setting", Elevate => "elevate", Logs => "logs", ClearLogs => "clear-logs",
-    CopyLogs => "copy-logs",
+    Setting => "setting", Elevate => "elevate",
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum CaptureTarget {

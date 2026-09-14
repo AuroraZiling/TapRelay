@@ -1,7 +1,7 @@
 import { Tokens, Theme, ThemeMode } from "vendor/theme/tokens.slint";
 import { BluetoothStatus } from "components/bluetooth-status.slint";
 import { I18n, TranslationText } from "@i18n";
-import { BindingRow, DeviceRow, CheckRow, FunctionBindingRow, GestureAction, ShortcutItem, RelayStatus, LogLevel, LogLine } from "types.slint";
+import { BindingRow, DeviceRow, CheckRow, FunctionBindingRow, GestureAction, ShortcutItem, RelayStatus } from "types.slint";
 import { Heading, ErrorBanner } from "components/primitives.slint";
 import { Sidebar } from "components/sidebar.slint";
 import { Toast } from "components/toast.slint";
@@ -11,10 +11,8 @@ import { OverviewPage } from "pages/overview.slint";
 import { FunctionBindingsPage } from "pages/bindings.slint";
 import { DevicesPage } from "pages/devices.slint";
 import { ReceiverActions } from "components/receiver-actions.slint";
-import { LogClearButton, LogLevelFilters } from "components/log-level-filters.slint";
-import { LogsPage } from "pages/logs.slint";
 import { SettingsPage } from "pages/settings.slint";
-export { Theme, ThemeMode, I18n, TranslationText, BindingRow, DeviceRow, CheckRow, FunctionBindingRow, GestureAction, ShortcutItem, RelayStatus, LogLevel, LogLine }
+export { Theme, ThemeMode, I18n, TranslationText, BindingRow, DeviceRow, CheckRow, FunctionBindingRow, GestureAction, ShortcutItem, RelayStatus }
 
 // Window shell: public Rust interface, navigation and page composition only.
 export component AppWindow inherits Window {
@@ -70,13 +68,6 @@ export component AppWindow inherits Window {
     in-out property <bool> connection-wait-warning;
     in property <int> theme-choice;
     in property <int> language-choice;
-    in property <[LogLine]> log-lines;
-    in-out property <length> log-viewport-y;
-    // Log severity toggles; DEBUG also covers TRACE and stays off by default.
-    in-out property <bool> log-debug: false;
-    in-out property <bool> log-info: true;
-    in-out property <bool> log-warning: true;
-    in-out property <bool> log-error: true;
     callback action(string, int, string);
     property <color> signal: root.state-color == 0 ? #2eb470: root.state-color == 1 ? #8b919a: root.state-color == 2 ? #e8ae36: #e64f55;
     property <RelayStatus> relay-status: {
@@ -136,11 +127,9 @@ export component AppWindow inherits Window {
                     spacing: 12px;
                     Heading {
                         horizontal-stretch: 0;
-                        text: [I18n.text.nav-overview,I18n.text.nav-bindings,I18n.text.nav-bindings,I18n.text.nav-receiver,I18n.text.nav-logs,I18n.text.nav-settings][root.page];
+                        text: [I18n.text.nav-overview,I18n.text.nav-bindings,I18n.text.nav-bindings,I18n.text.nav-receiver,I18n.text.nav-settings][root.page];
                     }
-                    if root.page == 4: LogClearButton {
-                        cleared => { root.action("clear-logs", 0, ""); }
-                    }
+
                     if root.page == 3: BluetoothStatus {
                         available: root.bluetooth-available;
                         busy: root.busy;
@@ -150,14 +139,7 @@ export component AppWindow inherits Window {
                     if root.page == 3: ReceiverActions {
                         action(name, index, value) => { root.action(name, index, value); }
                     }
-                    if root.page == 4: Rectangle { horizontal-stretch: 1; }
-                    if root.page == 4: LogLevelFilters {
-                        debug <=> root.log-debug;
-                        info <=> root.log-info;
-                        warning <=> root.log-warning;
-                        error <=> root.log-error;
-                        toggled => { root.action("logs", 0, ""); }
-                    }
+
                 }
                 if root.problem != "" && root.page != 2: ErrorBanner {
                     problem: root.problem;
@@ -192,14 +174,8 @@ export component AppWindow inherits Window {
                         root.action(name, index, value);
                     }
                 }
-                if root.page == 4: LogsPage {
-                    log-lines: root.log-lines;
-                    viewport-y <=> root.log-viewport-y;
-                    action(name, index, value) => {
-                        root.action(name, index, value);
-                    }
-                }
-                if root.page == 5: SettingsPage {
+
+                if root.page == 4: SettingsPage {
                     always-admin <=> root.always-admin;
                     app-version: root.app-version;
                     auto-listen <=> root.auto-listen;

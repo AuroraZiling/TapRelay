@@ -1,6 +1,3 @@
-// Log severity as shown by the log page; TRACE is reported as debug.
-export enum LogLevel { debug, info, warning, error }
-export struct LogLine { text: string, level: LogLevel }
 export struct ShortcutItem { text: string, keys: [string], slot: int, enabled: bool }
 // One way a function reacts to its shortcut: a tapped "Previous" and a held
 // "Rewind" are the same binding, so the row lists both gestures.

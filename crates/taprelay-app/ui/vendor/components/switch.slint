@@ -16,6 +16,19 @@ export component Switch {
     // is keyboard-only (focus-visible emulation).
     property <bool> pointer-focus: false;
 
+    accessible-role: switch;
+    accessible-label: root.label;
+    accessible-checked: root.checked;
+    accessible-enabled: !root.disabled;
+    accessible-action-default => { root.toggle(); }
+
+    function toggle() {
+        if !root.disabled {
+            root.checked = !root.checked;
+            root.toggled(root.checked);
+        }
+    }
+
     HorizontalLayout {
         spacing: 8px;
         alignment: start;
@@ -86,8 +99,7 @@ export component Switch {
         }
         clicked => {
             if (!root.disabled) {
-                root.checked = !root.checked;
-                root.toggled(root.checked);
+                root.toggle();
                 focus-scope.focus();
             }
         }
@@ -103,10 +115,7 @@ export component Switch {
         key-pressed(event) => {
             root.pointer-focus = false;
             if (event.text == " " || event.text == "\n") {
-                if (!root.disabled) {
-                    root.checked = !root.checked;
-                    root.toggled(root.checked);
-                }
+                root.toggle();
                 return accept;
             }
             return reject;

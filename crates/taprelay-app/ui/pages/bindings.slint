@@ -4,22 +4,24 @@ import { FocusRing } from "../vendor/components/focus-ring.slint";
 import { ScrollArea } from "../vendor/components/scroll-area.slint";
 import { Tokens } from "../vendor/theme/tokens.slint";
 import { I18n } from "@i18n";
-import { FunctionBindingRow, ShortcutItem } from "../types.slint";
+import { BindingCaptureState, BindingUi, FunctionBindingRow, ShortcutItem } from "../types.slint";
 import { IconDisplay, IconSet } from "@lucide";
 import { Caption, Label } from "../components/primitives.slint";
 import { IconButton } from "../components/icon-button.slint";
 import { Badge } from "../vendor/components/badge.slint";
 
-
-// Borderless, content-sized capture surface. BindingChip owns the visible
-// surface so the capture interaction never adds a second input border.
+// Borderless capture surface. BindingChip owns the surrounding visual so this
+// module contributes keyboard, pointer and accessibility behavior only.
 component ShortcutCapture inherits Rectangle {
     in property <string> text;
     in property <bool> recording;
+    in property <bool> disabled: false;
+    in property <string> accessibility-label: root.text;
+    in property <string> accessibility-description;
     callback begin();
     callback cancel();
     callback key-input(string, bool);
-    out property <bool> hovered: touch.has-hover;
+    out property <bool> hovered: !root.disabled && touch.has-hover;
     property <bool> pointer-focus: false;
 
     width: label.preferred-width;
@@ -28,22 +30,27 @@ component ShortcutCapture inherits Rectangle {
     background: transparent;
     forward-focus: focus;
     accessible-role: button;
-    accessible-label: root.text;
-    accessible-enabled: true;
+    accessible-label: root.accessibility-label;
+    accessible-description: root.accessibility-description;
+    accessible-enabled: !root.disabled;
+    accessible-action-default => { root.request-begin(); }
+
+    function request-begin() {
+        if !root.disabled && !root.recording {
+            focus.focus();
+            root.begin();
+        }
+    }
 
     touch := TouchArea {
-        mouse-cursor: pointer;
+        enabled: !root.disabled;
+        mouse-cursor: root.disabled ? default : pointer;
         pointer-event(ev) => {
             if ev.button == PointerEventButton.left && ev.kind == PointerEventKind.down {
                 root.pointer-focus = true;
             }
         }
-        clicked => {
-            focus.focus();
-            if !root.recording {
-                root.begin();
-            }
-        }
+        clicked => { root.request-begin(); }
     }
     label := Text {
         width: parent.width;
@@ -58,13 +65,17 @@ component ShortcutCapture inherits Rectangle {
     focus := FocusScope {
         width: 0px;
         height: 0px;
+        enabled: !root.disabled;
         init => {
-            if root.recording {
+            if root.recording && !root.disabled {
                 self.focus();
             }
         }
         key-pressed(event) => {
             root.pointer-focus = false;
+            if root.disabled {
+                return reject;
+            }
             if root.recording {
                 if event.text == Key.Escape {
                     root.cancel();
@@ -88,7 +99,7 @@ component ShortcutCapture inherits Rectangle {
         }
     }
     changed recording => {
-        if self.recording {
+        if self.recording && !root.disabled {
             focus.focus();
         }
     }
@@ -105,26 +116,31 @@ component BindingChip inherits Rectangle {
     in property <string> label;
     in property <bool> recording: false;
     in property <bool> removable: true;
-    in property <bool> remove-disabled: false;
+    in property <bool> disabled: false;
+    in property <string> accessibility-id;
+    in property <string> accessibility-label: root.label;
+    in property <string> accessibility-description;
+    in property <string> remove-accessibility-id;
     callback begin();
     callback cancel();
     callback remove();
     callback key-input(string, bool);
-    out property <bool> hovered:
-        surface-touch.has-hover || capture.hovered || cancel_button.hovered || remove_button.hovered;
+    out property <bool> hovered: !root.disabled
+        && (surface-touch.has-hover || capture.hovered || cancel_button.hovered || remove_button.hovered);
 
     width: min(measure.preferred-width + 42px, root.available-width);
     in property <length> available-width: 400px;
     height: Tokens.density-button-sm;
     preferred-width: min(measure.preferred-width + 42px, root.available-width);
     horizontal-stretch: 0;
+    opacity: root.disabled ? 0.5 : 1;
     background: root.recording
         ? Tokens.color-surface-3
         : root.hovered ? Tokens.color-accent : Tokens.color-card;
     border-width: 1px;
     border-color: Tokens.color-border-hairline;
     border-radius: Tokens.radius-md;
-    animate background {
+    animate background, opacity {
         duration: Tokens.motion-fast;
         easing: Tokens.motion-easing-standard;
     }
@@ -140,8 +156,9 @@ component BindingChip inherits Rectangle {
 
     // Cover padding and layout gaps as well as the child controls.
     surface-touch := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { if !root.recording { root.begin(); } }
+        enabled: !root.disabled;
+        mouse-cursor: root.disabled ? default : pointer;
+        clicked => { if !root.recording && !root.disabled { root.begin(); } }
     }
 
     content := HorizontalLayout {
@@ -157,6 +174,10 @@ component BindingChip inherits Rectangle {
             width: max(0px, parent.width - 42px);
             text: root.label;
             recording: root.recording;
+            disabled: root.disabled;
+            accessibility-label: root.accessibility-label;
+            accessibility-description: root.accessibility-description;
+            accessible-id: root.accessibility-id;
             begin => { root.begin(); }
             cancel => { root.cancel(); }
             key-input(text, down) => { root.key-input(text, down); }
@@ -180,111 +201,52 @@ component BindingChip inherits Rectangle {
             visible: !root.recording && root.removable;
             size: icon-xs;
             variant: ghost;
-            disabled: root.remove-disabled;
+            disabled: root.disabled;
             icon: IconSet.X;
             hint: I18n.text.common-delete + ": " + root.label;
-            icon-color: remove_button.hovered && !root.remove-disabled ? Tokens.color-destructive : Tokens.color-muted-foreground;
-            accessible-enabled: !root.recording && root.removable && !root.remove-disabled;
+            accessible-id: root.remove-accessibility-id;
+            icon-color: remove_button.hovered && !root.disabled ? Tokens.color-destructive : Tokens.color-muted-foreground;
+            accessible-enabled: !root.recording && root.removable && !root.disabled;
             clicked => { root.remove(); }
         }
     }
 }
 
-// Use the renderer's native rounded border at every scale factor.
-component AddBindingButton inherits Rectangle {
-    in property <string> text;
-    in property <bool> disabled: false;
-    callback clicked();
-    out property <bool> hovered: touch.has-hover;
-    property <bool> pointer-focus: false;
-    property <bool> pressed-down: touch.pressed && !root.disabled;
-
+component AddBindingButton inherits Button {
+    in property <string> label;
+    text: "";
+    size: sm;
+    variant: outline;
+    accessible-label: root.label;
     width: content.preferred-width + 2 * Tokens.spacing-sm;
-    height: Tokens.density-button-sm;
     preferred-width: content.preferred-width + 2 * Tokens.spacing-sm;
     horizontal-stretch: 0;
-
-    opacity: root.disabled ? 0.5 : 1.0;
-    background: root.hovered && !root.disabled ? Tokens.color-accent : Tokens.color-background;
-    border-width: 1px;
-    border-color: root.hovered && !root.disabled
-        ? Tokens.color-border-hairline-strong
-        : Tokens.color-border-hairline;
-    border-radius: Tokens.radius-md;
-    animate background, border-color, opacity {
-        duration: Tokens.motion-fast;
-        easing: Tokens.motion-easing-standard;
-    }
-    accessible-role: button;
-    accessible-label: root.text;
-    accessible-enabled: !root.disabled;
-
     content := HorizontalLayout {
         x: Tokens.spacing-sm;
-        y: root.pressed-down ? 1px : 0px;
         width: self.preferred-width;
         height: parent.height;
         spacing: Tokens.spacing-xs;
         alignment: center;
         cross-axis-alignment: center;
-        animate y {
-            duration: Tokens.motion-fast;
-            easing: Tokens.motion-easing-standard;
-        }
         IconDisplay {
             icon: IconSet.Plus;
             size: 14px;
-            stroke: root.hovered ? Tokens.color-foreground : Tokens.color-muted-foreground;
+            stroke: root.content-foreground;
             stroke-width: 1.75;
         }
         Text {
-            text: root.text;
-            color: root.hovered ? Tokens.color-foreground : Tokens.color-muted-foreground;
+            text: root.label;
+            color: root.content-foreground;
             font-size: Tokens.typography-body-sm-size;
             font-weight: Tokens.typography-weight-medium;
             vertical-alignment: center;
         }
     }
-
-    touch := TouchArea {
-        enabled: !root.disabled;
-        mouse-cursor: root.disabled ? default : pointer;
-        pointer-event(ev) => {
-            if !root.disabled
-                    && ev.button == PointerEventButton.left
-                    && ev.kind == PointerEventKind.down {
-                root.pointer-focus = true;
-            }
-        }
-        clicked => {
-            if !root.disabled {
-                focus-scope.focus();
-                root.clicked();
-            }
-        }
-    }
-    forward-focus: focus-scope;
-    focus-scope := FocusScope {
-        width: 0px;
-        height: 0px;
-        enabled: !root.disabled;
-        key-pressed(event) => {
-            root.pointer-focus = false;
-            if event.text == Key.Return || event.text == " " {
-                if !root.disabled { root.clicked(); }
-                return accept;
-            }
-            return reject;
-        }
-    }
-    if focus-scope.has-focus && !root.pointer-focus: FocusRing {
-        host-width: parent.width;
-        host-height: parent.height;
-    }
 }
 
 component DisabledShortcutChip inherits Rectangle {
     in property <ShortcutItem> shortcut;
+    in property <string> accessibility-id;
     in property <length> available-width: 400px;
     width: min(root.available-width, max(92px, label.preferred-width + 2 * Tokens.spacing-sm));
     height: Tokens.density-button-sm;
@@ -294,6 +256,9 @@ component DisabledShortcutChip inherits Rectangle {
     border-color: Tokens.color-border-hairline;
     border-radius: Tokens.radius-md;
     opacity: 0.5;
+    accessible-role: text;
+    accessible-id: root.accessibility-id;
+    accessible-label: root.shortcut.text;
     label := Text {
         x: Tokens.spacing-sm;
         width: parent.width - 2 * Tokens.spacing-sm;
@@ -310,94 +275,145 @@ component DisabledShortcutChip inherits Rectangle {
 // Keep every function in catalog order, including disabled functions.
 component FunctionBindingRowView inherits Rectangle {
     in property <FunctionBindingRow> binding-row;
+    in property <BindingCaptureState> capture;
     property <bool> inactive: !root.binding-row.enabled;
-    in property <string> capture-function;
-    in property <int> capture-slot: -1;
-    in property <string> capture-text;
-    in property <string> capture-error;
-    callback action(string, int, string);
-    property <ShortcutItem> first-shortcut: root.binding-row.shortcuts[0];
-    property <bool> has-error: root.capture-error != "" && root.capture-function == root.binding-row.id;
-    height: 64px;
+    property <bool> captures-row: root.capture.function-id == root.binding-row.id;
+    property <bool> capture-busy: root.capture.function-id != "";
+    property <bool> captures-new-slot:
+        root.captures-row && root.capture.slot == root.binding-row.shortcuts.length;
+    property <bool> has-error: root.capture.error != "" && root.captures-row;
+
+    in property <length> row-padding: 16px;
+    in property <length> column-spacing: 16px;
+    property <length> chip-spacing: 8px;
+    in property <length> switch-width: 36px;
+    in property <length> function-column-width: 300px;
+    property <length> shortcut-column-width: max(0px,
+        root.width - 2 * root.row-padding - 2 * root.column-spacing
+        - root.switch-width - root.function-column-width);
+    property <bool> two-shortcut-columns:
+        root.binding-row.shortcuts.length > 1
+        || (!root.inactive && root.binding-row.shortcuts.length == 1);
+    property <length> shortcut-control-width: root.two-shortcut-columns
+        ? (root.shortcut-column-width - root.chip-spacing) / 2
+        : root.shortcut-column-width;
+
+    callback begin-binding-capture(string, int);
+    callback cancel-binding-capture();
+    callback delete-binding-shortcut(string, int);
+    callback set-binding-function-enabled(string, bool);
+    callback binding-key-input(string, bool);
+
+    height: root.has-error ? 88px : 64px;
     background: Tokens.color-card;
     border-radius: Tokens.radius-md;
     HorizontalLayout {
-        padding-left: 16px;
-        padding-right: 16px;
-        height: 64px;
-        spacing: 16px;
+        padding-left: root.row-padding;
+        padding-right: root.row-padding;
+        height: root.height;
+        spacing: root.column-spacing;
         cross-axis-alignment: center;
         Switch {
-            width: 36px;
+            width: root.switch-width;
             height: 20px;
             checked: root.binding-row.enabled;
-            disabled: root.capture-function != "";
-            accessible-role: checkbox;
-            accessible-checked: root.binding-row.enabled;
-            accessible-enabled: root.capture-function == "";
+            disabled: root.capture-busy;
+            accessible-id: "binding-enabled-" + root.binding-row.id;
             accessible-label: root.binding-row.label;
-            toggled(enabled) => { root.action("toggle-function", enabled ? 1 : 0, root.binding-row.id); }
+            toggled(enabled) => {
+                root.set-binding-function-enabled(root.binding-row.id, enabled);
+            }
         }
-        left := HorizontalLayout {
-            width: root.width - 400px;
-
-            spacing: 8px;
-            alignment: start;
-            cross-axis-alignment: center;
-            // Present one slot for now; the model retains all saved shortcuts.
-            if !root.inactive && root.binding-row.shortcuts.length > 0: BindingChip {
-                available-width: root.has-error ? (root.width - 408px) / 2 : root.width - 400px;
-                label: root.capture-function == root.binding-row.id && root.capture-slot == root.first-shortcut.slot
-                    ? root.capture-text : root.first-shortcut.text;
-                recording: root.capture-function == root.binding-row.id && root.capture-slot == root.first-shortcut.slot;
-                remove-disabled: root.capture-function != "";
-                key-input(text, down) => { root.action("capture-key", down ? 1 : 0, text); }
-                begin => { if root.capture-function == "" { root.action("capture", root.first-shortcut.slot, root.binding-row.id); } }
-                cancel => { root.action("cancel-capture", 0, ""); }
-                remove => { root.action("delete", root.first-shortcut.slot, root.binding-row.id); }
-            }
-            if root.inactive && root.binding-row.shortcuts.length == 0: Caption {
-                text: I18n.text.bindings-unset;
-                opacity: 0.5;
-            }
-            if root.inactive && root.binding-row.shortcuts.length > 0: DisabledShortcutChip {
-                available-width: root.width - 400px;
-                shortcut: root.first-shortcut;
-            }
-            if !root.inactive && root.binding-row.shortcuts.length == 0
-                    && !(root.capture-function == root.binding-row.id
-                        && root.capture-slot == root.binding-row.shortcuts.length): AddBindingButton {
-                text: I18n.text.bindings-unset;
-                accessible-label: I18n.text.bindings-add;
-                disabled: root.capture-function != "";
-                clicked => { root.action("capture", root.binding-row.shortcuts.length, root.binding-row.id); }
-            }
-            if !root.inactive && root.binding-row.shortcuts.length == 0
-                    && root.capture-function == root.binding-row.id
-                    && root.capture-slot == root.binding-row.shortcuts.length: BindingChip {
-                available-width: root.has-error ? (root.width - 408px) / 2 : root.width - 400px;
-                label: root.capture-text;
-                recording: true;
-                removable: false;
-                cancel => { root.action("cancel-capture", 0, ""); }
-                key-input(text, down) => { root.action("capture-key", down ? 1 : 0, text); }
+        left := VerticalLayout {
+            width: root.shortcut-column-width;
+            spacing: 4px;
+            alignment: center;
+            shortcut-controls := Rectangle {
+                height: Tokens.density-button-sm;
+                vertical-stretch: 0;
+                if !root.inactive: HorizontalLayout {
+                    spacing: root.chip-spacing;
+                    alignment: start;
+                    cross-axis-alignment: center;
+                    for shortcut in root.binding-row.shortcuts: BindingChip {
+                        property <bool> captures-slot:
+                            root.captures-row && root.capture.slot == shortcut.slot;
+                        available-width: root.shortcut-control-width;
+                        label: self.captures-slot ? root.capture.text : shortcut.text;
+                        recording: self.captures-slot;
+                        disabled: root.capture-busy && !self.captures-slot;
+                        accessibility-label: root.binding-row.label + ": " + shortcut.text;
+                        accessibility-description: self.captures-slot ? root.capture.error : "";
+                        accessibility-id: "binding-slot-" + root.binding-row.id + "-" + shortcut.slot;
+                        remove-accessibility-id: "binding-delete-" + root.binding-row.id + "-" + shortcut.slot;
+                        key-input(text, down) => { root.binding-key-input(text, down); }
+                        begin => { root.begin-binding-capture(root.binding-row.id, shortcut.slot); }
+                        cancel => { root.cancel-binding-capture(); }
+                        remove => { root.delete-binding-shortcut(root.binding-row.id, shortcut.slot); }
+                    }
+                    if root.binding-row.shortcuts.length < 2
+                            && !root.captures-new-slot: AddBindingButton {
+                        label: I18n.text.bindings-unset;
+                        accessible-id: "binding-add-" + root.binding-row.id;
+                        accessible-label: I18n.text.bindings-add + ": " + root.binding-row.label;
+                        disabled: root.capture-busy;
+                        clicked => {
+                            root.begin-binding-capture(
+                                root.binding-row.id,
+                                root.binding-row.shortcuts.length,
+                            );
+                        }
+                    }
+                    if root.captures-new-slot: BindingChip {
+                        available-width: root.shortcut-control-width;
+                        label: root.capture.text;
+                        recording: true;
+                        removable: false;
+                        accessibility-label: root.binding-row.label + ": " + root.capture.text;
+                        accessibility-description: root.capture.error;
+                        accessibility-id: "binding-slot-" + root.binding-row.id + "-" + root.capture.slot;
+                        cancel => { root.cancel-binding-capture(); }
+                        key-input(text, down) => { root.binding-key-input(text, down); }
+                    }
+                }
+                if root.inactive: HorizontalLayout {
+                    spacing: root.chip-spacing;
+                    alignment: start;
+                    cross-axis-alignment: center;
+                    if root.binding-row.shortcuts.length == 0: Caption {
+                        text: I18n.text.bindings-unset;
+                        opacity: 0.5;
+                    }
+                    for shortcut in root.binding-row.shortcuts: DisabledShortcutChip {
+                        available-width: root.shortcut-control-width;
+                        shortcut: shortcut;
+                        accessibility-id: "binding-disabled-slot-" + root.binding-row.id + "-" + shortcut.slot;
+                    }
+                }
             }
             if root.has-error: Text {
-                text: root.capture-error;
+                text: root.capture.error;
                 color: Tokens.color-destructive;
                 font-size: Tokens.typography-body-sm-size;
+                height: 20px;
                 min-width: 0px;
                 horizontal-stretch: 1;
                 vertical-alignment: center;
                 overflow: elide;
+                accessible-role: text;
+                accessible-id: "binding-error-" + root.binding-row.id;
+                accessible-live-region: polite;
             }
         }
         // One gesture per line, trigger first: a merged function reads as
         // "Tap → Previous" over "Hold → Rewind" without asking the reader to
         // map a shared trigger word onto a pair of slashed action names.
         HorizontalLayout {
-            width: 300px;
+            width: root.function-column-width;
             vertical-stretch: 1;
+            accessible-role: groupbox;
+            accessible-id: "binding-function-" + root.binding-row.id;
+            accessible-label: root.binding-row.label;
             VerticalLayout {
                 alignment: center;
                 spacing: 0px;
@@ -427,12 +443,10 @@ component FunctionBindingRowView inherits Rectangle {
 }
 
 export component FunctionBindingsPage inherits VerticalLayout {
-    in property <[FunctionBindingRow]> rows;
-    in property <string> capture-function;
-    in property <int> capture-slot: -1;
-    in property <string> capture-text;
-    in property <string> capture-error;
-    callback action(string, int, string);
+    property <length> row-padding: 16px;
+    property <length> column-spacing: 16px;
+    property <length> switch-width: 36px;
+    property <length> function-column-width: 300px;
     spacing: 24px;
     Caption { text: I18n.text.bindings-help; vertical-stretch: 0; }
     ScrollArea {
@@ -445,22 +459,33 @@ export component FunctionBindingsPage inherits VerticalLayout {
             height: self.preferred-height;
             spacing: 8px;
             alignment: start;
-            if root.rows.length > 0: HorizontalLayout {
+            if BindingUi.rows.length > 0: HorizontalLayout {
                 height: 28px;
-                padding-left: 16px;
-                padding-right: 16px;
-                spacing: 16px;
-                Caption { text: I18n.text.bindings-column-enabled; width: 36px; }
+                padding-left: root.row-padding;
+                padding-right: root.row-padding;
+                spacing: root.column-spacing;
+                Caption { text: I18n.text.bindings-column-enabled; width: root.switch-width; }
                 Caption { text: I18n.text.bindings-column-shortcut; horizontal-stretch: 1; }
-                Caption { text: I18n.text.bindings-column-function; width: 300px; }
+                Caption { text: I18n.text.bindings-column-function; width: root.function-column-width; }
             }
-            for row in root.rows: FunctionBindingRowView {
+            for row in BindingUi.rows: FunctionBindingRowView {
                 binding-row: row;
-                capture-function: root.capture-function;
-                capture-slot: root.capture-slot;
-                capture-text: root.capture-text;
-                capture-error: root.capture-error;
-                action(name, index, value) => { root.action(name, index, value); }
+                capture: BindingUi.capture;
+                row-padding: root.row-padding;
+                column-spacing: root.column-spacing;
+                switch-width: root.switch-width;
+                function-column-width: root.function-column-width;
+                begin-binding-capture(function-id, slot) => {
+                    BindingUi.begin-capture(function-id, slot);
+                }
+                cancel-binding-capture => { BindingUi.cancel-capture(); }
+                delete-binding-shortcut(function-id, slot) => {
+                    BindingUi.delete-shortcut(function-id, slot);
+                }
+                set-binding-function-enabled(function-id, enabled) => {
+                    BindingUi.set-function-enabled(function-id, enabled);
+                }
+                binding-key-input(text, down) => { BindingUi.key-input(text, down); }
             }
         }
     }

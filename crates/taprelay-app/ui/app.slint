@@ -1,7 +1,7 @@
 import { Tokens, Theme, ThemeMode } from "vendor/theme/tokens.slint";
 import { BluetoothStatus } from "components/bluetooth-status.slint";
 import { I18n, TranslationText } from "@i18n";
-import { BindingRow, DeviceRow, CheckRow, FunctionBindingRow, GestureAction, ShortcutItem, RelayStatus } from "types.slint";
+import { BindingCaptureState, BindingUi, BindingRow, DeviceRow, CheckRow, FunctionBindingRow, GestureAction, ShortcutItem, RelayStatus } from "types.slint";
 import { Heading, ErrorBanner } from "components/primitives.slint";
 import { Navigation } from "navigation.slint";
 import { Sidebar } from "components/sidebar.slint";
@@ -13,7 +13,7 @@ import { FunctionBindingsPage } from "pages/bindings.slint";
 import { DevicesPage } from "pages/devices.slint";
 import { ReceiverActions } from "components/receiver-actions.slint";
 import { SettingsPage } from "pages/settings.slint";
-export { Theme, ThemeMode, I18n, TranslationText, BindingRow, DeviceRow, CheckRow, FunctionBindingRow, GestureAction, ShortcutItem, RelayStatus }
+export { Theme, ThemeMode, I18n, TranslationText, BindingCaptureState, BindingUi, BindingRow, DeviceRow, CheckRow, FunctionBindingRow, GestureAction, ShortcutItem, RelayStatus }
 
 // Window shell: public Rust interface, navigation and page composition only.
 export component AppWindow inherits Window {
@@ -33,7 +33,6 @@ export component AppWindow inherits Window {
     in-out property <int> page: 0;
     in-out property <int> wizard-page: 0;
     in property <[BindingRow]> bindings;
-    in property <[FunctionBindingRow]> function-bindings;
     in property <[CheckRow]> checks;
     in property <bool> listening;
     in property <bool> ready;
@@ -51,10 +50,6 @@ export component AppWindow inherits Window {
     in property <string> stage-detail;
     in property <string> diagnostics;
     in property <string> problem;
-    in property <string> capture-text;
-    in property <string> capture-error;
-    in property <string> capture-function;
-    in property <int> capture-slot: -1;
     in property <int> input-count;
     in property <string> toast;
     in property <int> state-color: 2;
@@ -105,11 +100,6 @@ export component AppWindow inherits Window {
                 adapter-label: root.adapter-label;
                 bluetooth-available: root.bluetooth-available;
                 busy: root.busy;
-                function-bindings: root.function-bindings;
-                capture-function: root.capture-function;
-                capture-slot: root.capture-slot;
-                capture-error: root.capture-error;
-                capture-text: root.capture-text;
                 discovery-status: root.discovery-status;
                 scanning: root.scanning;
                 paired-devices: root.paired-devices;
@@ -157,16 +147,7 @@ export component AppWindow inherits Window {
                         root.action(name, index, value);
                     }
                 }
-                if root.page == Navigation.bindings.page: FunctionBindingsPage {
-                    rows: root.function-bindings;
-                    capture-function: root.capture-function;
-                    capture-slot: root.capture-slot;
-                    capture-error: root.capture-error;
-                    capture-text: root.capture-text;
-                    action(name, index, value) => {
-                        root.action(name, index, value);
-                    }
-                }
+                if root.page == Navigation.bindings.page: FunctionBindingsPage { }
                 if root.page == Navigation.receiver.page: DevicesPage {
                     discovery-status: root.discovery-status;
                     scanning: root.scanning;

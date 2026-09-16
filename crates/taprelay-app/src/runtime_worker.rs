@@ -1,6 +1,6 @@
 //! UI facade. The engine and native adapters are constructed and destroyed on
 //! one worker; UI work never holds a lock needed by input delivery.
-use crate::{config::Config, feedback::TestStatus, runtime::Runtime};
+use crate::{action::BindingCommand, config::Config, feedback::TestStatus, runtime::Runtime};
 use anyhow::{Context, Result};
 use std::{
     ops::{Deref, DerefMut},
@@ -26,6 +26,7 @@ pub struct View {
     pub capture_preview: String,
     pub capture_cancelled: bool,
     pub capture_invalid: bool,
+    pub recording: bool,
     pub test: TestStatus,
     pub bindings_revision: u64,
     waiting: bool,
@@ -42,6 +43,7 @@ impl View {
             capture_preview: runtime.capture_preview.clone(),
             capture_cancelled: runtime.capture_cancelled,
             capture_invalid: std::mem::take(&mut runtime.capture_invalid),
+            recording: runtime.recording(),
             test: runtime.test.clone(),
             bindings_revision: runtime.bindings_revision,
             waiting: runtime.capture_waiting(),
@@ -189,15 +191,8 @@ impl RuntimeHandle {
             self.view.error = Some(e.to_string());
         }
     }
-    pub fn finish_recording(&mut self) {
-        self.view.learned = None;
-        self.view.capture_invalid = false;
-        if let Err(e) = self.update(|r| {
-            r.finish_recording();
-            Ok(())
-        }) {
-            self.view.error = Some(e.to_string());
-        }
+    pub fn apply_binding_command(&mut self, command: BindingCommand) -> Result<()> {
+        self.update(move |runtime| runtime.apply_binding_command(command))
     }
     pub fn shutdown(&mut self) {
         self.commands.take();
@@ -229,14 +224,8 @@ impl RuntimeHandle {
     pub fn refresh(&mut self) -> Result<()> {
         self.update(move |r| r.refresh())
     }
-    pub fn record(&mut self) -> Result<()> {
-        self.update(move |r| r.record())
-    }
     pub fn send(&mut self) -> Result<()> {
         self.update(move |r| r.send())
-    }
-    pub fn set_function_enabled(&mut self, id: FunctionId, enabled: bool) -> Result<()> {
-        self.update(move |r| r.set_function_enabled(id, enabled))
     }
     pub fn replace_shortcut(
         &mut self,
@@ -245,9 +234,6 @@ impl RuntimeHandle {
         shortcut: Shortcut,
     ) -> Result<()> {
         self.update(move |r| r.replace_shortcut(id, slot, shortcut))
-    }
-    pub fn remove_shortcut(&mut self, id: FunctionId, slot: usize) -> Result<()> {
-        self.update(move |r| r.remove_shortcut(id, slot))
     }
 }
 impl Drop for RuntimeHandle {

@@ -1,4 +1,10 @@
 export struct ShortcutItem { text: string, keys: [string], slot: int, enabled: bool }
+export struct BindingCaptureState {
+    function-id: string,
+    slot: int,
+    text: string,
+    error: string
+}
 // One way a function reacts to its shortcut: a tapped "Previous" and a held
 // "Rewind" are the same binding, so the row lists both gestures.
 export struct GestureAction { gesture: string, action: string }
@@ -8,6 +14,17 @@ export struct FunctionBindingRow {
     gestures: [GestureAction],
     enabled: bool,
     shortcuts: [ShortcutItem]
+}
+// Single host/UI seam for binding presentation. Rust owns the source of truth;
+// Slint renders the snapshot and reports typed user intent through callbacks.
+export global BindingUi {
+    in property <[FunctionBindingRow]> rows;
+    in property <BindingCaptureState> capture;
+    callback begin-capture(string, int);
+    callback cancel-capture();
+    callback delete-shortcut(string, int);
+    callback set-function-enabled(string, bool);
+    callback key-input(string, bool);
 }
 export struct BindingRow { text: string, keys: [string], enabled: bool }
 export struct DeviceRow { id: string, name: string, detail: string, selected: bool, action: string, action-label: string, enabled: bool, paired: bool, device-kind: string, status: string }

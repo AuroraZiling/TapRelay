@@ -2,7 +2,7 @@ import { Button } from "../vendor/components/button.slint";
 import { Tokens } from "../vendor/theme/tokens.slint";
 import { ScrollArea } from "../vendor/components/scroll-area.slint";
 import { I18n } from "@i18n";
-import { DeviceRow, FunctionBindingRow, RelayStatus } from "../types.slint";
+import { BindingUi, DeviceRow, RelayStatus } from "../types.slint";
 import { Heading, Label, ErrorBanner } from "../components/primitives.slint";
 import { RelayStatusCard, AdminAlert } from "../components/runtime-panels.slint";
 import { FunctionBindingsPage } from "bindings.slint";
@@ -11,11 +11,6 @@ import { BluetoothStatus } from "../components/bluetooth-status.slint";
 import { ReceiverActions } from "../components/receiver-actions.slint";
 
 export component WizardPage inherits VerticalLayout {
-    in property <[FunctionBindingRow]> function-bindings;
-    in property <string> capture-function;
-    in property <int> capture-slot: -1;
-    in property <string> capture-error;
-    in property <string> capture-text;
     in property <bool> elevated;
     in property <string> problem;
     in property <RelayStatus> relay-status;
@@ -71,16 +66,7 @@ export component WizardPage inherits VerticalLayout {
             root.action(name,index,value);
         }
     }
-    if root.step == 0: FunctionBindingsPage {
-        rows: root.function-bindings;
-        capture-function: root.capture-function;
-        capture-slot: root.capture-slot;
-        capture-error: root.capture-error;
-        capture-text: root.capture-text;
-        action(name, index, value) => {
-            root.action(name, index, value);
-        }
-    }
+    if root.step == 0: FunctionBindingsPage { }
     if root.step == 1: DevicesPage {
         discovery-status: root.discovery-status;
         scanning: root.scanning;
@@ -119,14 +105,14 @@ export component WizardPage inherits VerticalLayout {
         Button {
             text: I18n.text.wizard-back;
             variant: outline;
-            disabled: root.step == 0 || root.capture-function != "";
+            disabled: root.step == 0 || BindingUi.capture.function-id != "";
             clicked=> {
                 root.action("wizard-back",0,"");
             }
         }
         Button {
             text: root.step == 2 ? I18n.text.wizard-finish : I18n.text.wizard-next;
-            disabled: root.capture-function != "" || (root.step == 1 && !root.receiver-next-allowed);
+            disabled: BindingUi.capture.function-id != "" || (root.step == 1 && !root.receiver-next-allowed);
             clicked=> {
                 root.action(root.step == 2 ? "wizard-finish" : "wizard-next",0,"");
             }

@@ -48,6 +48,15 @@ export component Button inherits Rectangle {
     // Foreground for custom content such as icons; follows variant and hover state.
     out property <color> content-foreground: interactive-hover ? fg-hover : fg-rest;
 
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: !root.disabled;
+    accessible-action-default => {
+        if !root.disabled {
+            root.clicked();
+        }
+    }
+
     // True while focus arrived from a pointer press — suppresses the ring so it
     // is keyboard-only (focus-visible emulation). Set on pointer down, cleared
     // on any key interaction.

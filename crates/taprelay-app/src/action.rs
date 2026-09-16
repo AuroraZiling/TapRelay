@@ -14,18 +14,25 @@ actions! {
     Show => "show", Close => "close", Quit => "quit", Navigate => "navigate",
     Listen => "listen", Test => "test", Refresh => "refresh", Retry => "retry",
     Resume => "resume", TrayReset => "tray-reset", BluetoothSettings => "bluetooth-settings",
-    DataFolder => "data-folder", LogsFolder => "logs-folder", Capture => "capture",
-    CancelCapture => "cancel-capture", Delete => "delete", Device => "device",
-    ToggleFunction => "toggle-function",
+    DataFolder => "data-folder", LogsFolder => "logs-folder", Device => "device",
     PairDevice => "pair-device", DisconnectDevice => "disconnect-device",
     Wizard => "wizard", WizardNext => "wizard-next", WizardBack => "wizard-back",
     WizardFinish => "wizard-finish", Theme => "theme", Language => "language",
     Setting => "setting", Elevate => "elevate",
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum CaptureTarget {
-    Function {
+pub struct CaptureTarget {
+    pub id: taprelay_core::function::FunctionId,
+    pub slot: usize,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum BindingCommand {
+    BeginCapture(CaptureTarget),
+    CancelCapture,
+    DeleteShortcut(CaptureTarget),
+    SetFunctionEnabled {
         id: taprelay_core::function::FunctionId,
-        slot: usize,
+        enabled: bool,
     },
 }

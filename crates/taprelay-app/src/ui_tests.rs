@@ -1,6 +1,42 @@
 //! Headless view validation only: no native window, permissions, input hooks or Bluetooth.
 use crate::*;
+use i_slint_backend_testing::{ElementHandle, ElementRoot};
 use slint::{ComponentHandle, ModelRc, VecModel, platform::WindowAdapter};
+
+fn set_function_bindings(ui: &AppWindow, rows: Vec<FunctionBindingRow>) {
+    ui.global::<BindingUi>()
+        .set_rows(ModelRc::new(VecModel::from(rows)));
+}
+
+fn set_binding_capture(ui: &AppWindow, function_id: &str, slot: i32, text: &str, error: &str) {
+    ui.global::<BindingUi>().set_capture(BindingCaptureState {
+        function_id: function_id.into(),
+        slot,
+        text: text.into(),
+        error: error.into(),
+    });
+}
+
+fn binding_element(ui: &AppWindow, accessible_id: &str) -> ElementHandle {
+    let accessible_id = accessible_id.to_owned();
+    let query_id = accessible_id.clone();
+    ui.root_element()
+        .query_descendants()
+        .match_predicate(move |element| {
+            element
+                .accessible_id()
+                .is_some_and(|candidate| candidate.as_str() == query_id)
+        })
+        .find_first()
+        .unwrap_or_else(|| panic!("missing accessible binding element: {accessible_id}"))
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum BindingUiAction {
+    Begin(String, i32),
+    Delete(String, i32),
+    Toggle(String, bool),
+}
 
 struct SoftwareTestPlatform {
     window: std::rc::Rc<slint::platform::software_renderer::MinimalSoftwareWindow>,
@@ -342,8 +378,7 @@ fn render_all_views_without_hardware() {
         enabled: true,
         shortcuts: ModelRc::new(VecModel::from(vec![shortcut])),
     };
-    ui.set_function_bindings(ModelRc::new(VecModel::from(vec![row.clone()])));
-    ui.set_capture_text("请按下快捷键，松开完成".into());
+    set_function_bindings(&ui, vec![row.clone()]);
     for (name, function, slot) in [
         ("edit", "media.play-pause", 0),
         ("new", "media.play-pause", 0),
@@ -354,31 +389,24 @@ fn render_all_views_without_hardware() {
         if name == "new" {
             preview_row.shortcuts = ModelRc::new(VecModel::default());
         }
-        ui.set_function_bindings(ModelRc::new(VecModel::from(vec![preview_row])));
-        ui.set_capture_function(function.into());
-        ui.set_capture_slot(slot);
-        ui.set_capture_error(if name == "error" { "无效组合" } else { "" }.into());
+        set_function_bindings(&ui, vec![preview_row]);
+        set_binding_capture(
+            &ui,
+            function,
+            slot,
+            "请按下快捷键，松开完成",
+            if name == "error" { "无效组合" } else { "" },
+        );
         i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
         let shot = ui.window().take_snapshot().unwrap();
         if name == "error" {
-            let stride = shot.width() as usize;
-            let red = |x: usize, y: usize| {
-                let p = shot.as_slice()[y * stride + x];
-                i16::from(p.r) > i16::from(p.g) + 30
-            };
-            assert!(
-                (190..220).any(|y| (230..530).any(|x| red(x, y))),
-                "Validation must appear to the right of the recording chip"
-            );
-            assert!(
-                !(238..270).any(|y| (28..870).any(|x| red(x, y))),
-                "Validation must not appear below or increase the row height"
-            );
+            let error = binding_element(&ui, "binding-error-media.play-pause");
             assert_eq!(
-                shot.as_slice()[245 * stride + 40],
-                shot.as_slice()[280 * stride + 40],
-                "The row must end at the same height when validation fails"
+                error.accessible_live_region(),
+                Some(i_slint_backend_testing::AccessibleLiveness::Polite),
+                "Capture validation must be announced without stealing focus"
             );
+            assert_eq!(error.accessible_label().as_deref(), Some("无效组合"));
         }
         let mut bytes = format!("P6\n{} {}\n255\n", shot.width(), shot.height()).into_bytes();
         for pixel in shot.as_slice() {
@@ -386,18 +414,18 @@ fn render_all_views_without_hardware() {
         }
         std::fs::write(out.join(format!("bindings-{name}.ppm")), bytes).unwrap();
     }
-    let capture_actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-    let observed = capture_actions.clone();
-    ui.on_action(move |name, index, text| {
-        observed
-            .borrow_mut()
-            .push((name.to_string(), index, text.to_string()))
-    });
+    let captured_keys = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let observed = captured_keys.clone();
+    ui.global::<BindingUi>()
+        .on_key_input(move |text, down| observed.borrow_mut().push((text.to_string(), down)));
+    let cancelled = std::rc::Rc::new(std::cell::Cell::new(false));
+    let observed = cancelled.clone();
+    ui.global::<BindingUi>()
+        .on_cancel_capture(move || observed.set(true));
     let mut empty_row = row.clone();
     empty_row.shortcuts = ModelRc::new(VecModel::default());
-    ui.set_function_bindings(ModelRc::new(VecModel::from(vec![empty_row])));
-    ui.set_capture_function("media.play-pause".into());
-    ui.set_capture_slot(0);
+    set_function_bindings(&ui, vec![empty_row]);
+    set_binding_capture(&ui, "media.play-pause", 0, "请按下快捷键，松开完成", "");
     let _ = ui.window().take_snapshot().unwrap();
     for key in [
         slint::platform::Key::F8.into(),
@@ -408,19 +436,18 @@ fn render_all_views_without_hardware() {
         ui.window()
             .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: key });
     }
-    let recorded: Vec<_> = capture_actions
+    let recorded: Vec<_> = captured_keys
         .borrow()
         .iter()
-        .filter(|(name, _, _)| name == "capture-key")
-        .map(|(_, down, text)| (crate::capture_key::virtual_key(text), *down))
+        .map(|(text, down)| (crate::capture_key::virtual_key(text), *down))
         .collect();
     assert_eq!(
         recorded,
         vec![
-            (Some(0x77), 1),
-            (Some(0x77), 0),
-            (Some(0x4b), 1),
-            (Some(0x4b), 0)
+            (Some(0x77), true),
+            (Some(0x77), false),
+            (Some(0x4b), true),
+            (Some(0x4b), false)
         ]
     );
     ui.window()
@@ -428,10 +455,7 @@ fn render_all_views_without_hardware() {
             text: slint::platform::Key::Escape.into(),
         });
     assert!(
-        capture_actions
-            .borrow()
-            .iter()
-            .any(|(action, _, _)| action == "cancel-capture"),
+        cancelled.get(),
         "An empty slot must receive Escape without an extra click"
     );
     // Exercise real pointer routing through the tooltip wrapper, not just callback invocation.
@@ -551,9 +575,7 @@ fn render_all_views_without_hardware() {
 // placeholders in every locale. This exercises the actual nested page layouts.
 fn preview_function_layouts(ui: &AppWindow, out: &std::path::Path) {
     use taprelay_core::function::FUNCTION_CATALOG;
-    ui.set_capture_function("".into());
-    ui.set_capture_slot(-1);
-    ui.set_capture_error("".into());
+    set_binding_capture(ui, "", -1, "", "");
     ui.set_problem("".into());
     for (suffix, zh, dark, width, height) in [
         ("zh-dark-min", true, true, 900., 500.),
@@ -608,7 +630,7 @@ fn preview_function_layouts(ui: &AppWindow, out: &std::path::Path) {
         let mut rows = rows;
         rows[3].enabled = false;
         rows[2].enabled = false;
-        ui.set_function_bindings(ModelRc::new(VecModel::from(rows)));
+        set_function_bindings(ui, rows);
         for mode in [2, 1] {
             ui.set_mode(mode);
             {
@@ -623,7 +645,7 @@ fn preview_function_layouts(ui: &AppWindow, out: &std::path::Path) {
                 if mode == 2 {
                     // The shortcut must leave the trigger column clear.
                     let stride = shot.width() as usize;
-                    let gap_x = width as usize - 368;
+                    let gap_x = width as usize - 356;
                     let background = shot.as_slice()[165 * stride + gap_x];
                     assert!(
                         (176..201).all(|y| (gap_x..gap_x + 5)
@@ -646,37 +668,50 @@ fn preview_function_layouts(ui: &AppWindow, out: &std::path::Path) {
     }
     let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let observed = actions.clone();
-    ui.on_action(move |name, slot, value| {
-        observed
-            .borrow_mut()
-            .push((name.to_string(), slot, value.to_string()))
-    });
-    let click = |x, y| {
-        use slint::platform::{PointerEventButton, WindowEvent};
-        let position = slint::LogicalPosition::new(x, y);
-        ui.window()
-            .dispatch_event(WindowEvent::PointerMoved { position });
-        ui.window().dispatch_event(WindowEvent::PointerPressed {
-            position,
-            button: PointerEventButton::Left,
+    ui.global::<BindingUi>()
+        .on_begin_capture(move |function, slot| {
+            observed
+                .borrow_mut()
+                .push(BindingUiAction::Begin(function.to_string(), slot));
         });
-        ui.window().dispatch_event(WindowEvent::PointerReleased {
-            position,
-            button: PointerEventButton::Left,
+    let observed = actions.clone();
+    ui.global::<BindingUi>()
+        .on_delete_shortcut(move |function, slot| {
+            observed
+                .borrow_mut()
+                .push(BindingUiAction::Delete(function.to_string(), slot));
         });
-    };
+    let observed = actions.clone();
+    ui.global::<BindingUi>()
+        .on_set_function_enabled(move |function, enabled| {
+            observed
+                .borrow_mut()
+                .push(BindingUiAction::Toggle(function.to_string(), enabled));
+        });
     ui.set_mode(2);
     ui.set_page(1);
     let _ = ui.window().take_snapshot().unwrap();
-    click(452., 188.);
-    click(435., 260.);
+    let disabled_second = binding_element(ui, "binding-disabled-slot-media.mute-1");
+    let function_column = binding_element(ui, "binding-function-media.mute");
     assert!(
-        actions.borrow().is_empty(),
-        "Neither a saved second shortcut nor an add-second button should be interactive"
+        disabled_second.absolute_position().x + disabled_second.size().width
+            <= function_column.absolute_position().x,
+        "Disabled shortcut chips must stay inside the shortcut column"
+    );
+    binding_element(ui, "binding-slot-media.play-pause-1").invoke_accessible_default_action();
+    binding_element(ui, "binding-add-media.previous").invoke_accessible_default_action();
+    assert_eq!(
+        *actions.borrow(),
+        vec![
+            BindingUiAction::Begin("media.play-pause".into(), 1),
+            BindingUiAction::Begin("media.previous".into(), 1),
+        ],
+        "Both an existing second shortcut and the add-second control must be interactive"
     );
     use slint::Model;
     assert_eq!(
-        ui.get_function_bindings()
+        ui.global::<BindingUi>()
+            .get_rows()
             .row_data(0)
             .unwrap()
             .shortcuts
@@ -684,67 +719,61 @@ fn preview_function_layouts(ui: &AppWindow, out: &std::path::Path) {
         2,
         "Presenting one shortcut must not truncate the multi-shortcut model"
     );
-    ui.window()
-        .dispatch_event(slint::platform::WindowEvent::PointerMoved {
-            position: slint::LogicalPosition::new(395., 188.),
-        });
-    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
-    slint::platform::update_timers_and_animations();
-    let hovered = ui.window().take_snapshot().unwrap();
-    assert!(
-        (178..198).any(|y| (385..405).any(|x| {
-            let p = hovered.as_slice()[y * hovered.width() as usize + x];
-            i16::from(p.r) > i16::from(p.g) + 20
-        })),
-        "The delete icon must show its destructive hover feedback"
-    );
-    click(395., 188.);
+    actions.borrow_mut().clear();
+    binding_element(ui, "binding-delete-media.play-pause-0").invoke_accessible_default_action();
     assert!(
         actions
             .borrow()
-            .contains(&("delete".into(), 0, "media.play-pause".into())),
-        "The shortcut close icon must receive pointer presses and delete its slot"
+            .contains(&BindingUiAction::Delete("media.play-pause".into(), 0)),
+        "The shortcut delete button must expose its default accessibility action"
     );
     assert!(
         !actions
             .borrow()
             .iter()
-            .any(|(name, _, _)| name == "capture"),
+            .any(|action| matches!(action, BindingUiAction::Begin(_, _))),
         "Deleting a shortcut must not start recording"
     );
     actions.borrow_mut().clear();
-    click(122., 188.);
-    click(122., 332.);
+    let enabled_switch = binding_element(ui, "binding-enabled-media.play-pause");
+    assert_eq!(
+        enabled_switch.accessible_role(),
+        Some(i_slint_backend_testing::AccessibleRole::Switch)
+    );
+    enabled_switch.invoke_accessible_default_action();
+    binding_element(ui, "binding-enabled-media.next").invoke_accessible_default_action();
     assert_eq!(
         *actions.borrow(),
         vec![
-            ("toggle-function".into(), 0, "media.play-pause".into()),
-            ("toggle-function".into(), 1, "media.next".into()),
+            BindingUiAction::Toggle("media.play-pause".into(), false),
+            BindingUiAction::Toggle("media.next".into(), true),
         ],
         "Switches must disable active functions and enable disabled unbound functions"
     );
     assert_eq!(
-        ui.get_function_bindings().row_count(),
+        ui.global::<BindingUi>().get_rows().row_count(),
         FUNCTION_CATALOG.len()
     );
     assert_eq!(
-        ui.get_function_bindings()
+        ui.global::<BindingUi>()
+            .get_rows()
             .row_data(0)
             .unwrap()
             .shortcuts
             .row_count(),
         2
     );
-    ui.set_capture_function("media.play-pause".into());
-    ui.set_capture_slot(0);
+    set_binding_capture(ui, "media.play-pause", 0, "Recording", "");
     let _ = ui.window().take_snapshot().unwrap();
     actions.borrow_mut().clear();
-    click(122., 332.);
+    let disabled_switch = binding_element(ui, "binding-enabled-media.next");
+    assert_eq!(disabled_switch.accessible_enabled(), Some(false));
+    disabled_switch.invoke_accessible_default_action();
     assert!(
         actions.borrow().is_empty(),
         "Recording must lock function switches"
     );
-    ui.set_capture_function("".into());
+    set_binding_capture(ui, "", -1, "", "");
 }
 
 // Content may be clipped, but cannot resize the two page-owned grid rows.

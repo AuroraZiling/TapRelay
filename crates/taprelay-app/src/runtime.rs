@@ -3,6 +3,7 @@
 //! module only applies its parsed outputs to transport and UI state.
 
 use crate::{
+    action::BindingCommand,
     config::Config,
     feedback::TestStatus,
     platform::{self, InputSource, Transport},
@@ -302,7 +303,7 @@ impl Runtime {
         self.state.ready = false;
     }
 
-    pub fn record(&mut self) -> Result<()> {
+    fn record(&mut self) -> Result<()> {
         self.ensure_input()?;
         self.capture = CapturePhase::WaitingForRelease;
         self.configure_input();
@@ -314,6 +315,41 @@ impl Runtime {
         self.capture_state = InputState::default();
         self.window_keys.clear();
         Ok(())
+    }
+
+    /// Apply one binding edit as a single worker command. This keeps input
+    /// suppression, capture transitions and configuration mutation ordered on
+    /// the runtime thread instead of exposing that sequence to the UI.
+    pub fn apply_binding_command(&mut self, command: BindingCommand) -> Result<()> {
+        self.consume_ui_input();
+        match command {
+            BindingCommand::BeginCapture(target) => {
+                let config = self
+                    .config
+                    .functions
+                    .get(&target.id)
+                    .context("Function no longer exists")?;
+                anyhow::ensure!(config.enabled, "Function is disabled");
+                anyhow::ensure!(
+                    target.slot <= config.shortcuts.len() && target.slot < 2,
+                    "Shortcut slot unavailable"
+                );
+                self.finish_recording();
+                self.record()
+            }
+            BindingCommand::CancelCapture => {
+                self.finish_recording();
+                Ok(())
+            }
+            BindingCommand::DeleteShortcut(target) => {
+                self.finish_recording();
+                self.remove_shortcut(target.id, target.slot)
+            }
+            BindingCommand::SetFunctionEnabled { id, enabled } => {
+                self.finish_recording();
+                self.set_function_enabled(id, enabled)
+            }
+        }
     }
 
     pub fn finish_recording(&mut self) {
@@ -916,6 +952,55 @@ mod tests {
         runtime.set_function_enabled(id, true).unwrap();
         assert!(runtime.config.functions[&id].enabled);
         assert_eq!(runtime.config.functions[&id].shortcuts, shortcuts);
+    }
+
+    #[test]
+    fn binding_command_keeps_capture_and_config_changes_atomic() {
+        let id = FunctionId::MediaPlayPause;
+        let shortcut = Shortcut::mouse(ModifierSet::empty(), MouseButton::Side1);
+        let mut config = Config::default();
+        config.functions.insert(
+            id,
+            FunctionConfig {
+                enabled: true,
+                shortcuts: vec![shortcut.clone()],
+            },
+        );
+        let mut runtime = Runtime::new(config);
+        runtime.input = Some(Box::new(FakeInput));
+
+        runtime
+            .apply_binding_command(BindingCommand::BeginCapture(crate::action::CaptureTarget {
+                id,
+                slot: 1,
+            }))
+            .unwrap();
+        assert!(runtime.recording());
+
+        let error = runtime
+            .apply_binding_command(BindingCommand::BeginCapture(crate::action::CaptureTarget {
+                id,
+                slot: 2,
+            }))
+            .unwrap_err();
+        assert_eq!(error.to_string(), "Shortcut slot unavailable");
+        assert!(
+            runtime.recording(),
+            "validation must happen before replacing the active capture"
+        );
+
+        runtime
+            .apply_binding_command(BindingCommand::DeleteShortcut(
+                crate::action::CaptureTarget { id, slot: 0 },
+            ))
+            .unwrap();
+        assert!(!runtime.recording());
+        assert!(runtime.config.functions[&id].shortcuts.is_empty());
+
+        runtime
+            .apply_binding_command(BindingCommand::SetFunctionEnabled { id, enabled: false })
+            .unwrap();
+        assert!(!runtime.config.functions[&id].enabled);
     }
 
     #[test]

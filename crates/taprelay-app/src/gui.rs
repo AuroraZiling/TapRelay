@@ -1,7 +1,7 @@
 use crate::{
-    AppWindow, BindingRow, CheckRow, FunctionBindingRow, GestureAction, ShortcutItem, Theme,
-    ThemeMode,
-    action::{Action, CaptureTarget},
+    AppWindow, BindingCaptureState, BindingRow, BindingUi, CheckRow, FunctionBindingRow,
+    GestureAction, ShortcutItem, Theme, ThemeMode,
+    action::{Action, BindingCommand, CaptureTarget},
     administrator,
     config::{self, Config, Device, Language, SaveQueue, Theme as ThemeSetting},
     feedback::{TestStatus, WaitWarning},
@@ -22,6 +22,29 @@ use taprelay_core::{
     function::{self, FunctionId},
     state::{Target, TransportActivity},
 };
+
+fn dispatch_controller(
+    controller: &Rc<RefCell<Controller>>,
+    window: &slint::Weak<AppWindow>,
+    command: impl FnOnce(&mut Controller, &AppWindow) -> Result<()>,
+) {
+    let Some(ui) = window.upgrade() else { return };
+    let Ok(mut controller) = controller.try_borrow_mut() else {
+        tracing::error!("Ignored re-entrant UI command");
+        return;
+    };
+    if let Err(error) = command(&mut controller, &ui) {
+        controller.error(&format!("{error:#}"));
+        controller.sync(&ui);
+    }
+}
+
+fn capture_target(function_id: &str, slot: i32) -> Result<CaptureTarget> {
+    Ok(CaptureTarget {
+        id: FunctionId::from_stable_id(function_id).context("Unknown function")?,
+        slot: usize::try_from(slot).context("Invalid shortcut slot")?,
+    })
+}
 
 pub fn run() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
@@ -117,36 +140,78 @@ pub fn run() -> Result<()> {
         }
     });
     let controller = Rc::new(RefCell::new(controller));
-    let keys = window_keys.clone();
     let action_controller = controller.clone();
     let action_window = ui.as_weak();
-    ui.on_action(move |name, index, value| {
-        if name == "capture-key" {
-            if !desktop::ui_input_is_injected()
-                && let Some(key) = crate::capture_key::virtual_key(&value)
-            {
-                keys.borrow_mut().push(taprelay_core::input::InputEvent {
-                    code: taprelay_core::input::InputCode::Key(key),
-                    down: index != 0,
-                    captured: Instant::now(),
-                });
-            }
-            return;
-        }
-        match Action::try_from(name.as_str()) {
+    ui.on_action(
+        move |name, index, value| match Action::try_from(name.as_str()) {
             Ok(action) => {
-                let Some(ui) = action_window.upgrade() else {
-                    return;
-                };
-                // UI commands take effect in their input dispatch, before the next
-                // raw-input drain can publish a recording preview.
-                let mut controller = action_controller.borrow_mut();
-                if let Err(e) = controller.action(&ui, action, index, &value) {
-                    controller.error(&format!("{e:#}"));
-                    controller.sync(&ui);
-                }
+                dispatch_controller(&action_controller, &action_window, |controller, ui| {
+                    controller.action(ui, action, index, &value)
+                })
             }
             Err(e) => tracing::error!("{e}"),
+        },
+    );
+
+    let binding_ui = ui.global::<BindingUi>();
+    let binding_controller = controller.clone();
+    let binding_window = ui.as_weak();
+    binding_ui.on_begin_capture(move |function_id, slot| {
+        dispatch_controller(&binding_controller, &binding_window, |controller, ui| {
+            controller.binding_action(
+                ui,
+                BindingCommand::BeginCapture(capture_target(&function_id, slot)?),
+            )
+        });
+    });
+    let binding_controller = controller.clone();
+    let binding_window = ui.as_weak();
+    binding_ui.on_cancel_capture(move || {
+        dispatch_controller(&binding_controller, &binding_window, |controller, ui| {
+            controller.binding_action(ui, BindingCommand::CancelCapture)
+        });
+    });
+    let binding_controller = controller.clone();
+    let binding_window = ui.as_weak();
+    binding_ui.on_delete_shortcut(move |function_id, slot| {
+        dispatch_controller(&binding_controller, &binding_window, |controller, ui| {
+            controller.binding_action(
+                ui,
+                BindingCommand::DeleteShortcut(capture_target(&function_id, slot)?),
+            )
+        });
+    });
+    let binding_controller = controller.clone();
+    let binding_window = ui.as_weak();
+    binding_ui.on_set_function_enabled(move |function_id, enabled| {
+        dispatch_controller(&binding_controller, &binding_window, |controller, ui| {
+            let id = FunctionId::from_stable_id(&function_id).context("Unknown function")?;
+            controller.binding_action(ui, BindingCommand::SetFunctionEnabled { id, enabled })
+        });
+    });
+    let key_controller = controller.clone();
+    let keys = window_keys.clone();
+    binding_ui.on_key_input(move |text, down| {
+        if desktop::ui_input_is_injected() {
+            return;
+        }
+        let Ok(controller) = key_controller.try_borrow() else {
+            tracing::error!("Ignored re-entrant binding key input");
+            return;
+        };
+        if !controller.recording() {
+            tracing::warn!("Ignored binding key input while capture was inactive");
+            return;
+        }
+        drop(controller);
+        if let Some(key) = crate::capture_key::virtual_key(&text) {
+            keys.borrow_mut().push(taprelay_core::input::InputEvent {
+                code: taprelay_core::input::InputCode::Key(key),
+                down,
+                captured: Instant::now(),
+            });
+        } else {
+            tracing::debug!(key_text = %text, "Ignored unsupported binding key");
         }
     });
     let weak = ui.as_weak();
@@ -436,10 +501,68 @@ impl Controller {
     fn recording(&self) -> bool {
         self.capture.is_some()
     }
-    fn cancel_capture(&mut self) {
-        self.runtime.finish_recording();
-        self.capture = None;
-        self.capture_error.clear();
+    fn apply_binding_command(&mut self, command: BindingCommand) -> Result<()> {
+        if command == BindingCommand::CancelCapture
+            && self.capture.is_none()
+            && !self.runtime.recording
+        {
+            self.capture_error.clear();
+            return Ok(());
+        }
+
+        let result = self.runtime.apply_binding_command(command);
+        if result.is_ok() {
+            match command {
+                BindingCommand::BeginCapture(target) => {
+                    self.capture = Some(target);
+                    self.capture_error.clear();
+                    tracing::debug!(
+                        function_id = target.id.stable_id(),
+                        slot = target.slot,
+                        "Binding capture started"
+                    );
+                }
+                BindingCommand::CancelCapture => {
+                    self.capture = None;
+                    self.capture_error.clear();
+                    tracing::debug!("Binding capture cancelled");
+                }
+                BindingCommand::DeleteShortcut(target) => {
+                    self.capture = None;
+                    self.capture_error.clear();
+                    self.saves.changed();
+                    tracing::info!(
+                        function_id = target.id.stable_id(),
+                        slot = target.slot,
+                        "Binding shortcut deleted"
+                    );
+                }
+                BindingCommand::SetFunctionEnabled { id, enabled } => {
+                    self.capture = None;
+                    self.capture_error.clear();
+                    self.saves.changed();
+                    tracing::info!(
+                        function_id = id.stable_id(),
+                        enabled,
+                        "Binding function state changed"
+                    );
+                }
+            }
+        } else if !self.runtime.recording {
+            // The worker may have completed a capture transition before a later
+            // validation step failed. Mirror the confirmed worker state.
+            self.capture = None;
+            self.capture_error.clear();
+        }
+        result
+    }
+    fn cancel_capture(&mut self) -> Result<()> {
+        self.apply_binding_command(BindingCommand::CancelCapture)
+    }
+    fn binding_action(&mut self, ui: &AppWindow, command: BindingCommand) -> Result<()> {
+        self.apply_binding_command(command)?;
+        self.sync(ui);
+        Ok(())
     }
     fn action(&mut self, ui: &AppWindow, name: Action, index: i32, value: &str) -> Result<()> {
         if !matches!(name, Action::Show | Action::Resume | Action::TrayReset) {
@@ -467,7 +590,7 @@ impl Controller {
             }
             Action::Close => {
                 if self.runtime.config.options.close_to_tray && self.fatal.is_none() {
-                    self.cancel_capture();
+                    self.cancel_capture()?;
                     self.save_geometry(ui);
                     self.flush(true);
                     if !self.runtime.config.options.close_hint_seen {
@@ -483,7 +606,7 @@ impl Controller {
                 }
             }
             Action::Quit => {
-                self.cancel_capture();
+                self.cancel_capture()?;
                 self.runtime.shutdown();
                 self.save_geometry(ui);
                 self.flush(true);
@@ -492,7 +615,7 @@ impl Controller {
             }
             Action::Navigate => {
                 if self.recording() {
-                    self.cancel_capture();
+                    self.cancel_capture()?;
                 }
                 // Pages 0..=3 as declared by ui/navigation.slint.
                 ui.set_page(index.clamp(0, 3));
@@ -514,7 +637,7 @@ impl Controller {
                 self.stage_since = Instant::now();
                 self.last_error.clear();
                 if name == Action::Resume && self.runtime.listening {
-                    self.cancel_capture();
+                    self.cancel_capture()?;
                     self.runtime.set_listening(false)?;
                     self.runtime.set_listening(true)?;
                 }
@@ -530,40 +653,6 @@ impl Controller {
             )?,
             Action::LogsFolder => {
                 desktop::open(&self.path.parent().unwrap().join("logs").to_string_lossy())?
-            }
-            Action::Capture => {
-                self.cancel_capture();
-                let id = FunctionId::from_stable_id(value).context("Unknown function")?;
-                let slot = usize::try_from(index).context("Invalid shortcut slot")?;
-                let config = self
-                    .runtime
-                    .config
-                    .functions
-                    .get(&id)
-                    .context("Function no longer exists")?;
-                anyhow::ensure!(config.enabled, "Function is disabled");
-                anyhow::ensure!(
-                    slot <= config.shortcuts.len() && slot < 2,
-                    "Shortcut slot unavailable"
-                );
-                self.runtime.record()?;
-                self.capture = Some(CaptureTarget::Function { id, slot });
-            }
-            Action::CancelCapture => self.cancel_capture(),
-            Action::Delete => {
-                self.cancel_capture();
-                let id = FunctionId::from_stable_id(value).context("Unknown function")?;
-                let slot = usize::try_from(index).context("Invalid shortcut slot")?;
-                self.runtime.remove_shortcut(id, slot)?;
-                self.saves.changed();
-            }
-            Action::ToggleFunction => {
-                let id = FunctionId::from_stable_id(value).context("Unknown function")?;
-                if self.recording() {
-                    self.cancel_capture();
-                }
-                self.runtime.set_function_enabled(id, index != 0)?;
-                self.saves.changed();
             }
             Action::Device | Action::PairDevice => {
                 if let Some(target) = self
@@ -583,7 +672,7 @@ impl Controller {
             }
             Action::DisconnectDevice => self.runtime.disconnect()?,
             Action::Wizard => {
-                self.cancel_capture();
+                self.cancel_capture()?;
                 ui.set_mode(1);
                 ui.set_wizard_page(0);
                 self.runtime.config.wizard.dismissed = false;
@@ -610,7 +699,7 @@ impl Controller {
                 self.saves.changed();
             }
             Action::WizardFinish => {
-                self.cancel_capture();
+                self.cancel_capture()?;
                 self.runtime.config.wizard.dismissed = true;
                 self.saves.changed();
                 ui.set_mode(2);
@@ -673,24 +762,48 @@ impl Controller {
         self.track_remembered_device();
         if self.recording() {
             if !desktop::foreground_is_ours() || self.runtime.capture_cancelled {
-                self.cancel_capture();
+                if let Err(error) = self.cancel_capture() {
+                    self.error(&format!("{error:#}"));
+                }
             } else if let Some(t) = self.runtime.learned.take() {
                 if !t.valid() {
                     self.capture_error = self.tr(keys::CAPTURE_INVALID).into();
-                } else if let Some(CaptureTarget::Function { id, slot }) = self.capture {
+                    tracing::debug!("Rejected invalid binding capture");
+                } else if let Some(CaptureTarget { id, slot }) = self.capture {
                     if let Some(conflict) = self.runtime.shortcut_conflict(id, slot, &t) {
                         self.capture_error = format!(
                             "{}: {}",
                             self.tr(keys::CAPTURE_DUPLICATE),
                             self.tr(function::function_definition(conflict).name_key)
                         );
+                        tracing::debug!(
+                            function_id = id.stable_id(),
+                            slot,
+                            conflict = conflict.stable_id(),
+                            "Rejected duplicate binding capture"
+                        );
                     } else {
                         match self.runtime.replace_shortcut(id, slot, t) {
                             Ok(()) => {
                                 self.saves.changed();
-                                self.cancel_capture();
+                                tracing::info!(
+                                    function_id = id.stable_id(),
+                                    slot,
+                                    "Binding shortcut saved"
+                                );
+                                if let Err(error) = self.cancel_capture() {
+                                    self.error(&format!("{error:#}"));
+                                }
                             }
-                            Err(error) => self.capture_error = error.to_string(),
+                            Err(error) => {
+                                tracing::warn!(
+                                    function_id = id.stable_id(),
+                                    slot,
+                                    error = %error,
+                                    "Failed to save binding shortcut"
+                                );
+                                self.capture_error = error.to_string();
+                            }
                         }
                     }
                 } else {
@@ -995,7 +1108,8 @@ impl Controller {
                 };
                 rows.push(row);
             }
-            ui.set_function_bindings(ModelRc::new(VecModel::from(rows)));
+            ui.global::<BindingUi>()
+                .set_rows(ModelRc::new(VecModel::from(rows)));
             ui.set_bindings(ModelRc::new(VecModel::from(summary)));
         }
         if self
@@ -1022,29 +1136,22 @@ impl Controller {
                     .collect::<Vec<_>>(),
             )));
         }
-        ui.set_capture_function(
-            self.capture
-                .map(|target| match target {
-                    CaptureTarget::Function { id, .. } => id.stable_id(),
-                })
+        ui.global::<BindingUi>().set_capture(BindingCaptureState {
+            function_id: self
+                .capture
+                .map(|target| target.id.stable_id())
                 .unwrap_or("")
                 .into(),
-        );
-        ui.set_capture_slot(
-            self.capture
-                .map(|target| match target {
-                    CaptureTarget::Function { slot, .. } => slot as i32,
-                })
-                .unwrap_or(-1),
-        );
-        ui.set_capture_text(if self.runtime.capture_waiting() {
-            self.tr(keys::CAPTURE_RELEASE).into()
-        } else if self.runtime.capture_preview.is_empty() {
-            self.tr(keys::CAPTURE_RECORDING).into()
-        } else {
-            self.runtime.capture_preview.clone().into()
+            slot: self.capture.map(|target| target.slot as i32).unwrap_or(-1),
+            text: if self.runtime.capture_waiting() {
+                self.tr(keys::CAPTURE_RELEASE).into()
+            } else if self.runtime.capture_preview.is_empty() {
+                self.tr(keys::CAPTURE_RECORDING).into()
+            } else {
+                self.runtime.capture_preview.clone().into()
+            },
+            error: self.capture_error.clone().into(),
         });
-        ui.set_capture_error(self.capture_error.clone().into());
         if self.previous_test != self.runtime.test {
             self.previous_test = self.runtime.test.clone();
             let message = match &self.runtime.test {

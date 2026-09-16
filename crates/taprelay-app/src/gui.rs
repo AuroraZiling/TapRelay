@@ -77,7 +77,7 @@ pub fn run() -> Result<()> {
         }
     };
     tracing::info!(
-        version = env!("CARGO_PKG_VERSION"),
+        version = crate::version::VERSION,
         elevated = status.elevated,
         account_admin = status.account_admin,
         "TapRelay started"
@@ -820,7 +820,7 @@ impl Controller {
         ui.set_notifications(o.notifications);
         ui.set_connection_wait_warning(o.connection_wait_warning);
         ui.set_elevated(self.status.elevated);
-        ui.set_app_version(env!("CARGO_PKG_VERSION").into());
+        ui.set_app_version(crate::version::VERSION.into());
         ui.set_data_directory(
             self.path
                 .parent()

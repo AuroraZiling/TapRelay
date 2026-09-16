@@ -11,6 +11,7 @@ mod platform;
 mod receiver_view;
 mod runtime;
 mod runtime_worker;
+mod version;
 #[cfg(windows)]
 mod window_rendering;
 slint::include_modules!();

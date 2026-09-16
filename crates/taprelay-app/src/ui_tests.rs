@@ -71,7 +71,7 @@ fn render_all_views_without_hardware() {
         },
     ])));
     ui.set_data_directory("D:\\Apps\\TapRelay".into());
-    ui.set_app_version("0.1.0".into());
+    ui.set_app_version(version::VERSION.into());
     let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/gui-previews");
     std::fs::create_dir_all(&out).unwrap();
     for (suffix, zh, dark, width, height) in [

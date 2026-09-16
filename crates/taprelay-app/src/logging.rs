@@ -92,7 +92,7 @@ fn panic_handler_in(dir: std::path::PathBuf) {
             "target": "taprelay::panic",
             "fields": {
                 "message": payload,
-                "version": env!("CARGO_PKG_VERSION"),
+                "version": crate::version::VERSION,
                 "thread": thread.name().unwrap_or("unnamed"),
                 "location": info.location().map(ToString::to_string).unwrap_or_else(|| "unknown".into())
             }

@@ -9,8 +9,8 @@ export component BluetoothStatus inherits Rectangle {
     width: content.preferred-width;
     horizontal-stretch: 0;
     border-radius: 8px;
-    border-width: 1px;
-    border-color: root.available ? #2eb470 : #e64f55;
+    border-width: 2px;
+    border-color: root.available ? Tokens.color-success : Tokens.color-destructive;
     content := HorizontalLayout {
         padding-left: 9px;
         padding-right: 9px;

@@ -28,7 +28,7 @@ export component EnvironmentPage inherits VerticalLayout {
                 if check.state != 1: Text {
                     width: 16px;
                     text: check.state == 2 ? "✓" : check.state == 3 ? "!" : "·";
-                    color: check.state == 3 ? #e64f55: check.state == 2 ? #2eb470: Tokens.color-muted-foreground;
+                    color: check.state == 3 ? Tokens.color-destructive : check.state == 2 ? Tokens.color-success : Tokens.color-muted-foreground;
                 }
                 Label {
                     text: check.title;
@@ -42,7 +42,7 @@ export component EnvironmentPage inherits VerticalLayout {
     }
     Label {
         text: root.problem;
-        color: #e64f55;
+        color: Tokens.color-destructive;
     }
     if root.problem != "": Caption {
         text: I18n.text.startup-troubleshooting;

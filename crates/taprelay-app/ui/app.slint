@@ -69,7 +69,7 @@ export component AppWindow inherits Window {
     in property <int> theme-choice;
     in property <int> language-choice;
     callback action(string, int, string);
-    property <color> signal: root.state-color == 0 ? #2eb470: root.state-color == 1 ? #8b919a: root.state-color == 2 ? #e8ae36: #e64f55;
+    property <color> signal: root.state-color == 0 ? Tokens.color-success : root.state-color == 1 ? Tokens.color-muted-foreground : root.state-color == 2 ? Tokens.color-warning : Tokens.color-destructive;
     property <RelayStatus> relay-status: {
         device-name: root.device-name,
         device-selected: root.device-selected,

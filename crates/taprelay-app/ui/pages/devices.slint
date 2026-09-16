@@ -48,7 +48,7 @@ component ReceiverCard inherits Panel {
                 IconDisplay {
                     icon: root.device.status == "ready" ? IconSet.CircleCheck : root.device.status == "busy" ? IconSet.Loader : root.device.status == "failed" ? IconSet.CircleAlert : root.device.status == "linked" ? IconSet.BluetoothConnected : root.device.status == "paired" ? IconSet.Link2 : IconSet.BluetoothOff;
                     size: 18px;
-                    stroke: root.device.status == "ready" ? #2eb470 : root.device.status == "linked" ? #3b82f6 : root.device.status == "failed" ? Tokens.color-destructive : Tokens.color-muted-foreground;
+                    stroke: root.device.status == "ready" ? Tokens.color-success : root.device.status == "linked" ? Tokens.color-info : root.device.status == "failed" ? Tokens.color-destructive : Tokens.color-muted-foreground;
                 }
             }
             }

@@ -19,7 +19,7 @@ export component Badge inherits Rectangle {
     border-radius: Tokens.radius-md;   // shadcn badge rounded-md
 
     background:
-        variant == BadgeVariant.success ? Tokens.color-affirm.with-alpha(0.2) :
+        variant == BadgeVariant.success ? Tokens.color-success.with-alpha(0.2) :
         variant == BadgeVariant.info ? Tokens.color-info.with-alpha(0.2) :
         variant == BadgeVariant.secondary ? Tokens.color-secondary :
         variant == BadgeVariant.outline ? transparent :
@@ -39,7 +39,7 @@ export component Badge inherits Rectangle {
             size == BadgeSize.sm ? 11px : Tokens.typography-label-size;
         font-weight: Tokens.typography-weight-medium;
         color:
-            variant == BadgeVariant.success ? Tokens.color-affirm :
+            variant == BadgeVariant.success ? Tokens.color-success :
             variant == BadgeVariant.info ? Tokens.color-info :
             variant == BadgeVariant.destructive ? Tokens.color-destructive :
             variant == BadgeVariant.outline ? Tokens.color-foreground :

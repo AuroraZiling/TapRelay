@@ -1,0 +1,33 @@
+import { Button, ButtonSize } from "../vendor/components/button.slint";
+import { IconDisplay, Icon } from "@lucide";
+
+export component IconButton inherits Button {
+    in property <Icon> icon;
+    in property <string> hint;
+    in property <color> icon-color: root.content-foreground;
+
+    size: icon-sm;
+    variant: ghost;
+    text: "";
+    horizontal-stretch: 0;
+    accessible-role: button;
+    accessible-label: root.hint;
+    accessible-enabled: !root.disabled;
+
+    Tooltip { text: @markdown("\{root.hint}"); }
+
+    icon-container := Rectangle {
+        width: parent.width;
+        height: parent.height;
+        IconDisplay {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            icon: root.icon;
+            size:
+                root.size == ButtonSize.icon-xs ? 14px :
+                root.size == ButtonSize.icon-lg ? 20px : 18px;
+            stroke: root.icon-color;
+            stroke-width: 1.75;
+        }
+    }
+}

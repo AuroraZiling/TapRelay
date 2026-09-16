@@ -3,6 +3,7 @@ import { BluetoothStatus } from "components/bluetooth-status.slint";
 import { I18n, TranslationText } from "@i18n";
 import { BindingRow, DeviceRow, CheckRow, FunctionBindingRow, GestureAction, ShortcutItem, RelayStatus } from "types.slint";
 import { Heading, ErrorBanner } from "components/primitives.slint";
+import { Navigation } from "navigation.slint";
 import { Sidebar } from "components/sidebar.slint";
 import { Toast } from "components/toast.slint";
 import { EnvironmentPage } from "pages/environment.slint";
@@ -127,27 +128,27 @@ export component AppWindow inherits Window {
                     spacing: 12px;
                     Heading {
                         horizontal-stretch: 0;
-                        text: [I18n.text.nav-overview,I18n.text.nav-bindings,I18n.text.nav-bindings,I18n.text.nav-receiver,I18n.text.nav-settings][root.page];
+                        text: Navigation.pages[root.page].label;
                     }
 
-                    if root.page == 3: BluetoothStatus {
+                    if root.page == Navigation.receiver.page: BluetoothStatus {
                         available: root.bluetooth-available;
                         busy: root.busy;
                         status-label: root.adapter-label;
                     }
-                    if root.page == 3: Rectangle { horizontal-stretch: 1; }
-                    if root.page == 3: ReceiverActions {
+                    if root.page == Navigation.receiver.page: Rectangle { horizontal-stretch: 1; }
+                    if root.page == Navigation.receiver.page: ReceiverActions {
                         action(name, index, value) => { root.action(name, index, value); }
                     }
 
                 }
-                if root.problem != "" && root.page != 2: ErrorBanner {
+                if root.problem != "" && root.page != Navigation.bindings.page: ErrorBanner {
                     problem: root.problem;
                     action(name,index,value)=> {
                         root.action(name,index,value);
                     }
                 }
-                if root.page == 0: OverviewPage {
+                if root.page == Navigation.overview.page: OverviewPage {
                     bindings: root.bindings;
                     binding-count: root.bindings.length;
                     elevated: root.elevated;
@@ -156,7 +157,7 @@ export component AppWindow inherits Window {
                         root.action(name, index, value);
                     }
                 }
-                if root.page == 1 || root.page == 2: FunctionBindingsPage {
+                if root.page == Navigation.bindings.page: FunctionBindingsPage {
                     rows: root.function-bindings;
                     capture-function: root.capture-function;
                     capture-slot: root.capture-slot;
@@ -166,7 +167,7 @@ export component AppWindow inherits Window {
                         root.action(name, index, value);
                     }
                 }
-                if root.page == 3: DevicesPage {
+                if root.page == Navigation.receiver.page: DevicesPage {
                     discovery-status: root.discovery-status;
                     scanning: root.scanning;
                     paired-devices: root.paired-devices;
@@ -175,7 +176,7 @@ export component AppWindow inherits Window {
                     }
                 }
 
-                if root.page == 4: SettingsPage {
+                if root.page == Navigation.settings.page: SettingsPage {
                     always-admin <=> root.always-admin;
                     app-version: root.app-version;
                     auto-listen <=> root.auto-listen;

@@ -494,7 +494,8 @@ impl Controller {
                 if self.recording() {
                     self.cancel_capture();
                 }
-                ui.set_page(index.clamp(0, 4));
+                // Pages 0..=3 as declared by ui/navigation.slint.
+                ui.set_page(index.clamp(0, 3));
             }
             Action::Listen => {
                 self.runtime.set_listening(!self.runtime.listening)?;

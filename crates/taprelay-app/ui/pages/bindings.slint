@@ -7,6 +7,7 @@ import { I18n } from "@i18n";
 import { FunctionBindingRow, ShortcutItem } from "../types.slint";
 import { IconDisplay, IconSet } from "@lucide";
 import { Caption, Label } from "../components/primitives.slint";
+import { IconButton } from "../components/icon-button.slint";
 import { Badge } from "../vendor/components/badge.slint";
 
 
@@ -160,56 +161,31 @@ component BindingChip inherits Rectangle {
             cancel => { root.cancel(); }
             key-input(text, down) => { root.key-input(text, down); }
         }
-        cancel_button := Button {
+        cancel_button := IconButton {
             activate-on-press: true;
             foreground-only: true;
             width: root.recording ? 24px : 0px;
             visible: root.recording;
             size: icon-xs;
-            text: "";
             variant: ghost;
-            accessible-role: button;
-            accessible-label: I18n.text.bindings-cancel;
+            icon: IconSet.X;
+            hint: I18n.text.bindings-cancel;
             accessible-enabled: root.recording;
             clicked => { root.cancel(); }
-            cancel-icon := Rectangle {
-                width: 24px;
-                height: parent.height;
-                IconDisplay {
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    icon: IconSet.X;
-                    size: 14px;
-                    stroke: cancel_button.hovered ? Tokens.color-foreground : Tokens.color-muted-foreground;
-                    stroke-width: 1.75;
-                }
-            }
         }
-        remove_button := Button {
+        remove_button := IconButton {
             activate-on-press: true;
             foreground-only: true;
             width: !root.recording && root.removable ? 24px : 0px;
             visible: !root.recording && root.removable;
             size: icon-xs;
-            text: "";
             variant: ghost;
             disabled: root.remove-disabled;
-            accessible-role: button;
-            accessible-label: I18n.text.common-delete + ": " + root.label;
+            icon: IconSet.X;
+            hint: I18n.text.common-delete + ": " + root.label;
+            icon-color: remove_button.hovered && !root.remove-disabled ? Tokens.color-destructive : Tokens.color-muted-foreground;
             accessible-enabled: !root.recording && root.removable && !root.remove-disabled;
             clicked => { root.remove(); }
-            remove-icon := Rectangle {
-                width: 24px;
-                height: parent.height;
-                IconDisplay {
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    icon: IconSet.X;
-                    size: 14px;
-                    stroke: remove_button.hovered && !root.remove-disabled ? Tokens.color-destructive : Tokens.color-muted-foreground;
-                    stroke-width: 1.75;
-                }
-            }
         }
     }
 }

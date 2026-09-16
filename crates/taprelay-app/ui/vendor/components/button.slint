@@ -45,6 +45,8 @@ export component Button inherits Rectangle {
     in property <bool> destructive-outline: false;
     // TapRelay integration: expose hover without overlaying an input-consuming TouchArea.
     out property <bool> hovered: touch.has-hover;
+    // Foreground for custom content such as icons; follows variant and hover state.
+    out property <color> content-foreground: interactive-hover ? fg-hover : fg-rest;
 
     // True while focus arrived from a pointer press — suppresses the ring so it
     // is keyboard-only (focus-visible emulation). Set on pointer down, cleared
@@ -160,7 +162,7 @@ export component Button inherits Rectangle {
             x: (parent.width - self.preferred-width) / 2;
             y: (parent.height - self.preferred-height) / 2;
             text: root.text;
-            color: interactive-hover ? fg-hover : fg-rest;
+            color: root.content-foreground;
             font-size:
                 size == ButtonSize.xs || size == ButtonSize.sm
                     ? Tokens.typography-body-sm-size

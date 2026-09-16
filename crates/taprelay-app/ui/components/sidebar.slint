@@ -1,40 +1,24 @@
-import { Button, ButtonVariant } from "../vendor/components/button.slint";
+import { ButtonVariant } from "../vendor/components/button.slint";
 import { Tokens } from "../vendor/theme/tokens.slint";
-import { I18n } from "@i18n";
-import { IconDisplay, IconSet, Icon } from "@lucide";
+import { IconButton } from "icon-button.slint";
+import { NavEntry, Navigation } from "../navigation.slint";
 
-component NavButton inherits Button {
-    in property <string> hint;
-    in property <Icon> icon;
-    Tooltip {
-        Rectangle {
-            width: 120px;
-            height: 32px;
-            background: Tokens.color-primary;
-            border-radius: 6px;
-            Text {
-                text: root.hint;
-                color: Tokens.color-primary-foreground;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-        }
-    }
-    icon-container := Rectangle {
-        width: parent.width;
-        height: parent.height;
-        IconDisplay {
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            icon: root.icon;
-            size: 18px;
-            stroke: root.variant == ButtonVariant.default
-                ? Tokens.color-primary-foreground
-                : root.hovered ? Tokens.color-foreground : Tokens.color-muted-foreground;
-            stroke-width: 1.75;
-        }
+component NavButton inherits IconButton {
+    in property <NavEntry> entry;
+    in property <int> current-page: 0;
+    callback navigate(int);
+
+    hint: root.entry.label;
+    icon: root.entry.icon;
+    size: icon;
+    width: 36px;
+    horizontal-stretch: 0;
+    variant: root.entry.page == root.current-page ? ButtonVariant.default : ButtonVariant.ghost;
+    clicked => {
+        root.navigate(root.entry.page);
     }
 }
+
 export component Sidebar inherits Rectangle {
     in-out property <int> page: 0;
     callback action(string, int, string);
@@ -43,34 +27,20 @@ export component Sidebar inherits Rectangle {
     VerticalLayout {
         padding: 12px;
         spacing: 10px;
-        for item[i] in [I18n.text.nav-overview,I18n.text.nav-bindings,I18n.text.nav-receiver]: NavButton {
-            hint: item;
-            icon: [IconSet.LayoutDashboard, IconSet.Keyboard, IconSet.Bluetooth][i];
-            size: icon;
-            width: 36px;
-            horizontal-stretch: 0;
-            text: "";
-            variant: root.page == [0,2,3][i] ? ButtonVariant.default: ButtonVariant.ghost;
-            clicked => {
-                root.action("navigate",[0,2,3][i],"");
+        for entry in Navigation.main: NavButton {
+            entry: entry;
+            current-page: root.page;
+            navigate(target) => {
+                root.action("navigate", target, "");
             }
-            accessible-role: button;
-            accessible-label: item;
         }
         Rectangle { vertical-stretch: 1; }
-        NavButton {
-            hint: I18n.text.nav-settings;
-            icon: IconSet.Settings;
-            size: icon;
-            width: 36px;
-            horizontal-stretch: 0;
-            text: "";
-            variant: root.page == 4 ? ButtonVariant.default: ButtonVariant.ghost;
-            clicked => {
-                root.action("navigate", 4, "");
+        for entry in Navigation.pinned: NavButton {
+            entry: entry;
+            current-page: root.page;
+            navigate(target) => {
+                root.action("navigate", target, "");
             }
-            accessible-role: button;
-            accessible-label: I18n.text.nav-settings;
         }
     }
 }

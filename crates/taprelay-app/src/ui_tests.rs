@@ -88,17 +88,11 @@ fn render_all_views_without_hardware() {
         ui.window().set_size(slint::LogicalSize::new(width, height));
         for mode in 0..3 {
             ui.set_mode(mode);
-            for page in 0..if mode == 0 {
-                1
-            } else if mode == 1 {
-                4
-            } else {
-                5
-            } {
+            for page in 0..if mode == 0 { 1 } else { 4 } {
                 ui.set_page(page);
                 ui.set_wizard_page(page.min(3));
                 ui.set_problem(
-                    if !dark && ((mode == 1 && page == 2) || (mode == 2 && page == 3)) {
+                    if !dark && ((mode == 1 && page == 2) || (mode == 2 && page == 2)) {
                         "Bluetooth service unavailable".into()
                     } else {
                         "".into()
@@ -109,7 +103,7 @@ fn render_all_views_without_hardware() {
                 let shot = ui.window().take_snapshot().unwrap();
                 assert_eq!(shot.width(), width as u32);
                 assert_eq!(shot.height(), height as u32);
-                if mode == 2 && page == 4 && dark {
+                if mode == 2 && page == 3 && dark {
                     let width = shot.width() as usize;
                     let background = shot.as_slice()[300 * width + 70];
                     let mut longest = 0;
@@ -465,10 +459,10 @@ fn render_all_views_without_hardware() {
         button: PointerEventButton::Left,
     });
     assert!(
-        actions.borrow().contains(&("navigate".into(), 4)),
+        actions.borrow().contains(&("navigate".into(), 3)),
         "Sidebar tooltip must not consume navigation clicks"
     );
-    ui.set_page(4);
+    ui.set_page(3);
     let _ = ui.window().take_snapshot().unwrap();
 
     // The remaining log UI opens the on-disk directory from Settings.
@@ -618,7 +612,7 @@ fn preview_function_layouts(ui: &AppWindow, out: &std::path::Path) {
         for mode in [2, 1] {
             ui.set_mode(mode);
             {
-                let page = 2;
+                let page = 1;
                 ui.set_page(page);
                 ui.set_wizard_page(0);
                 let _ = ui.window().take_snapshot().unwrap();
@@ -626,7 +620,7 @@ fn preview_function_layouts(ui: &AppWindow, out: &std::path::Path) {
                 slint::platform::update_timers_and_animations();
                 let shot = ui.window().take_snapshot().unwrap();
                 assert_eq!((shot.width(), shot.height()), (width as u32, height as u32));
-                if mode == 2 && page == 2 {
+                if mode == 2 {
                     // The shortcut must leave the trigger column clear.
                     let stride = shot.width() as usize;
                     let gap_x = width as usize - 368;
@@ -672,7 +666,7 @@ fn preview_function_layouts(ui: &AppWindow, out: &std::path::Path) {
         });
     };
     ui.set_mode(2);
-    ui.set_page(2);
+    ui.set_page(1);
     let _ = ui.window().take_snapshot().unwrap();
     click(452., 188.);
     click(435., 260.);

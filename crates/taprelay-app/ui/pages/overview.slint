@@ -1,10 +1,11 @@
-import { Button } from "../vendor/components/button.slint";
 import { Tokens } from "../vendor/theme/tokens.slint";
 import { I18n } from "@i18n";
 import { BindingRow, RelayStatus } from "../types.slint";
-import { Label, Panel } from "../components/primitives.slint";
+import { IconButton } from "../components/icon-button.slint";
+import { Label, Panel, Caption } from "../components/primitives.slint";
 import { RelayStatusCard, AdminAlert } from "../components/runtime-panels.slint";
-import { IconDisplay, IconSet } from "@lucide";
+import { IconSet } from "@lucide";
+import { Navigation } from "../navigation.slint";
 import { ShortcutPill } from "../components/shortcut-keys.slint";
 
 export component OverviewPage inherits Rectangle {
@@ -52,7 +53,7 @@ export component OverviewPage inherits Rectangle {
                         preferred-height: 0px;
                         vertical-stretch: 1;
                         clip: true;
-                        Label {
+                        Caption {
                             x: 20px;
                             y: 20px;
                             text: I18n.text.overview-bindings;
@@ -79,31 +80,16 @@ export component OverviewPage inherits Rectangle {
                                 }
                             }
                         }
-                        settings-button := Button {
+                        settings-button := IconButton {
                             x: parent.width - self.width - Tokens.spacing-sm;
                             y: Tokens.spacing-sm;
                             z: 1;
                             size: icon;
                             width: 36px;
-                            text: "";
-                            variant: ghost;
-                            accessible-role: button;
-                            accessible-label: I18n.text.overview-manage;
-                            accessible-enabled: true;
+                            icon: IconSet.Settings;
+                            hint: I18n.text.overview-manage;
                             clicked=> {
-                                root.action("navigate",2,"");
-                            }
-                            settings-icon := Rectangle {
-                                width: parent.width;
-                                height: parent.height;
-                                IconDisplay {
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                    icon: IconSet.Settings;
-                                    size: 16px;
-                                    stroke: Tokens.color-muted-foreground;
-                                    stroke-width: 1.75;
-                                }
+                                root.action("navigate",Navigation.bindings.page,"");
                             }
                         }
                     }

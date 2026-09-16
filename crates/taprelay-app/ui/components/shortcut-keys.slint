@@ -1,9 +1,6 @@
 import { Badge } from "../vendor/components/badge.slint";
 import { Tokens } from "../vendor/theme/tokens.slint";
 
-// Read-only shortcut surface used outside the bindings editor. It deliberately
-// has no TouchArea, so it keeps the wizard's pill geometry without suggesting
-// that the shortcut can be edited from the overview.
 export component ShortcutPill inherits Rectangle {
     in property <string> text;
 
@@ -27,7 +24,6 @@ export component ShortcutPill inherits Rectangle {
     }
 }
 
-// Each key is a separate label, so punctuation such as '+' remains a real key.
 export component ShortcutKeys inherits HorizontalLayout {
     in property <[string]> keys;
     height: 22px;

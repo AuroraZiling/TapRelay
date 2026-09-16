@@ -41,7 +41,7 @@ component TapRipple inherits Rectangle {
 export component RelayStatusCard inherits Panel {
     in property <RelayStatus> relay-status;
     clip: true;
-    callback action(string, int, string);
+    callback action(string, string);
     for slot in 16: TapRipple {
         sequence: floor((root.relay-status.input-count + 15 - slot) / 16);
         signal: root.relay-status.signal;
@@ -78,7 +78,7 @@ export component RelayStatusCard inherits Panel {
             Button {
                 text: root.relay-status.listening ? I18n.text.listening-stop : I18n.text.listening-start;
                 clicked=> {
-                    root.action("listen",0,"");
+                    root.action("listen", "");
                 }
             }
             Button {
@@ -86,14 +86,14 @@ export component RelayStatusCard inherits Panel {
                 variant: outline;
                 disabled: !root.relay-status.ready;
                 clicked=> {
-                    root.action("test",0,"");
+                    root.action("test", "");
                 }
             }
             if root.relay-status.show-retry: Button {
                 text: I18n.text.common-retry;
                 variant: ghost;
                 clicked=> {
-                    root.action("retry",0,"");
+                    root.action("retry", "");
                 }
             }
         }
@@ -101,9 +101,9 @@ export component RelayStatusCard inherits Panel {
 }
 // Business-specific content only; layout and actions belong to Alert.
 export component AdminAlert inherits Alert {
-    callback action(string, int, string);
+    callback action(string, string);
     variant: destructive;
     title: I18n.text.permissions-warning;
     action-label: I18n.text.permissions-restart-short;
-    action-clicked => { root.action("elevate", 0, ""); }
+    action-clicked => { root.action("elevate", ""); }
 }

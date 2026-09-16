@@ -1,0 +1,32 @@
+import { Switch } from "../vendor/components/switch.slint";
+import { Caption, Label } from "primitives.slint";
+
+export component SwitchRow inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> description;
+    in property <bool> disabled: false;
+    in property <string> accessibility-id;
+    in property <string> accessibility-label: root.label;
+    in-out property <bool> checked;
+    callback toggled(bool);
+    spacing: 20px;
+    cross-axis-alignment: center;
+    if root.label != "" || root.description != "": VerticalLayout {
+        spacing: 4px;
+        Label {
+            text: root.label;
+        }
+        if root.description != "": Caption {
+            text: root.description;
+        }
+    }
+    Switch {
+        checked <=> root.checked;
+        disabled: root.disabled;
+        accessible-id: root.accessibility-id;
+        accessible-label: root.accessibility-label;
+        toggled(value) => {
+            root.toggled(value);
+        }
+    }
+}

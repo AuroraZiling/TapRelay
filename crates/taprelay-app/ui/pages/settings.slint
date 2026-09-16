@@ -1,10 +1,16 @@
 import { Button } from "../vendor/components/button.slint";
 import { ScrollArea } from "../vendor/components/scroll-area.slint";
-import { Switch } from "../vendor/components/switch.slint";
 import { Tokens } from "../vendor/theme/tokens.slint";
 import { I18n } from "@i18n";
 import { Caption, Label } from "../components/primitives.slint";
+import { SwitchRow } from "../components/switch-row.slint";
 import { Badge, BadgeVariant } from "../vendor/components/badge.slint";
+
+// One button in an either/or group: what the user reads and what Rust decodes.
+struct ChoiceOption {
+    label: string,
+    value: string,
+}
 
 component Section inherits VerticalLayout {
     in property <string> title;
@@ -21,7 +27,7 @@ component Section inherits VerticalLayout {
             text: root.title;
             color: Tokens.color-foreground;
             font-size: 16px;
-            font-weight: 600;
+            font-weight: 500;
         }
         if root.badge != "": Badge {
             horizontal-stretch: 0;
@@ -31,29 +37,6 @@ component Section inherits VerticalLayout {
         }
     }
     @children
-}
-component SettingSwitch inherits HorizontalLayout {
-    in property <string> label;
-    in property <string> description;
-    in-out property <bool> checked;
-    callback toggled(bool);
-    spacing: 20px;
-    cross-axis-alignment: center;
-    VerticalLayout {
-        spacing: 4px;
-        Label {
-            text: root.label;
-        }
-        if root.description != "": Caption {
-            text: root.description;
-        }
-    }
-    Switch {
-        checked <=> root.checked;
-        toggled(value) => {
-            root.toggled(value);
-        }
-    }
 }
 export component SettingsPage inherits ScrollArea {
     in-out property <bool> always-admin;
@@ -68,7 +51,19 @@ export component SettingsPage inherits ScrollArea {
     in-out property <bool> connection-wait-warning;
     in-out property <bool> start-hidden;
     in property <int> theme-choice;
-    callback action(string, int, string);
+    callback action(string, string);
+    // One row per choice, so the visible label and the value sent to Rust are
+    // declared together instead of being zipped by list position.
+    property <[ChoiceOption]> theme-options: [
+        { label: I18n.text.theme-system, value: "system" },
+        { label: I18n.text.theme-light, value: "light" },
+        { label: I18n.text.theme-dark, value: "dark" },
+    ];
+    property <[ChoiceOption]> language-options: [
+        { label: I18n.text.language-system, value: "system" },
+        { label: I18n.text.language-chinese, value: "chinese" },
+        { label: I18n.text.language-english, value: "english" },
+    ];
     content-height: settings.preferred-height;
     settings := VerticalLayout {
         width: parent.width;
@@ -80,55 +75,59 @@ export component SettingsPage inherits ScrollArea {
             HorizontalLayout {
                 alignment: start;
                 spacing: 8px;
-                for name[i] in [I18n.text.theme-system,I18n.text.theme-light,I18n.text.theme-dark]: Button {
-                    text: name;
+                for option[i] in root.theme-options: Button {
+                    text: option.label;
                     variant: root.theme-choice == i ? secondary: outline;
                     clicked=> {
-                        root.action("theme",i,"");
+                        root.action("theme", option.value);
                     }
                 }
             }
             HorizontalLayout {
                 alignment: start;
                 spacing: 8px;
-                for name[i] in [I18n.text.language-system,I18n.text.language-chinese,I18n.text.language-english]: Button {
-                    text: name;
+                for option[i] in root.language-options: Button {
+                    text: option.label;
                     variant: root.language-choice == i ? secondary: outline;
                     clicked=> {
-                        root.action("language",i,"");
+                        root.action("language", option.value);
                     }
                 }
             }
         }
         Section {
             title: I18n.text.settings-startup;
-            SettingSwitch {
+            SwitchRow {
                 label: I18n.text.settings-autostart;
+                accessibility-id: "setting-autostart";
                 checked <=> root.auto-start;
                 toggled(v)=> {
-                    root.action("setting",0,v?"1":"0");
+                    root.action("set-autostart", v ? "1" : "0");
                 }
             }
-            SettingSwitch {
+            SwitchRow {
                 label: I18n.text.settings-hidden;
+                accessibility-id: "setting-start-hidden";
                 checked <=> root.start-hidden;
                 toggled(v)=> {
-                    root.action("setting",1,v?"1":"0");
+                    root.action("set-start-hidden", v ? "1" : "0");
                 }
             }
-            SettingSwitch {
+            SwitchRow {
                 label: I18n.text.settings-auto-listen;
+                accessibility-id: "setting-auto-listen";
                 checked <=> root.auto-listen;
                 toggled(v)=> {
-                    root.action("setting",2,v?"1":"0");
+                    root.action("set-auto-listen", v ? "1" : "0");
                 }
             }
-            SettingSwitch {
+            SwitchRow {
                 label: I18n.text.settings-close-tray;
                 description: I18n.text.settings-close-hint;
+                accessibility-id: "setting-close-to-tray";
                 checked <=> root.close-to-tray;
                 toggled(v)=> {
-                    root.action("setting",3,v?"1":"0");
+                    root.action("set-close-to-tray", v ? "1" : "0");
                 }
             }
         }
@@ -136,12 +135,13 @@ export component SettingsPage inherits ScrollArea {
             title: I18n.text.settings-app-permissions;
             badge: root.elevated ? I18n.text.permissions-badge-administrator : I18n.text.permissions-badge-user;
             badge-variant: root.elevated ? BadgeVariant.info : BadgeVariant.success;
-            SettingSwitch {
+            SwitchRow {
                 label: I18n.text.settings-always-admin;
                 description: I18n.text.settings-always-admin-hint;
+                accessibility-id: "setting-always-admin";
                 checked <=> root.always-admin;
                 toggled(v)=> {
-                    root.action("setting",4,v?"1":"0");
+                    root.action("set-always-admin", v ? "1" : "0");
                 }
             }
             Button {
@@ -150,26 +150,28 @@ export component SettingsPage inherits ScrollArea {
                 horizontal-stretch: 0;
                 disabled: root.elevated;
                 clicked=> {
-                    root.action("elevate",0,"");
+                    root.action("elevate", "");
                 }
             }
         }
         Section {
             title: I18n.text.settings-notifications;
-            SettingSwitch {
+            SwitchRow {
                 label: I18n.text.settings-connection-wait-warning;
                 description: I18n.text.settings-connection-wait-warning-hint;
+                accessibility-id: "setting-connection-wait-warning";
                 checked <=> root.connection-wait-warning;
                 toggled(v)=> {
-                    root.action("setting",6,v?"1":"0");
+                    root.action("set-connection-wait-warning", v ? "1" : "0");
                 }
             }
-            SettingSwitch {
+            SwitchRow {
                 label: I18n.text.settings-notifications-toggle;
                 description: I18n.text.settings-notifications-hint;
+                accessibility-id: "setting-notifications";
                 checked <=> root.notifications;
                 toggled(v)=> {
-                    root.action("setting",5,v?"1":"0");
+                    root.action("set-notifications", v ? "1" : "0");
                 }
             }
         }
@@ -188,21 +190,21 @@ export component SettingsPage inherits ScrollArea {
                     text: I18n.text.settings-data-folder;
                     variant: outline;
                     clicked=> {
-                        root.action("data-folder",0,"");
+                        root.action("data-folder", "");
                     }
                 }
                 Button {
                     text: I18n.text.logs-folder;
                     variant: outline;
                     clicked=> {
-                        root.action("logs-folder",0,"");
+                        root.action("logs-folder", "");
                     }
                 }
                 Button {
                     text: I18n.text.settings-wizard;
                     variant: outline;
                     clicked=> {
-                        root.action("wizard",0,"");
+                        root.action("wizard", "");
                     }
                 }
             }

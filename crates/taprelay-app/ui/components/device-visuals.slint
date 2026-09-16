@@ -1,0 +1,39 @@
+import { Icon, IconDisplay, IconSet } from "@lucide";
+import { Tokens } from "../vendor/theme/tokens.slint";
+
+export global DeviceVisuals {
+    public pure function kind-icon(kind: string) -> Icon {
+        return kind == "tablet" ? IconSet.Tablet
+            : kind == "phone" ? IconSet.Smartphone
+            : kind == "computer" ? IconSet.Monitor
+            : IconSet.Bluetooth;
+    }
+
+    public pure function status-icon(status: string) -> Icon {
+        return status == "ready" ? IconSet.CircleCheck
+            : status == "busy" ? IconSet.Loader
+            : status == "failed" ? IconSet.CircleAlert
+            : status == "linked" ? IconSet.BluetoothConnected
+            : status == "paired" ? IconSet.Link2
+            : IconSet.BluetoothOff;
+    }
+
+    public pure function status-color(status: string) -> brush {
+        return status == "ready" ? Tokens.color-success
+            : status == "linked" ? Tokens.color-info
+            : status == "failed" ? Tokens.color-destructive
+            : Tokens.color-muted-foreground;
+    }
+}
+
+export component DeviceKindIcon inherits IconDisplay {
+    in property <string> kind;
+    icon: DeviceVisuals.kind-icon(kind);
+    stroke: Tokens.color-muted-foreground;
+}
+
+export component DeviceStatusIcon inherits IconDisplay {
+    in property <string> status;
+    icon: DeviceVisuals.status-icon(status);
+    stroke: DeviceVisuals.status-color(status);
+}

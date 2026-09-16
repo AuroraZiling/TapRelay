@@ -1,4 +1,3 @@
-import { Switch } from "../vendor/components/switch.slint";
 import { Button } from "../vendor/components/button.slint";
 import { FocusRing } from "../vendor/components/focus-ring.slint";
 import { ScrollArea } from "../vendor/components/scroll-area.slint";
@@ -8,6 +7,7 @@ import { BindingCaptureState, BindingUi, FunctionBindingRow, ShortcutItem } from
 import { IconDisplay, IconSet } from "@lucide";
 import { Caption, Label } from "../components/primitives.slint";
 import { IconButton } from "../components/icon-button.slint";
+import { SwitchRow } from "../components/switch-row.slint";
 import { Badge } from "../vendor/components/badge.slint";
 
 // Borderless capture surface. BindingChip owns the surrounding visual so this
@@ -313,13 +313,12 @@ component FunctionBindingRowView inherits Rectangle {
         height: root.height;
         spacing: root.column-spacing;
         cross-axis-alignment: center;
-        Switch {
+        SwitchRow {
             width: root.switch-width;
-            height: 20px;
             checked: root.binding-row.enabled;
             disabled: root.capture-busy;
-            accessible-id: "binding-enabled-" + root.binding-row.id;
-            accessible-label: root.binding-row.label;
+            accessibility-id: "binding-enabled-" + root.binding-row.id;
+            accessibility-label: root.binding-row.label;
             toggled(enabled) => {
                 root.set-binding-function-enabled(root.binding-row.id, enabled);
             }

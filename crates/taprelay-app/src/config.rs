@@ -142,12 +142,33 @@ pub enum Theme {
     Light,
     Dark,
 }
+impl Theme {
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "system" => Some(Self::System),
+            "light" => Some(Self::Light),
+            "dark" => Some(Self::Dark),
+            _ => None,
+        }
+    }
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Language {
     System,
     Chinese,
     English,
+}
+impl Language {
+    /// Decodes the same names the config file persists.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "system" => Some(Self::System),
+            "chinese" => Some(Self::Chinese),
+            "english" => Some(Self::English),
+            _ => None,
+        }
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -480,6 +501,36 @@ mod tests {
             )]
         );
         loaded.validate().unwrap();
+    }
+
+    #[test]
+    fn theme_and_language_names_match_the_persisted_config() {
+        // The settings page sends these names, so they must stay identical to
+        // what serde writes; otherwise a click would change nothing on reload.
+        for (name, theme) in [
+            ("system", Theme::System),
+            ("light", Theme::Light),
+            ("dark", Theme::Dark),
+        ] {
+            assert_eq!(Theme::from_name(name), Some(theme));
+            assert_eq!(
+                serde_json::to_value(theme).unwrap(),
+                serde_json::json!(name)
+            );
+        }
+        for (name, language) in [
+            ("system", Language::System),
+            ("chinese", Language::Chinese),
+            ("english", Language::English),
+        ] {
+            assert_eq!(Language::from_name(name), Some(language));
+            assert_eq!(
+                serde_json::to_value(language).unwrap(),
+                serde_json::json!(name)
+            );
+        }
+        assert_eq!(Theme::from_name("Dark"), None);
+        assert_eq!(Language::from_name(""), None);
     }
 
     #[test]

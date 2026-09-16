@@ -5,15 +5,15 @@ import { I18n } from "@i18n";
 export component ReceiverActions inherits HorizontalLayout {
     horizontal-stretch: 0;
     spacing: 4px;
-    callback action(string, int, string);
+    callback action(string, string);
     IconButton {
         icon: IconSet.RefreshCw;
         hint: I18n.text.receiver-refresh;
-        clicked => { root.action("refresh", 0, ""); }
+        clicked => { root.action("refresh", ""); }
     }
     IconButton {
         icon: IconSet.Settings;
         hint: I18n.text.receiver-open-settings;
-        clicked => { root.action("bluetooth-settings", 0, ""); }
+        clicked => { root.action("bluetooth-settings", ""); }
     }
 }

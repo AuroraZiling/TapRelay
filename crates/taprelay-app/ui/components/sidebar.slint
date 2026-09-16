@@ -21,7 +21,7 @@ component NavButton inherits IconButton {
 
 export component Sidebar inherits Rectangle {
     in-out property <int> page: 0;
-    callback action(string, int, string);
+    callback action(string, string);
     width: 60px;
     background: Tokens.color-card;
     VerticalLayout {
@@ -31,7 +31,7 @@ export component Sidebar inherits Rectangle {
             entry: entry;
             current-page: root.page;
             navigate(target) => {
-                root.action("navigate", target, "");
+                root.action("navigate", "\{target}");
             }
         }
         Rectangle { vertical-stretch: 1; }
@@ -39,7 +39,7 @@ export component Sidebar inherits Rectangle {
             entry: entry;
             current-page: root.page;
             navigate(target) => {
-                root.action("navigate", target, "");
+                root.action("navigate", "\{target}");
             }
         }
     }

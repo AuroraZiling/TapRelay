@@ -25,7 +25,7 @@ export component WizardPage inherits VerticalLayout {
     in property <string> stage;
     in property <string> stage-detail;
     in property <int> step;
-    callback action(string, int, string);
+    callback action(string, string);
     spacing: 16px;
     Rectangle {
         height: 4px;
@@ -54,16 +54,16 @@ export component WizardPage inherits VerticalLayout {
         }
         if root.step == 1: Rectangle { horizontal-stretch: 1; }
         if root.step == 1: ReceiverActions {
-            action(name, index, value) => { root.action(name, index, value); }
+            action(name, value) => { root.action(name, value); }
         }
     }
     if root.step == 2 && !root.elevated: AdminAlert {
-        action(name, index, value) => { root.action(name, index, value); }
+        action(name, value) => { root.action(name, value); }
     }
     if root.problem != "" && root.step != 1: ErrorBanner {
         problem: root.problem;
-        action(name,index,value) => {
-            root.action(name,index,value);
+        action(name,value) => {
+            root.action(name,value);
         }
     }
     if root.step == 0: FunctionBindingsPage { }
@@ -71,8 +71,8 @@ export component WizardPage inherits VerticalLayout {
         discovery-status: root.discovery-status;
         scanning: root.scanning;
         paired-devices: root.paired-devices;
-        action(name, index, value) => {
-            root.action(name, index, value);
+        action(name, value) => {
+            root.action(name, value);
         }
     }
     if root.step == 2: ScrollArea {
@@ -86,8 +86,8 @@ export component WizardPage inherits VerticalLayout {
             Label { text: I18n.text.wizard-input-count + root.relay-status.input-count; }
             RelayStatusCard {
                 relay-status: root.relay-status;
-                action(name, index, value) => {
-                    root.action(name, index, value);
+                action(name, value) => {
+                    root.action(name, value);
                 }
             }
         }
@@ -99,7 +99,7 @@ export component WizardPage inherits VerticalLayout {
             text: I18n.text.wizard-skip;
             variant: ghost;
             clicked=> {
-                root.action("wizard-finish",0,"");
+                root.action("wizard-finish", "");
             }
         }
         Button {
@@ -107,14 +107,14 @@ export component WizardPage inherits VerticalLayout {
             variant: outline;
             disabled: root.step == 0 || BindingUi.capture.function-id != "";
             clicked=> {
-                root.action("wizard-back",0,"");
+                root.action("wizard-back", "");
             }
         }
         Button {
             text: root.step == 2 ? I18n.text.wizard-finish : I18n.text.wizard-next;
             disabled: BindingUi.capture.function-id != "" || (root.step == 1 && !root.receiver-next-allowed);
             clicked=> {
-                root.action(root.step == 2 ? "wizard-finish" : "wizard-next",0,"");
+                root.action(root.step == 2 ? "wizard-finish" : "wizard-next", "");
             }
         }
     }

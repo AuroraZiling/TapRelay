@@ -11,19 +11,73 @@ macro_rules! actions {
     }
 }
 actions! {
-    Show => "show", Close => "close", Quit => "quit", Navigate => "navigate",
+    Show => "show", Close => "close", Quit => "quit",
+    // Payload: the page number declared in ui/navigation.slint.
+    Navigate => "navigate",
     Listen => "listen", Test => "test", Refresh => "refresh", Retry => "retry",
     Resume => "resume", TrayReset => "tray-reset", BluetoothSettings => "bluetooth-settings",
-    DataFolder => "data-folder", LogsFolder => "logs-folder", Device => "device",
+    DataFolder => "data-folder", LogsFolder => "logs-folder",
+    // Payload: the device id the row was built from.
+    Device => "device",
     PairDevice => "pair-device", DisconnectDevice => "disconnect-device",
     Wizard => "wizard", WizardNext => "wizard-next", WizardBack => "wizard-back",
-    WizardFinish => "wizard-finish", Theme => "theme", Language => "language",
-    Setting => "setting", Elevate => "elevate",
+    WizardFinish => "wizard-finish",
+    // Payload: a `Theme` name ("system", "light", "dark").
+    Theme => "theme",
+    // Payload: a `Language` name ("system", "chinese", "english").
+    Language => "language",
+    // One command per option: the name says which setting, and the payload is
+    // its new state, so the UI never has to number them.
+    SetAutostart => "set-autostart",
+    SetStartHidden => "set-start-hidden",
+    SetAutoListen => "set-auto-listen",
+    SetCloseToTray => "set-close-to-tray",
+    SetAlwaysAdmin => "set-always-admin",
+    SetNotifications => "set-notifications",
+    SetConnectionWaitWarning => "set-connection-wait-warning",
+    Elevate => "elevate",
+}
+
+/// Payload of the `set-*` actions: a switch sends its new state as "0" or "1".
+pub fn toggle(value: &str) -> anyhow::Result<bool> {
+    match value {
+        "0" => Ok(false),
+        "1" => Ok(true),
+        other => anyhow::bail!("Invalid toggle value: {other}"),
+    }
+}
+
+/// Payload of [`Action::Navigate`]: the page number declared in
+/// `ui/navigation.slint`, as text because the action channel only carries text.
+pub fn page(value: &str) -> anyhow::Result<i32> {
+    value
+        .parse()
+        .map_err(|_| anyhow::anyhow!("Invalid page number: {value}"))
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct CaptureTarget {
     pub id: taprelay_core::function::FunctionId,
     pub slot: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn switch_payloads_are_binary() {
+        assert_eq!(toggle("1").ok(), Some(true));
+        assert_eq!(toggle("0").ok(), Some(false));
+        assert!(toggle("true").is_err());
+        assert!(toggle("").is_err());
+    }
+
+    #[test]
+    fn navigation_payload_is_the_declared_page_number() {
+        assert_eq!(page("3").ok(), Some(3));
+        assert_eq!(page("0").ok(), Some(0));
+        assert!(page("settings").is_err());
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

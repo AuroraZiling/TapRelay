@@ -9,7 +9,7 @@ export component EnvironmentPage inherits VerticalLayout {
     in property <[CheckRow]> checks;
     in property <bool> fatal;
     in property <string> problem;
-    callback action(string, int, string);
+    callback action(string, string);
     spacing: 22px;
     Heading {
         text: root.fatal ? I18n.text.startup-error : I18n.text.startup-preparing;
@@ -54,21 +54,21 @@ export component EnvironmentPage inherits VerticalLayout {
             text: I18n.text.startup-retry;
             disabled: root.busy || root.fatal;
             clicked=> {
-                root.action("retry",0,"");
+                root.action("retry", "");
             }
         }
         Button {
             text: I18n.text.startup-bluetooth-settings;
             variant: outline;
             clicked=> {
-                root.action("bluetooth-settings",0,"");
+                root.action("bluetooth-settings", "");
             }
         }
         Button {
             text: I18n.text.common-quit;
             variant: ghost;
             clicked=> {
-                root.action("quit",0,"");
+                root.action("quit", "");
             }
         }
     }

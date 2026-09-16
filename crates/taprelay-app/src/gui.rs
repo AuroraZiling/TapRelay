@@ -1,7 +1,7 @@
 use crate::{
     AppWindow, BindingCaptureState, BindingRow, BindingUi, CheckRow, FunctionBindingRow,
     GestureAction, ShortcutItem, Theme, ThemeMode,
-    action::{Action, BindingCommand, CaptureTarget},
+    action::{self, Action, BindingCommand, CaptureTarget},
     administrator,
     config::{self, Config, Device, Language, SaveQueue, Theme as ThemeSetting},
     feedback::{TestStatus, WaitWarning},
@@ -118,11 +118,11 @@ pub fn run() -> Result<()> {
         ui.window().set_position(slint::PhysicalPosition::new(x, y));
     }
     ui.window().set_maximized(size.maximized);
-    let actions = Rc::new(RefCell::new(Vec::<(Action, i32, String)>::new()));
+    let actions = Rc::new(RefCell::new(Vec::<(Action, String)>::new()));
     let window_keys = Rc::new(RefCell::new(Vec::new()));
     let a = actions.clone();
     ui.window().on_close_requested(move || {
-        a.borrow_mut().push((Action::Close, 0, String::new()));
+        a.borrow_mut().push((Action::Close, String::new()));
         slint::CloseRequestResponse::KeepWindowShown
     });
     let mut controller = Controller::new(config, path, logs, desktop, status, startup_error)?;
@@ -142,16 +142,12 @@ pub fn run() -> Result<()> {
     let controller = Rc::new(RefCell::new(controller));
     let action_controller = controller.clone();
     let action_window = ui.as_weak();
-    ui.on_action(
-        move |name, index, value| match Action::try_from(name.as_str()) {
-            Ok(action) => {
-                dispatch_controller(&action_controller, &action_window, |controller, ui| {
-                    controller.action(ui, action, index, &value)
-                })
-            }
-            Err(e) => tracing::error!("{e}"),
-        },
-    );
+    ui.on_action(move |name, value| match Action::try_from(name.as_str()) {
+        Ok(action) => dispatch_controller(&action_controller, &action_window, |controller, ui| {
+            controller.action(ui, action, &value)
+        }),
+        Err(e) => tracing::error!("{e}"),
+    });
 
     let binding_ui = ui.global::<BindingUi>();
     let binding_controller = controller.clone();
@@ -233,11 +229,11 @@ pub fn run() -> Result<()> {
                     DesktopEvent::Resume => Action::Resume,
                     DesktopEvent::TrayReset => Action::TrayReset,
                 };
-                actions.borrow_mut().push((name, 0, String::new()));
+                actions.borrow_mut().push((name, String::new()));
             }
             let pending = std::mem::take(&mut *actions.borrow_mut());
-            for (name, index, value) in pending {
-                if let Err(e) = c.action(&ui, name, index, &value) {
+            for (name, value) in pending {
+                if let Err(e) = c.action(&ui, name, &value) {
                     c.error(&format!("{e:#}"));
                 }
             }
@@ -564,7 +560,7 @@ impl Controller {
         self.sync(ui);
         Ok(())
     }
-    fn action(&mut self, ui: &AppWindow, name: Action, index: i32, value: &str) -> Result<()> {
+    fn action(&mut self, ui: &AppWindow, name: Action, value: &str) -> Result<()> {
         if !matches!(name, Action::Show | Action::Resume | Action::TrayReset) {
             self.runtime.consume_ui_input();
         }
@@ -602,7 +598,7 @@ impl Controller {
                     ui.hide()?;
                     self.hidden = true;
                 } else {
-                    self.action(ui, Action::Quit, 0, "")?;
+                    self.action(ui, Action::Quit, "")?;
                 }
             }
             Action::Quit => {
@@ -617,8 +613,7 @@ impl Controller {
                 if self.recording() {
                     self.cancel_capture()?;
                 }
-                // Pages 0..=3 as declared by ui/navigation.slint.
-                ui.set_page(index.clamp(0, 3));
+                ui.set_page(action::page(value)?.clamp(0, 3));
             }
             Action::Listen => {
                 self.runtime.set_listening(!self.runtime.listening)?;
@@ -706,37 +701,43 @@ impl Controller {
                 ui.set_page(0);
             }
             Action::Theme => {
-                self.runtime.config.options.theme = match index {
-                    1 => ThemeSetting::Light,
-                    2 => ThemeSetting::Dark,
-                    _ => ThemeSetting::System,
-                };
+                self.runtime.config.options.theme = ThemeSetting::from_name(value)
+                    .with_context(|| format!("Unknown theme: {value}"))?;
                 self.saves.changed();
             }
             Action::Language => {
-                self.runtime.config.options.language = match index {
-                    1 => Language::Chinese,
-                    2 => Language::English,
-                    _ => Language::System,
-                };
+                self.runtime.config.options.language = Language::from_name(value)
+                    .with_context(|| format!("Unknown language: {value}"))?;
                 self.saves.changed();
             }
-            Action::Setting => {
-                anyhow::ensure!(matches!(value, "0" | "1"), "Invalid setting value");
-                let v = value == "1";
-                match index {
-                    0 => {
-                        desktop::set_autostart(v)?;
-                        self.runtime.config.options.autostart = desktop::autostart_enabled();
-                    }
-                    1 => self.runtime.config.options.start_hidden = v,
-                    2 => self.runtime.config.options.auto_listen = v,
-                    3 => self.runtime.config.options.close_to_tray = v,
-                    4 => self.runtime.config.options.always_admin = v,
-                    5 => self.runtime.config.options.notifications = v,
-                    6 => self.runtime.config.options.connection_wait_warning = v,
-                    _ => anyhow::bail!("Unknown setting index: {index}"),
-                }
+            Action::SetStartHidden => {
+                self.runtime.config.options.start_hidden = action::toggle(value)?;
+                self.saves.changed();
+            }
+            Action::SetAutoListen => {
+                self.runtime.config.options.auto_listen = action::toggle(value)?;
+                self.saves.changed();
+            }
+            Action::SetCloseToTray => {
+                self.runtime.config.options.close_to_tray = action::toggle(value)?;
+                self.saves.changed();
+            }
+            Action::SetAlwaysAdmin => {
+                self.runtime.config.options.always_admin = action::toggle(value)?;
+                self.saves.changed();
+            }
+            Action::SetNotifications => {
+                self.runtime.config.options.notifications = action::toggle(value)?;
+                self.saves.changed();
+            }
+            Action::SetConnectionWaitWarning => {
+                self.runtime.config.options.connection_wait_warning = action::toggle(value)?;
+                self.saves.changed();
+            }
+            Action::SetAutostart => {
+                desktop::set_autostart(action::toggle(value)?)?;
+                // Read back what the OS accepted instead of trusting the request.
+                self.runtime.config.options.autostart = desktop::autostart_enabled();
                 self.saves.changed();
             }
             Action::Elevate => {

@@ -3,13 +3,12 @@ import { ScrollArea } from "../vendor/components/scroll-area.slint";
 import { I18n } from "@i18n";
 import { DeviceRow } from "../types.slint";
 import { Caption, Label, Panel, Spinner } from "../components/primitives.slint";
+import { DeviceKindIcon, DeviceStatusIcon } from "../components/device-visuals.slint";
 import { Tokens } from "../vendor/theme/tokens.slint";
-
-import { IconDisplay, IconSet } from "@lucide";
 
 component ReceiverCard inherits Panel {
     in property <DeviceRow> device;
-    callback action(string, int, string);
+    callback action(string, string);
     height: 56px;
     vertical-stretch: 0;
     HorizontalLayout {
@@ -18,10 +17,9 @@ component ReceiverCard inherits Panel {
         spacing: 12px;
         Rectangle {
             width: 20px;
-            IconDisplay {
-                icon: root.device.device-kind == "tablet" ? IconSet.Tablet : root.device.device-kind == "phone" ? IconSet.Smartphone : root.device.device-kind == "computer" ? IconSet.Monitor : IconSet.Bluetooth;
+            DeviceKindIcon {
+                kind: root.device.device-kind;
                 size: 20px;
-                stroke: Tokens.color-muted-foreground;
             }
         }
         Label {
@@ -45,10 +43,9 @@ component ReceiverCard inherits Panel {
             accessible-role: text;
             accessible-description: root.device.detail;
             Rectangle {
-                IconDisplay {
-                    icon: root.device.status == "ready" ? IconSet.CircleCheck : root.device.status == "busy" ? IconSet.Loader : root.device.status == "failed" ? IconSet.CircleAlert : root.device.status == "linked" ? IconSet.BluetoothConnected : root.device.status == "paired" ? IconSet.Link2 : IconSet.BluetoothOff;
+                DeviceStatusIcon {
+                    status: root.device.status;
                     size: 18px;
-                    stroke: root.device.status == "ready" ? Tokens.color-success : root.device.status == "linked" ? Tokens.color-info : root.device.status == "failed" ? Tokens.color-destructive : Tokens.color-muted-foreground;
                 }
             }
             }
@@ -61,7 +58,7 @@ component ReceiverCard inherits Panel {
                 text: root.device.action-label;
                 disabled: !root.device.enabled;
                 variant: outline;
-                clicked => { root.action(root.device.action, 0, root.device.id); }
+                clicked => { root.action(root.device.action, root.device.id); }
             }
         }
         if root.device.action == "" : Rectangle {
@@ -84,7 +81,7 @@ export component DevicesPage inherits VerticalLayout {
     in property <[DeviceRow]> paired-devices;
     in property <bool> scanning;
     in property <string> discovery-status;
-    callback action(string, int, string);
+    callback action(string, string);
     spacing: 14px;
     HorizontalLayout {
         alignment: start;
@@ -100,7 +97,7 @@ export component DevicesPage inherits VerticalLayout {
             alignment: start;
             for device in root.paired-devices: ReceiverCard {
                 device: device;
-                action(name,index,value) => { root.action(name,index,value); }
+                action(name,value) => { root.action(name,value); }
             }
         }
     }

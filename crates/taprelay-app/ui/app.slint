@@ -64,7 +64,7 @@ export component AppWindow inherits Window {
     in-out property <bool> connection-wait-warning;
     in property <int> theme-choice;
     in property <int> language-choice;
-    callback action(string, int, string);
+    callback action(string, string);
     property <color> signal: root.state-color == 0 ? Tokens.color-success : root.state-color == 1 ? Tokens.color-muted-foreground : root.state-color == 2 ? Tokens.color-warning : Tokens.color-destructive;
     property <RelayStatus> relay-status: {
         device-name: root.device-name,
@@ -80,8 +80,8 @@ export component AppWindow inherits Window {
         spacing: 0px;
         if root.mode == 2: Sidebar {
             page <=> root.page;
-            action(name, index, value) => {
-                root.action(name, index, value);
+            action(name, value) => {
+                root.action(name, value);
             }
         }
         VerticalLayout {
@@ -92,8 +92,8 @@ export component AppWindow inherits Window {
                 checks: root.checks;
                 fatal: root.mode == 3;
                 problem: root.problem;
-                action(name, index, value) => {
-                    root.action(name, index, value);
+                action(name, value) => {
+                    root.action(name, value);
                 }
             }
             if root.mode == 1: WizardPage {
@@ -108,8 +108,8 @@ export component AppWindow inherits Window {
                 relay-status: root.relay-status;
                 receiver-next-allowed: root.receiver-next-allowed;
                 step: root.wizard-page <= 1 ? 0 : root.wizard-page - 1;
-                action(name, index, value) => {
-                    root.action(name, index, value);
+                action(name, value) => {
+                    root.action(name, value);
                 }
             }
             if root.mode == 2: VerticalLayout {
@@ -128,14 +128,14 @@ export component AppWindow inherits Window {
                     }
                     if root.page == Navigation.receiver.page: Rectangle { horizontal-stretch: 1; }
                     if root.page == Navigation.receiver.page: ReceiverActions {
-                        action(name, index, value) => { root.action(name, index, value); }
+                        action(name, value) => { root.action(name, value); }
                     }
 
                 }
                 if root.problem != "" && root.page != Navigation.bindings.page: ErrorBanner {
                     problem: root.problem;
-                    action(name,index,value)=> {
-                        root.action(name,index,value);
+                    action(name,value)=> {
+                        root.action(name,value);
                     }
                 }
                 if root.page == Navigation.overview.page: OverviewPage {
@@ -143,8 +143,8 @@ export component AppWindow inherits Window {
                     binding-count: root.bindings.length;
                     elevated: root.elevated;
                     relay-status: root.relay-status;
-                    action(name, index, value) => {
-                        root.action(name, index, value);
+                    action(name, value) => {
+                        root.action(name, value);
                     }
                 }
                 if root.page == Navigation.bindings.page: FunctionBindingsPage { }
@@ -152,8 +152,8 @@ export component AppWindow inherits Window {
                     discovery-status: root.discovery-status;
                     scanning: root.scanning;
                     paired-devices: root.paired-devices;
-                    action(name, index, value) => {
-                        root.action(name, index, value);
+                    action(name, value) => {
+                        root.action(name, value);
                     }
                 }
 
@@ -170,8 +170,8 @@ export component AppWindow inherits Window {
                     connection-wait-warning <=> root.connection-wait-warning;
                     start-hidden <=> root.start-hidden;
                     theme-choice: root.theme-choice;
-                    action(name, index, value) => {
-                        root.action(name, index, value);
+                    action(name, value) => {
+                        root.action(name, value);
                     }
                 }
             }

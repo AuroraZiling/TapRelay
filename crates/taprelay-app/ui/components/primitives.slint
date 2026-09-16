@@ -67,9 +67,9 @@ export component Spinner inherits Rectangle {
 }
 export component ErrorBanner inherits Alert {
     in property <string> problem;
-    callback action(string, int, string);
+    callback action(string, string);
     variant: destructive;
     title: root.problem;
     action-label: I18n.text.common-retry;
-    action-clicked => { root.action("retry", 0, ""); }
+    action-clicked => { root.action("retry", ""); }
 }

@@ -18,15 +18,14 @@ export component OverviewPage inherits Rectangle {
     in property <int> binding-count;
     in property <bool> elevated;
     in property <RelayStatus> relay-status;
-    callback action(string, int, string);
+    callback action(string, string);
     content := VerticalLayout {
         width: parent.width;
         height: root.height;
         spacing: 16px;
         if !root.elevated: AdminAlert {
-            action(name, index, value) => { root.action(name, index, value); }
+            action(name, value) => { root.action(name, value); }
         }
-        // Both rows belong to the page; child content cannot change their size.
         Rectangle {
             min-height: 0px;
             preferred-height: 0px;
@@ -43,7 +42,7 @@ export component OverviewPage inherits Rectangle {
                             width: parent.width;
                             height: parent.height;
                             relay-status: root.relay-status;
-                            action(name, index, value) => { root.action(name, index, value); }
+                            action(name, value) => { root.action(name, value); }
                         }
                     }
                 }
@@ -89,7 +88,7 @@ export component OverviewPage inherits Rectangle {
                             icon: IconSet.Settings;
                             hint: I18n.text.overview-manage;
                             clicked=> {
-                                root.action("navigate",Navigation.bindings.page,"");
+                                root.action("navigate", "\{Navigation.bindings.page}");
                             }
                         }
                     }

@@ -277,6 +277,7 @@ fn render_all_views_without_hardware() {
             state.targets.push(Target {
                 id: "tablet".into(),
                 name: "Artemis’s iPad".into(),
+                kind: taprelay_core::state::DeviceKind::Tablet,
                 pairing: Knowledge::Yes,
                 availability: Availability::Nearby,
                 connection,
@@ -466,7 +467,7 @@ fn render_all_views_without_hardware() {
     let _ = ui.window().take_snapshot().unwrap();
     let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let a = actions.clone();
-    ui.on_action(move |name, index, _| a.borrow_mut().push((name.to_string(), index)));
+    ui.on_action(move |name, value| a.borrow_mut().push((name.to_string(), value.to_string())));
     use slint::platform::{PointerEventButton, WindowEvent};
     let position = slint::LogicalPosition::new(30., 670.);
     ui.window().dispatch_event(WindowEvent::PointerMoved {
@@ -483,7 +484,7 @@ fn render_all_views_without_hardware() {
         button: PointerEventButton::Left,
     });
     assert!(
-        actions.borrow().contains(&("navigate".into(), 3)),
+        actions.borrow().contains(&("navigate".into(), "3".into())),
         "Sidebar tooltip must not consume navigation clicks"
     );
     ui.set_page(3);
@@ -508,7 +509,55 @@ fn render_all_views_without_hardware() {
         position,
         button: PointerEventButton::Left,
     });
-    assert!(actions.borrow().contains(&("logs-folder".into(), 0)));
+    assert!(
+        actions
+            .borrow()
+            .contains(&("logs-folder".into(), "".into()))
+    );
+    let _ = ui.window().take_snapshot().unwrap();
+
+    // Every settings switch owns a named command, so one control can never be
+    // wired to another's setting the way the shared "setting" id allowed.
+    // Clipped rows leave the accessibility tree, so grow the viewport first.
+    ui.window().set_size(slint::LogicalSize::new(1000., 1100.));
+    let _ = ui.window().take_snapshot().unwrap();
+    for (accessible_id, command) in [
+        ("setting-autostart", "set-autostart"),
+        ("setting-start-hidden", "set-start-hidden"),
+        ("setting-auto-listen", "set-auto-listen"),
+        ("setting-close-to-tray", "set-close-to-tray"),
+        ("setting-always-admin", "set-always-admin"),
+        (
+            "setting-connection-wait-warning",
+            "set-connection-wait-warning",
+        ),
+        ("setting-notifications", "set-notifications"),
+    ] {
+        actions.borrow_mut().clear();
+        let switch = binding_element(&ui, accessible_id);
+        switch.invoke_accessible_default_action();
+        switch.invoke_accessible_default_action();
+        let emitted = actions.borrow().clone();
+        assert_eq!(
+            emitted.len(),
+            2,
+            "{accessible_id} must send one command per toggle"
+        );
+        assert!(
+            emitted.iter().all(|(name, _)| name == command),
+            "{accessible_id} must send {command}, got {emitted:?}"
+        );
+        assert!(
+            crate::action::Action::try_from(command).is_ok(),
+            "{command} must also be a known action id in src/action.rs"
+        );
+        assert_eq!(
+            emitted[0].1,
+            if emitted[1].1 == "1" { "0" } else { "1" },
+            "{command} must carry the switch's new state"
+        );
+    }
+    ui.window().set_size(slint::LogicalSize::new(1000., 700.));
     let _ = ui.window().take_snapshot().unwrap();
 
     // Seed the retained renderer cache and confirm unchanged UI has no damage.

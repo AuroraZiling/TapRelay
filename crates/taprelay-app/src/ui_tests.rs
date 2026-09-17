@@ -249,10 +249,10 @@ fn render_all_views_without_hardware() {
             Connection::Disconnected,
         ),
         (
-            "connecting",
+            "waiting",
             AdapterState::Available,
             DiscoveryState::ResultsAvailable,
-            Connection::Connecting,
+            Connection::AwaitingHostSubscription,
         ),
         (
             "connected",
@@ -290,7 +290,6 @@ fn render_all_views_without_hardware() {
                 availability: Availability::Nearby,
                 ..Default::default()
             });
-            state.target_status = Some(state.targets[0].clone());
         }
         state.ready = connection == Connection::Connected;
         let rows: Vec<_> = state

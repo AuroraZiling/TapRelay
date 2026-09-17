@@ -125,7 +125,6 @@ impl Runtime {
         self.state.service = false;
         self.state.broadcasting = false;
         self.state.selected = None;
-        self.state.target_status = None;
         self.state.last_error = None;
         self.error = None;
         self.invalidate(RouterReason::SessionChanged);
@@ -172,7 +171,6 @@ impl Runtime {
             .disconnect();
         self.state.ready = false;
         self.state.selected = None;
-        self.state.target_status = None;
         self.invalidate(RouterReason::SessionChanged);
         self.required_generation = result?;
         Ok(())
@@ -195,11 +193,10 @@ impl Runtime {
     pub fn choose(&mut self, id: String) -> Result<()> {
         self.startup_restore = None;
         if self.state.selected.as_ref() == Some(&id)
-            && self.state.target_status.as_ref().is_some_and(|target| {
+            && self.state.selected_target().is_some_and(|target| {
                 matches!(
                     target.connection,
-                    taprelay_core::devices::Connection::Connecting
-                        | taprelay_core::devices::Connection::AwaitingHostSubscription
+                    taprelay_core::devices::Connection::AwaitingHostSubscription
                         | taprelay_core::devices::Connection::Synchronizing
                         | taprelay_core::devices::Connection::Connected
                 )
@@ -214,7 +211,6 @@ impl Runtime {
             .select(id.clone())?;
         self.state.ready = false;
         self.state.selected = Some(id);
-        self.state.target_status = None;
         self.invalidate(RouterReason::SessionChanged);
         Ok(())
     }
@@ -526,8 +522,7 @@ impl Runtime {
                             && self.config.remembered_device.as_ref().is_some_and(
                                 |remembered| {
                                     snapshot
-                                        .target_status
-                                        .as_ref()
+                                        .selected_target()
                                         .is_some_and(|target| remembered.matches(target))
                                 },
                             )))))
@@ -535,10 +530,9 @@ impl Runtime {
             self.state = snapshot;
             if self.state.selected.is_none() {
                 self.state.ready = false;
-                self.state.target_status = None;
             }
             if self.state.ready
-                && let Some(target) = self.state.target_status.as_ref()
+                && let Some(target) = self.state.selected_target()
             {
                 self.config.remembered_device = Some(crate::config::Device::from_target(target));
             }
@@ -837,7 +831,6 @@ mod tests {
         runtime.transport = Some(Box::new(SnapshotTransport(Some(Snapshot {
             generation: 1,
             selected: Some(target.id.clone()),
-            target_status: Some(target.clone()),
             targets: vec![target],
             ready: true,
             ..Default::default()
@@ -872,7 +865,6 @@ mod tests {
         runtime.transport = Some(Box::new(SnapshotTransport(Some(Snapshot {
             generation: 1,
             selected: Some(restored.id.clone()),
-            target_status: Some(restored.clone()),
             targets: vec![restored],
             ready: true,
             ..Default::default()
@@ -894,7 +886,6 @@ mod tests {
         runtime.transport = Some(Box::new(SnapshotTransport(Some(Snapshot {
             generation: 2,
             selected: Some(unrelated.id.clone()),
-            target_status: Some(unrelated.clone()),
             targets: vec![unrelated],
             ready: true,
             ..Default::default()

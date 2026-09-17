@@ -246,7 +246,7 @@ impl BleHandle {
                             if restart && discovery.adapter == AdapterState::Available {
                                 // Drop the old server on its own worker before publishing another.
                                 server.take();
-                                manager.borrow_mut().clear_selection();
+                                manager.borrow_mut().disconnect();
                                 tx.send_replace(Snapshot {
                                     generation: worker_revision.load(Ordering::Acquire),
                                     activity: TransportActivity::CheckingEnvironment,
@@ -297,7 +297,7 @@ impl BleHandle {
                                         s.try_startup_restore(&remembered);
                                     }
                                     if s.state.selected.is_none() {
-                                        manager.borrow_mut().clear_selection();
+                                        manager.borrow_mut().disconnect();
                                     }
                                     s.publish();
                                 } else {
@@ -369,8 +369,21 @@ impl BleHandle {
                                     startup_restore.take();
                                     startup_restore_deadline = None;
                                     if let Some(id) = &id {
-                                        if !manager.borrow_mut().connect(id.clone(), Instant::now())
-                                        {
+                                        let accepted = if let Some(server) = &server {
+                                            manager.borrow_mut().connect(
+                                                &server.state,
+                                                id.clone(),
+                                                Instant::now(),
+                                            )
+                                        } else {
+                                            let state = tx.borrow();
+                                            manager.borrow_mut().connect(
+                                                &state,
+                                                id.clone(),
+                                                Instant::now(),
+                                            )
+                                        };
+                                        if !accepted {
                                             continue;
                                         }
                                     } else {
@@ -383,7 +396,7 @@ impl BleHandle {
                                             s.fail(&e);
                                         }
                                     } else {
-                                        manager.borrow_mut().clear_selection();
+                                        manager.borrow_mut().disconnect();
                                     }
                                 }
                                 Ok(Request::Send(c, reply)) => {
@@ -910,7 +923,6 @@ impl Server {
         self.pending_pulses.clear();
         self.reset_report_state();
         self.state.ready = false;
-        self.state.consumer_ready = false;
         self.state.last_error = Some(if self.maintenance.failures >= 6 {
             format!(
                 "Automatic recovery stopped after repeated failures; disconnect and connect again: {e}"
@@ -1117,6 +1129,29 @@ impl Server {
             }
         }
 
+        let previous_selected = self.state.selected_target().cloned();
+        if let Some(id) = self.state.selected.clone()
+            && !targets.iter().any(|target| target.matches_id(&id))
+        {
+            let mut target = previous_selected.unwrap_or_else(|| Target {
+                id: id.clone(),
+                name: "Unknown".into(),
+                ..Default::default()
+            });
+            target.subscribed = Knowledge::No;
+            target.link = match &self.session {
+                Some((session, _)) if session.DeviceId()?.Id()? == id.as_str() => {
+                    if session.SessionStatus()? == GattSessionStatus::Active {
+                        Knowledge::Yes
+                    } else {
+                        Knowledge::No
+                    }
+                }
+                _ => Knowledge::No,
+            };
+            target.availability = Availability::Unavailable;
+            targets.push(target);
+        }
         targets.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
         self.state.targets = targets;
         self.suspended
@@ -1128,43 +1163,7 @@ impl Server {
                     .iter()
                     .any(|t| &t.id == id && t.subscribed == Knowledge::Yes)
             });
-        self.state.target_status = match &self.state.selected {
-            Some(id) => match self.state.targets.iter().find(|t| t.matches_id(id)) {
-                Some(target) => Some(target.clone()),
-                None => {
-                    let mut target = self
-                        .state
-                        .target_status
-                        .take()
-                        .filter(|t| t.matches_id(id))
-                        .unwrap_or_else(|| Target {
-                            id: id.clone(),
-                            name: "Unknown".into(),
-                            ..Default::default()
-                        });
-                    target.subscribed = Knowledge::No;
-                    target.link = match &self.session {
-                        Some((session, _)) if session.DeviceId()?.Id()? == id.as_str() => {
-                            if session.SessionStatus()? == GattSessionStatus::Active {
-                                Knowledge::Yes
-                            } else {
-                                Knowledge::No
-                            }
-                        }
-                        _ => Knowledge::No,
-                    };
-                    Some(target)
-                }
-            },
-            None => None,
-        };
-        if let Some(target) = &mut self.state.target_status
-            && !self.state.targets.iter().any(|t| t.same_device(target))
-        {
-            target.availability = Availability::Unavailable;
-            self.state.targets.push(target.clone());
-        }
-        self.state.hid_suspended = self.state.target_status.as_ref().is_some_and(|target| {
+        self.state.hid_suspended = self.state.selected_target().is_some_and(|target| {
             self.suspended
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
@@ -1200,9 +1199,7 @@ impl Server {
             self.synced = false;
             self.synced_reports = [false; 1];
         }
-        self.state.consumer_ready = available && report_active[0] && self.synced_reports[0];
         self.state.ready = available && self.synced_reports[0];
-        self.state.consumer_ready = self.state.ready;
         self.state.activity = TransportActivity::Idle;
         self.publish();
         if available
@@ -1257,8 +1254,7 @@ impl Server {
                 self.synced = false;
             }
         }
-        self.state.consumer_ready = available && self.synced_reports[0];
-        self.state.ready = self.state.consumer_ready;
+        self.state.ready = available && self.synced_reports[0];
         if available && let Err(error) = self.process_due_pulses() {
             self.fail(&error);
         }
@@ -1375,14 +1371,12 @@ impl Server {
     }
     fn abandon_startup_restore(&mut self) {
         self.restoring_startup = false;
-        self.manager.borrow_mut().clear_selection();
+        self.manager.borrow_mut().disconnect();
         if let Err(error) = self.select(None) {
             tracing::debug!(%error, "Could not fully release failed startup restore");
         }
         self.state.selected = None;
-        self.state.target_status = None;
         self.state.ready = false;
-        self.state.consumer_ready = false;
         self.state.activity = TransportActivity::Idle;
         self.state.last_error = None;
         self.state.device_error = None;
@@ -1403,7 +1397,7 @@ impl Server {
         if !self
             .manager
             .borrow_mut()
-            .connect(selected.clone(), Instant::now())
+            .connect(&self.state, selected.clone(), Instant::now())
         {
             return;
         }
@@ -1422,6 +1416,8 @@ impl Server {
     }
     fn select(&mut self, target: Option<String>) -> Result<(), BackendError> {
         self.restoring_startup = false;
+        self.state.selected = target;
+        self.state.ready = false;
         self.release_maintenance();
         self.session_active = false;
         self.metadata.clear();
@@ -1436,11 +1432,7 @@ impl Server {
         self.pending_pulses.clear();
         self.reset_report_state();
         self.maintenance = maintenance::Maintenance::new(Instant::now());
-        self.state.selected = target;
-        self.state.target_status = None;
         self.synced = false;
-        self.state.ready = false;
-        self.state.consumer_ready = false;
         self.revision.fetch_add(1, Ordering::AcqRel);
         self.publish();
         Ok(())
@@ -1671,13 +1663,13 @@ mod tests {
         let mut state = Snapshot {
             adapter_state: AdapterState::Available,
             selected: Some(target.id.clone()),
-            targets: vec![target.clone()],
-            target_status: Some(target),
-            ready: true,
+            targets: vec![target],
             ..Default::default()
         };
         let (updates, received) = watch::channel(Snapshot::default());
         let mut manager = Coordinator::default();
+        manager.connect(&state, "ipad".into(), Instant::now());
+        state.ready = true;
         // refresh() rebuilds native targets before notify() publishes Sending.
         for activity in [
             TransportActivity::Idle,
@@ -1686,11 +1678,10 @@ mod tests {
         ] {
             state.activity = activity;
             state.targets[0].connection = Connection::Disconnected;
-            state.target_status.as_mut().unwrap().connection = Connection::Disconnected;
             publish_snapshot(&updates, &mut state, &mut manager);
             assert!(received.borrow().ready);
             assert_eq!(
-                received.borrow().target_status.as_ref().unwrap().connection,
+                received.borrow().selected_target().unwrap().connection,
                 Connection::Connected,
                 "ready Tap publication must not say paired/disconnected"
             );
@@ -1700,13 +1691,13 @@ mod tests {
         publish_snapshot(&updates, &mut state, &mut manager);
         assert!(!received.borrow().ready);
         assert_eq!(
-            received.borrow().target_status.as_ref().unwrap().connection,
+            received.borrow().selected_target().unwrap().connection,
             Connection::Failed
         );
         state.adapter_state = AdapterState::Disabled;
         publish_snapshot(&updates, &mut state, &mut manager);
         assert_eq!(
-            received.borrow().target_status.as_ref().unwrap().connection,
+            received.borrow().selected_target().unwrap().connection,
             Connection::Disconnected
         );
     }

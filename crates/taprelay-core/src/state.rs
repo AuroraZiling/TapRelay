@@ -168,7 +168,6 @@ pub struct Snapshot {
     pub discovery: crate::devices::DiscoveryState,
     pub pairing_handoff: crate::devices::PairingHandoff,
     pub device_error: Option<crate::devices::DeviceError>,
-    pub connection_capability: crate::devices::ConnectionCapability,
     pub activity: TransportActivity,
     pub adapter: bool,
     pub peripheral: bool,
@@ -176,13 +175,18 @@ pub struct Snapshot {
     pub broadcasting: bool,
     pub targets: Vec<Target>,
     pub selected: Option<String>,
-    pub target_status: Option<Target>,
     pub ready: bool,
-    /// The three report subscriptions are tracked independently. `ready`
-    /// remains the media/Consumer readiness used by the diagnostics flow.
-    pub consumer_ready: bool,
     pub hid_suspended: bool,
     pub generation: u64,
     pub input: bool,
     pub last_error: Option<String>,
+}
+
+impl Snapshot {
+    pub fn selected_target(&self) -> Option<&Target> {
+        let selected = self.selected.as_deref()?;
+        self.targets
+            .iter()
+            .find(|target| target.matches_id(selected))
+    }
 }

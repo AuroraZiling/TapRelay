@@ -72,9 +72,6 @@ impl FunctionId {
     }
 }
 
-/// A tap and its optional long press share one shortcut because they share one
-/// physical key: the app, not the receiver, decides which gesture the user
-/// meant.
 pub const FUNCTION_CATALOG: [FunctionDefinition; 4] = [
     FunctionDefinition {
         id: FunctionId::MediaPlayPause,

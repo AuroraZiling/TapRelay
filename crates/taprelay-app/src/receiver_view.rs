@@ -34,10 +34,7 @@ pub fn page_status_key(state: &Snapshot) -> &'static str {
     }
     if let Some(error) = state.device_error {
         return match error {
-            DeviceError::DiscoveryFailed => keys::RECEIVER_SCAN_FAILED,
             DeviceError::ConnectionFailed => keys::RECEIVER_CONNECT_FAILED,
-            DeviceError::Disconnected => keys::RECEIVER_DISCONNECTED,
-            DeviceError::BluetoothOff => keys::RECEIVER_ADAPTER_OFF,
             DeviceError::PairingLaunchFailed => keys::RECEIVER_PAIR_FAILED,
         };
     }
@@ -63,7 +60,7 @@ pub fn session_status_key(state: &Snapshot) -> &'static str {
     if state.pairing_handoff == PairingHandoff::WaitingForOS {
         return keys::RECEIVER_WAIT_PAIRING;
     }
-    let Some(target) = &state.target_status else {
+    let Some(target) = state.selected_target() else {
         return keys::RECEIVER_DEVICE_MISSING;
     };
     match target.connection {
@@ -72,11 +69,9 @@ pub fn session_status_key(state: &Snapshot) -> &'static str {
         }
         Connection::Disconnected if target.pairing == Knowledge::No => keys::RECEIVER_UNPAIRED,
         Connection::Disconnected => keys::RECEIVER_PAIRED_DISCONNECTED,
-        Connection::Connecting => keys::RECEIVER_CONNECTING,
         Connection::AwaitingHostSubscription => keys::RECEIVER_WAIT_SUBSCRIPTION,
         Connection::Synchronizing => keys::RECEIVER_SYNCHRONIZING,
         Connection::Connected => keys::RECEIVER_READY,
-        Connection::Disconnecting => keys::RECEIVER_DISCONNECTING,
         Connection::Failed => keys::RECEIVER_CONNECT_FAILED,
     }
 }
@@ -88,9 +83,7 @@ pub fn row(target: &Target, state: &Snapshot, tr: impl Fn(&'static str) -> Strin
         .is_some_and(|id| target.matches_id(id));
     let (action, label) = if selected {
         ("disconnect-device", keys::RECEIVER_DISCONNECT)
-    } else if target.subscribed == Knowledge::Yes
-        || state.connection_capability == ConnectionCapability::Native
-    {
+    } else if target.subscribed == Knowledge::Yes {
         ("device", keys::RECEIVER_CONNECT)
     } else if target.pairing == Knowledge::No {
         ("pair-device", keys::RECEIVER_PAIR)
@@ -104,11 +97,9 @@ pub fn row(target: &Target, state: &Snapshot, tr: impl Fn(&'static str) -> Strin
         keys::RECEIVER_DEVICE_MISSING
     } else {
         match target.connection {
-            Connection::Connecting => keys::RECEIVER_CONNECTING,
             Connection::AwaitingHostSubscription => keys::RECEIVER_HOST_HINT,
             Connection::Synchronizing => keys::RECEIVER_SYNCHRONIZING,
             Connection::Connected => keys::RECEIVER_READY,
-            Connection::Disconnecting => keys::RECEIVER_DISCONNECTING,
             Connection::Failed => keys::RECEIVER_CONNECT_FAILED,
             Connection::Disconnected if target.link == Knowledge::Yes => keys::RECEIVER_LINKED,
             Connection::Disconnected => match target.pairing {
@@ -130,9 +121,7 @@ pub fn row(target: &Target, state: &Snapshot, tr: impl Fn(&'static str) -> Strin
         device_kind: device_kind(target.kind).into(),
         status: match target.connection {
             Connection::Connected => "ready",
-            Connection::Connecting | Connection::Synchronizing | Connection::Disconnecting => {
-                "busy"
-            }
+            Connection::Synchronizing => "busy",
             Connection::Failed => "failed",
             _ if target.availability == Availability::Unavailable => "unavailable",
             _ if target.link == Knowledge::Yes => "linked",
@@ -148,10 +137,7 @@ pub fn row(target: &Target, state: &Snapshot, tr: impl Fn(&'static str) -> Strin
             || (!action.is_empty()
                 && state.adapter_state == AdapterState::Available
                 && target.availability != Availability::Unavailable
-                && !matches!(
-                    target.connection,
-                    Connection::Connecting | Connection::Synchronizing | Connection::Disconnecting
-                )),
+                && !matches!(target.connection, Connection::Synchronizing)),
         paired: target.pairing == Knowledge::Yes,
     }
 }
@@ -219,7 +205,7 @@ mod tests {
         state.selected = Some("stable".into());
         target.connection = Connection::Connected;
         assert_eq!(project(&target, &state).action, "disconnect-device");
-        target.connection = Connection::Connecting;
+        target.connection = Connection::Synchronizing;
         assert!(project(&target, &state).enabled);
         state.adapter_state = AdapterState::Disabled;
         assert!(project(&target, &state).enabled);

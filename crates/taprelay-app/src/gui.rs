@@ -998,7 +998,7 @@ impl Controller {
                     .collect::<Vec<_>>(),
             )));
         }
-        let target = s.target_status.as_ref();
+        let target = s.selected_target();
         let (key, stage) = if self.recovering && failure.is_none() {
             ("prepare", self.tr(keys::RECEIVER_PREPARING))
         } else if self.fatal.is_some()
@@ -1039,9 +1039,7 @@ impl Controller {
             2
         });
         ui.set_device_name(
-            s.target_status
-                .as_ref()
-                .filter(|_| s.selected.is_some())
+            s.selected_target()
                 .map(|t| t.name.as_str())
                 .unwrap_or(self.tr(keys::RECEIVER_NONE))
                 .into(),

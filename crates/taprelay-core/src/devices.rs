@@ -1,4 +1,3 @@
-//! Receiver lifecycle policy. No native handles, UI strings, or Bluetooth trust logic.
 use crate::state::{Knowledge, Snapshot, Target, upsert_target};
 use serde::Serialize;
 use std::time::{Duration, Instant};
@@ -28,11 +27,9 @@ states!(Availability {
 });
 states!(Connection {
     Disconnected,
-    Connecting,
     AwaitingHostSubscription,
     Synchronizing,
     Connected,
-    Disconnecting,
     Failed
 });
 states!(PairingHandoff {
@@ -42,15 +39,8 @@ states!(PairingHandoff {
     StillUnpaired,
     TargetUnavailable
 });
-states!(ConnectionCapability {
-    HostInitiated,
-    Native
-});
 states!(DeviceError {
-    DiscoveryFailed,
     ConnectionFailed,
-    Disconnected,
-    BluetoothOff,
     PairingLaunchFailed
 });
 
@@ -81,18 +71,23 @@ impl Inventory {
     }
 }
 
+#[derive(Clone, Copy, Default)]
+enum SessionState {
+    #[default]
+    Idle,
+    Connecting {
+        deadline: Instant,
+    },
+    Connected,
+    Interrupted,
+}
+
 #[derive(Default)]
 pub struct Coordinator {
     pairing: Option<(Target, Instant)>,
-    selected: Option<String>,
-    deadline: Option<Instant>,
-    was_ready: bool,
-    suppressed: bool,
+    session: SessionState,
 }
 impl Coordinator {
-    pub fn pairing_pending(&self) -> bool {
-        self.pairing.is_some()
-    }
     pub fn pair(&mut self, target: Target, now: Instant) -> bool {
         if self
             .pairing
@@ -101,66 +96,62 @@ impl Coordinator {
         {
             return false;
         }
-        self.deadline = None;
+        self.session = SessionState::Interrupted;
         self.pairing = Some((target, now + Duration::from_secs(120)));
         true
     }
     pub fn cancel_pairing(&mut self) {
         self.pairing = None;
     }
-    pub fn connect(&mut self, id: String, now: Instant) -> bool {
-        if self.selected.as_ref() == Some(&id)
-            && !self.suppressed
-            && (self.deadline.is_some() || self.was_ready || self.pairing.is_some())
+    pub fn connect(&mut self, state: &Snapshot, id: String, now: Instant) -> bool {
+        if state.selected.as_ref() == Some(&id)
+            && (state.ready
+                || matches!(
+                    self.session,
+                    SessionState::Connecting { .. } | SessionState::Connected
+                )
+                || self.pairing.is_some())
         {
             return false;
         }
-        self.selected = Some(id);
         self.pairing = None;
-        self.suppressed = false;
-        self.was_ready = false;
-        self.deadline = Some(now + Duration::from_secs(30));
+        self.session = SessionState::Connecting {
+            deadline: now + Duration::from_secs(30),
+        };
         true
     }
     pub fn disconnect(&mut self) {
-        self.suppressed = true;
-        self.deadline = None;
         self.pairing = None;
-        self.was_ready = false;
-        self.selected = None;
-    }
-    /// Clear the transient selection after the native session disappears.
-    pub fn clear_selection(&mut self) {
-        self.pairing = None;
-        self.selected = None;
-        self.deadline = None;
-        self.was_ready = false;
-        self.suppressed = false;
+        self.session = SessionState::Idle;
     }
     pub fn reconcile(&mut self, state: &mut Snapshot, now: Instant) {
         if state.adapter_state != AdapterState::Available {
             state.discovery = DiscoveryState::Idle;
             state.ready = false;
-            self.deadline = None;
-            if state.adapter_state == AdapterState::Disabled {
-                state.device_error = Some(DeviceError::BluetoothOff);
-            }
-        } else if state.device_error == Some(DeviceError::BluetoothOff) {
             state.device_error = None;
+            if !matches!(self.session, SessionState::Idle) {
+                self.session = SessionState::Interrupted;
+            }
         }
-        if self.suppressed {
+        if state.selected.is_none() {
+            self.session = SessionState::Idle;
+        }
+        if matches!(self.session, SessionState::Idle) {
             state.ready = false;
         }
         // Readiness is transient (including HID suspension). Keep the user's
         // target so a returning subscription can synchronize automatically.
         if state.ready {
-            self.deadline = None;
+            self.session = SessionState::Connected;
             state.device_error = None;
-        } else if self.deadline.is_some_and(|due| now >= due) {
-            self.deadline = None;
+        } else if let SessionState::Connecting { deadline } = self.session
+            && now >= deadline
+        {
+            self.session = SessionState::Interrupted;
             state.device_error = Some(DeviceError::ConnectionFailed);
+        } else if matches!(self.session, SessionState::Connected) {
+            self.session = SessionState::Interrupted;
         }
-        self.was_ready = state.ready;
         if let Some((target, due)) = &self.pairing {
             let observed = state.targets.iter().find(|t| t.same_device(target));
             state.pairing_handoff = if observed.is_some_and(|t| t.pairing == Knowledge::Yes) {
@@ -178,7 +169,9 @@ impl Coordinator {
                 self.pairing = None;
                 if state.pairing_handoff == PairingHandoff::ConfirmedPaired {
                     state.device_error = None;
-                    self.deadline = Some(now + Duration::from_secs(30));
+                    self.session = SessionState::Connecting {
+                        deadline: now + Duration::from_secs(30),
+                    };
                 }
             }
         }
@@ -187,7 +180,7 @@ impl Coordinator {
                 .selected
                 .as_ref()
                 .is_some_and(|id| target.matches_id(id));
-            target.connection = if !selected || self.suppressed {
+            target.connection = if !selected || matches!(self.session, SessionState::Idle) {
                 Connection::Disconnected
             } else if state.ready {
                 Connection::Connected
@@ -199,10 +192,6 @@ impl Coordinator {
                 Connection::Failed
             } else if target.subscribed == Knowledge::Yes {
                 Connection::Synchronizing
-            } else if state.connection_capability == ConnectionCapability::Native
-                && self.deadline.is_some()
-            {
-                Connection::Connecting
             } else {
                 Connection::AwaitingHostSubscription
             };
@@ -210,32 +199,24 @@ impl Coordinator {
         state
             .targets
             .sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
-        if let Some(id) = &state.selected
-            && let Some(t) = state.targets.iter().find(|t| t.matches_id(id))
-        {
-            state.target_status = Some(t.clone());
-        }
     }
 }
 
 pub fn receiver_next_allowed(state: &Snapshot) -> bool {
     state.ready
         && state
-            .target_status
-            .as_ref()
+            .selected_target()
             .is_some_and(|t| t.connection == Connection::Connected)
 }
 
 /// A dead worker must not leave an old selection, connected card, or readiness behind.
 pub fn revoke_session(state: &mut Snapshot) {
     state.ready = false;
-    state.consumer_ready = false;
     state.device_error = Some(DeviceError::ConnectionFailed);
     for target in &mut state.targets {
         target.connection = Connection::Disconnected;
     }
     state.selected = None;
-    state.target_status = None;
 }
 
 #[cfg(test)]
@@ -326,8 +307,7 @@ mod tests {
         let state = Snapshot {
             adapter_state: AdapterState::Available,
             selected: Some(target.id.clone()),
-            targets: vec![target.clone()],
-            target_status: Some(target),
+            targets: vec![target],
             ready: true,
             ..Default::default()
         };
@@ -349,12 +329,12 @@ mod tests {
         let mut state = Snapshot {
             adapter_state: AdapterState::Available,
             selected: Some(target.id.clone()),
-            targets: vec![target.clone()],
-            target_status: Some(target),
-            ready: true,
+            targets: vec![target],
             ..Default::default()
         };
         let mut manager = Coordinator::default();
+        manager.connect(&state, "ipad".into(), now);
+        state.ready = true;
         manager.reconcile(&mut state, now);
 
         state.ready = false;
@@ -386,7 +366,7 @@ mod tests {
         target.link = Knowledge::Yes;
         target.subscribed = Knowledge::Yes;
         let mut state = snapshot(target);
-        manager.connect("one".into(), now);
+        manager.connect(&state, "one".into(), now);
         manager.reconcile(&mut state, now);
         assert_eq!(state.targets[0].connection, Connection::Synchronizing);
         state.ready = true;
@@ -395,12 +375,11 @@ mod tests {
         assert!(receiver_next_allowed(&state));
     }
     #[test]
-    fn pairing_native_connection_subscription_and_sync_are_distinct() {
+    fn pairing_subscription_and_sync_are_distinct() {
         let now = Instant::now();
         let mut manager = Coordinator::default();
         let mut state = snapshot(target("one", Knowledge::No));
-        state.connection_capability = ConnectionCapability::Native;
-        manager.connect("one".into(), now);
+        manager.connect(&state, "one".into(), now);
         assert!(manager.pair(state.targets[0].clone(), now));
         assert!(!manager.pair(state.targets[0].clone(), now));
         manager.reconcile(&mut state, now);
@@ -408,7 +387,10 @@ mod tests {
         state.targets[0].pairing = Knowledge::Yes;
         manager.reconcile(&mut state, now);
         assert_eq!(state.pairing_handoff, PairingHandoff::ConfirmedPaired);
-        assert_eq!(state.targets[0].connection, Connection::Connecting);
+        assert_eq!(
+            state.targets[0].connection,
+            Connection::AwaitingHostSubscription
+        );
         assert!(!receiver_next_allowed(&state));
         state.targets[0].subscribed = Knowledge::Yes;
         manager.reconcile(&mut state, now);
@@ -424,8 +406,8 @@ mod tests {
         let now = Instant::now();
         let mut manager = Coordinator::default();
         let mut state = snapshot(target("one", Knowledge::Yes));
-        assert!(manager.connect("one".into(), now));
-        assert!(!manager.connect("one".into(), now));
+        assert!(manager.connect(&state, "one".into(), now));
+        assert!(!manager.connect(&state, "one".into(), now));
         manager.reconcile(&mut state, now);
         assert_eq!(
             state.targets[0].connection,
@@ -434,7 +416,7 @@ mod tests {
         manager.reconcile(&mut state, now + Duration::from_secs(30));
         assert_eq!(state.targets[0].connection, Connection::Failed);
         assert_eq!(state.device_error, Some(DeviceError::ConnectionFailed));
-        assert!(manager.connect("one".into(), now + Duration::from_secs(31)));
+        assert!(manager.connect(&state, "one".into(), now + Duration::from_secs(31)));
     }
     #[test]
     fn pairing_timeout_never_claims_success() {
@@ -442,6 +424,8 @@ mod tests {
         let mut manager = Coordinator::default();
         let mut state = snapshot(target("one", Knowledge::No));
         manager.pair(state.targets[0].clone(), now);
+        manager.reconcile(&mut state, now + Duration::from_secs(30));
+        assert_eq!(state.device_error, None);
         manager.reconcile(&mut state, now + Duration::from_secs(120));
         assert_eq!(state.pairing_handoff, PairingHandoff::StillUnpaired);
         manager.pair(state.targets[0].clone(), now);
@@ -455,7 +439,7 @@ mod tests {
         let mut manager = Coordinator::default();
         let mut state = snapshot(target("one", Knowledge::Yes));
         state.discovery = DiscoveryState::Scanning;
-        manager.connect("one".into(), now);
+        manager.connect(&state, "one".into(), now);
         state.adapter_state = AdapterState::Disabled;
         state.ready = true;
         manager.reconcile(&mut state, now);
@@ -463,7 +447,7 @@ mod tests {
         assert!(!receiver_next_allowed(&state));
         assert_eq!(state.discovery, DiscoveryState::Idle);
         manager.reconcile(&mut state, now + Duration::from_secs(60));
-        assert_eq!(state.device_error, Some(DeviceError::BluetoothOff));
+        assert_eq!(state.device_error, None);
     }
     #[test]
     fn disappearance_and_live_subscription_have_separate_membership() {
@@ -471,6 +455,7 @@ mod tests {
         let mut manager = Coordinator::default();
         let mut state = snapshot(target("one", Knowledge::Yes));
         state.targets[0].subscribed = Knowledge::Yes;
+        manager.connect(&state, "one".into(), now);
         state.ready = true;
         manager.reconcile(&mut state, now);
         state.ready = false;
@@ -485,6 +470,7 @@ mod tests {
         let now = Instant::now();
         let mut manager = Coordinator::default();
         let mut state = snapshot(target("one", Knowledge::Yes));
+        manager.connect(&state, "one".into(), now);
         state.ready = true;
         manager.reconcile(&mut state, now);
         manager.disconnect();
@@ -493,6 +479,6 @@ mod tests {
             manager.reconcile(&mut state, now + Duration::from_secs(seconds));
             assert!(!state.ready);
         }
-        assert!(manager.connect("one".into(), now));
+        assert!(manager.connect(&state, "one".into(), now));
     }
 }

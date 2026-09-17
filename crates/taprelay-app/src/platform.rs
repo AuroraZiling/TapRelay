@@ -201,6 +201,6 @@ mod tests {
         let state = poll_snapshot(&mut rx).unwrap();
         assert_eq!(state.last_error.as_deref(), Some("Apartment failed"));
         assert!(!state.ready && !state.service);
-        assert!(state.selected.is_none() && state.target_status.is_none());
+        assert!(state.selected.is_none() && state.selected_target().is_none());
     }
 }

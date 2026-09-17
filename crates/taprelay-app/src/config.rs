@@ -87,16 +87,31 @@ impl Theme {
         }
     }
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Language {
     System,
     Chinese,
     English,
+    Locale(String),
 }
 impl Language {
-    /// Decodes the same names the config file persists.
+    pub fn locale(&self) -> &'static str {
+        match self {
+            Self::Chinese => "zh-cn",
+            Self::English => "en",
+            Self::Locale(id) => crate::i18n::resolve(id).unwrap_or(crate::i18n::locale::SOURCE),
+            Self::System => crate::i18n::locale::SOURCE,
+        }
+    }
     pub fn from_name(name: &str) -> Option<Self> {
+        if let Some(id) = crate::i18n::resolve(name) {
+            return match id {
+                "en" => Some(Self::English),
+                "zh-cn" => Some(Self::Chinese),
+                _ => Some(Self::Locale(id.to_owned())),
+            };
+        }
         match name {
             "system" => Some(Self::System),
             "chinese" => Some(Self::Chinese),
@@ -319,14 +334,21 @@ mod tests {
             ("chinese", Language::Chinese),
             ("english", Language::English),
         ] {
-            assert_eq!(Language::from_name(name), Some(language));
+            assert_eq!(Language::from_name(name), Some(language.clone()));
             assert_eq!(
-                serde_json::to_value(language).unwrap(),
+                serde_json::to_value(&language).unwrap(),
                 serde_json::json!(name)
             );
         }
         assert_eq!(Theme::from_name("Dark"), None);
         assert_eq!(Language::from_name(""), None);
+    }
+
+    #[test]
+    fn locale_identifiers_select_the_matching_catalog() {
+        assert_eq!(Language::from_name("zh-CN"), Some(Language::Chinese));
+        assert_eq!(Language::from_name("en"), Some(Language::English));
+        assert_eq!(Language::from_name("de"), None);
     }
 
     #[test]

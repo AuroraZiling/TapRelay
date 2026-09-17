@@ -4,7 +4,7 @@ use std::{
 };
 
 #[path = "build/i18n.rs"]
-mod translations;
+mod i18n;
 
 fn main() {
     let version = std::env::var("TAPRELAY_VERSION")
@@ -13,7 +13,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=TAPRELAY_VERSION");
     println!("cargo:rustc-env=TAPRELAY_VERSION={version}");
 
-    let i18n = translations::generate();
+    let i18n = i18n::generate();
     let lucide = PathBuf::from(lucide_slint::lib());
     // FlexboxLayout is the native wrapping layout used by the bindings page.
     unsafe {

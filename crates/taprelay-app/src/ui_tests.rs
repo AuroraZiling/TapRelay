@@ -1,7 +1,7 @@
 //! Headless view validation only: no native window, permissions, input hooks or Bluetooth.
 use crate::*;
 use i_slint_backend_testing::{ElementHandle, ElementRoot};
-use slint::{ComponentHandle, ModelRc, VecModel, platform::WindowAdapter};
+use slint::{ComponentHandle, Model, ModelRc, VecModel, platform::WindowAdapter};
 
 fn set_function_bindings(ui: &AppWindow, rows: Vec<FunctionBindingRow>) {
     ui.global::<BindingUi>()
@@ -106,15 +106,25 @@ fn render_all_views_without_hardware() {
             state: 0,
         },
     ])));
+    ui.set_language_options(i18n::language_options("en"));
     ui.set_data_directory("D:\\Apps\\TapRelay".into());
     ui.set_app_version(version::VERSION.into());
     let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/gui-previews");
     std::fs::create_dir_all(&out).unwrap();
-    for (suffix, zh, dark, width, height) in [
-        ("en-dark", false, true, 1000., 700.),
-        ("zh-light", true, false, 800., 560.),
+    for (suffix, locale, dark, width, height) in [
+        ("en-dark", "en", true, 1000., 700.),
+        ("zh-light", "zh-cn", false, 800., 560.),
     ] {
-        i18n::apply(&ui, zh);
+        i18n::apply(&ui, locale);
+        // The selector is compiled from the locale registry, and the catalog Slint
+        // renders must follow the locale that was installed.
+        assert_eq!(ui.get_language_options().row_count(), 3);
+        let global = ui.global::<I18n>();
+        assert_eq!(global.get_locale(), locale);
+        assert_eq!(
+            global.get_text().nav_overview,
+            i18n::text(locale, i18n::keys::NAV_OVERVIEW)
+        );
         ui.global::<Theme>().set_mode(if dark {
             ThemeMode::Dark
         } else {
@@ -295,7 +305,7 @@ fn render_all_views_without_hardware() {
         let rows: Vec<_> = state
             .targets
             .iter()
-            .map(|t| receiver_view::row(t, &state, |key| i18n::text(false, key).into()))
+            .map(|t| receiver_view::row(t, &state, |key| i18n::text("en", key)))
             .collect();
         ui.set_paired_devices(ModelRc::new(VecModel::from(
             rows.iter()
@@ -303,13 +313,13 @@ fn render_all_views_without_hardware() {
                 .cloned()
                 .collect::<Vec<_>>(),
         )));
-        ui.set_adapter_label(i18n::text(false, receiver_view::adapter_label_key(adapter)).into());
+        ui.set_adapter_label(i18n::text("en", receiver_view::adapter_label_key(adapter)).into());
         ui.set_bluetooth_available(adapter == AdapterState::Available);
-        ui.set_discovery_status(i18n::text(false, receiver_view::page_status_key(&state)).into());
+        ui.set_discovery_status(i18n::text("en", receiver_view::page_status_key(&state)).into());
         ui.set_scanning(discovery == DiscoveryState::Scanning);
         ui.set_receiver_next_allowed(receiver_next_allowed(&state));
         assert_eq!(ui.get_receiver_next_allowed(), name == "connected");
-        i18n::apply(&ui, false);
+        i18n::apply(&ui, "en");
         i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(100));
         let shot = ui.window().take_snapshot().unwrap();
         let mut bytes = format!("P6\n{} {}\n255\n", shot.width(), shot.height()).into_bytes();
@@ -459,7 +469,7 @@ fn render_all_views_without_hardware() {
         "An empty slot must receive Escape without an extra click"
     );
     // Exercise real pointer routing through the tooltip wrapper, not just callback invocation.
-    i18n::apply(&ui, false);
+    i18n::apply(&ui, "en");
     ui.set_mode(2);
     ui.set_page(0);
     ui.window().set_size(slint::LogicalSize::new(1000., 700.));
@@ -625,13 +635,13 @@ fn preview_function_layouts(ui: &AppWindow, out: &std::path::Path) {
     use taprelay_core::function::FUNCTION_CATALOG;
     set_binding_capture(ui, "", -1, "", "");
     ui.set_problem("".into());
-    for (suffix, zh, dark, width, height) in [
-        ("zh-dark-min", true, true, 900., 500.),
-        ("en-light-min", false, false, 900., 500.),
-        ("zh-light", true, false, 1120., 700.),
-        ("en-dark", false, true, 1120., 700.),
+    for (suffix, locale, dark, width, height) in [
+        ("zh-dark-min", "zh-cn", true, 900., 500.),
+        ("en-light-min", "en", false, 900., 500.),
+        ("zh-light", "zh-cn", false, 1120., 700.),
+        ("en-dark", "en", true, 1120., 700.),
     ] {
-        i18n::apply(ui, zh);
+        i18n::apply(ui, locale);
         ui.global::<Theme>().set_mode(if dark {
             ThemeMode::Dark
         } else {
@@ -643,16 +653,16 @@ fn preview_function_layouts(ui: &AppWindow, out: &std::path::Path) {
             .enumerate()
             .map(|(i, d)| FunctionBindingRow {
                 id: d.id.stable_id().into(),
-                label: i18n::text(zh, d.name_key).into(),
+                label: i18n::text(locale, d.name_key).into(),
                 gestures: ModelRc::new(VecModel::from({
                     let mut gestures = vec![GestureAction {
-                        gesture: i18n::text(zh, "bindings.gesture.press").into(),
-                        action: i18n::text(zh, d.tap_action.name_key()).into(),
+                        gesture: i18n::text(locale, "bindings.gesture.press").into(),
+                        action: i18n::text(locale, d.tap_action.name_key()).into(),
                     }];
                     if let Some(hold) = d.hold_action {
                         gestures.push(GestureAction {
-                            gesture: i18n::text(zh, "bindings.gesture.hold").into(),
-                            action: i18n::text(zh, hold.name_key()).into(),
+                            gesture: i18n::text(locale, "bindings.gesture.hold").into(),
+                            action: i18n::text(locale, hold.name_key()).into(),
                         });
                     }
                     gestures
@@ -838,12 +848,12 @@ fn preview_fixed_overview(ui: &AppWindow, out: &std::path::Path) {
             })
             .collect::<Vec<_>>(),
     )));
-    for (name, zh, height) in [
-        ("zh-min", true, 500.),
-        ("en-min", false, 500.),
-        ("zh-tall", true, 700.),
+    for (name, locale, height) in [
+        ("zh-min", "zh-cn", 500.),
+        ("en-min", "en", 500.),
+        ("zh-tall", "zh-cn", 700.),
     ] {
-        i18n::apply(ui, zh);
+        i18n::apply(ui, locale);
         ui.set_problem("Bluetooth service unavailable".into());
         ui.window().set_size(slint::LogicalSize::new(900., height));
         let _ = ui.window().take_snapshot().unwrap();

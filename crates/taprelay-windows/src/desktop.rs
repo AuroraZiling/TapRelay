@@ -339,12 +339,17 @@ pub fn system_dark() -> bool {
         value == 0
     }
 }
-pub fn system_chinese() -> bool {
+pub fn system_locale_id() -> Option<String> {
     unsafe {
+        // LOCALE_NAME_MAX_LENGTH, which GetUserDefaultLocaleName never exceeds.
         let mut locale = [0u16; 85];
         let len = windows::Win32::Globalization::GetUserDefaultLocaleName(&mut locale);
-        len > 2
-            && String::from_utf16_lossy(&locale[..len.saturating_sub(1) as usize]).starts_with("zh")
+        if len <= 1 {
+            return None;
+        }
+        Some(String::from_utf16_lossy(
+            &locale[..len.saturating_sub(1) as usize],
+        ))
     }
 }
 pub fn set_autostart(enabled: bool) -> windows::core::Result<()> {

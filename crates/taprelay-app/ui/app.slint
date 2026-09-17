@@ -12,8 +12,8 @@ import { OverviewPage } from "pages/overview.slint";
 import { FunctionBindingsPage } from "pages/bindings.slint";
 import { DevicesPage } from "pages/devices.slint";
 import { ReceiverActions } from "components/receiver-actions.slint";
-import { SettingsPage } from "pages/settings.slint";
-export { Theme, ThemeMode, I18n, TranslationText, BindingCaptureState, BindingUi, BindingRow, DeviceRow, CheckRow, FunctionBindingRow, GestureAction, ShortcutItem, RelayStatus }
+import { ChoiceOption, SettingsPage } from "pages/settings.slint";
+export { Theme, ThemeMode, I18n, TranslationText, BindingCaptureState, BindingUi, BindingRow, DeviceRow, CheckRow, FunctionBindingRow, GestureAction, ShortcutItem, RelayStatus, ChoiceOption }
 
 export component AppWindow inherits Window {
     title: "TapRelay";
@@ -63,6 +63,7 @@ export component AppWindow inherits Window {
     in-out property <bool> connection-wait-warning;
     in property <int> theme-choice;
     in property <int> language-choice;
+    in property <[ChoiceOption]> language-options;
     callback action(string, string);
     property <color> signal: root.state-color == 0 ? Tokens.color-success : root.state-color == 1 ? Tokens.color-muted-foreground : root.state-color == 2 ? Tokens.color-warning : Tokens.color-destructive;
     property <RelayStatus> relay-status: {
@@ -165,6 +166,7 @@ export component AppWindow inherits Window {
                     data-directory: root.data-directory;
                     elevated: root.elevated;
                     language-choice: root.language-choice;
+                    language-options: root.language-options;
                     notifications <=> root.notifications;
                     connection-wait-warning <=> root.connection-wait-warning;
                     start-hidden <=> root.start-hidden;

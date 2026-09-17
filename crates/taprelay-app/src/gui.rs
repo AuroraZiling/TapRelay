@@ -105,12 +105,11 @@ pub fn run() -> Result<()> {
         account_admin = status.account_admin,
         "TapRelay started"
     );
-    let chinese = match config.options.language {
-        Language::Chinese => true,
-        Language::English => false,
-        Language::System => desktop::system_chinese(),
+    let locale = match config.options.language {
+        Language::System => i18n::system_locale(),
+        ref selected => selected.locale(),
     };
-    let desktop = Desktop::new(i18n::tray_labels(chinese))?;
+    let desktop = Desktop::new(i18n::tray_labels(locale))?;
     let size = &config.window;
     if let (Some(x), Some(y)) = (size.x, size.y)
         && desktop::visible_position(x, y)
@@ -396,13 +395,13 @@ struct Controller {
     previous_devices: Option<(
         Vec<Target>,
         Option<String>,
-        bool,
+        &'static str,
         taprelay_core::devices::AdapterState,
     )>,
-    previous_bindings: Option<(u64, bool, usize)>,
-    previous_checks: Option<([bool; 4], bool, bool)>,
+    previous_bindings: Option<(u64, &'static str, usize)>,
+    previous_checks: Option<([bool; 4], bool, &'static str)>,
     system_theme: bool,
-    system_language: bool,
+    system_language: Option<String>,
     last_system_poll: Instant,
     last_ui_sync: Instant,
     last_dropped_logs: usize,
@@ -448,22 +447,25 @@ impl Controller {
             previous_bindings: None,
             previous_checks: None,
             system_theme: desktop::system_dark(),
-            system_language: desktop::system_chinese(),
+            system_language: desktop::system_locale_id(),
             last_system_poll: now,
             last_ui_sync: now,
             last_dropped_logs: 0,
             persisted_remembered_device,
         })
     }
-    fn zh(&self) -> bool {
-        match self.runtime.config.options.language {
-            Language::Chinese => true,
-            Language::English => false,
-            Language::System => self.system_language,
+    fn locale(&self) -> &'static str {
+        match &self.runtime.config.options.language {
+            Language::System => self
+                .system_language
+                .as_deref()
+                .and_then(i18n::resolve)
+                .unwrap_or(i18n::locale::SOURCE),
+            selected => selected.locale(),
         }
     }
-    fn tr<'a>(&self, key: &'a str) -> &'a str {
-        i18n::text(self.zh(), key)
+    fn tr(&self, key: &str) -> String {
+        i18n::text(self.locale(), key)
     }
     fn say(&mut self, message: String) {
         self.toast = message;
@@ -591,7 +593,7 @@ impl Controller {
                     self.flush(true);
                     if !self.runtime.config.options.close_hint_seen {
                         self.desktop
-                            .notify("TapRelay", self.tr(keys::TRAY_CLOSE_HINT));
+                            .notify("TapRelay", &self.tr(keys::TRAY_CLOSE_HINT));
                         self.runtime.config.options.close_hint_seen = true;
                         self.saves.changed();
                     }
@@ -768,7 +770,7 @@ impl Controller {
                 }
             } else if let Some(t) = self.runtime.learned.take() {
                 if !t.valid() {
-                    self.capture_error = self.tr(keys::CAPTURE_INVALID).into();
+                    self.capture_error = self.tr(keys::CAPTURE_INVALID);
                     tracing::debug!("Rejected invalid binding capture");
                 } else if let Some(CaptureTarget { id, slot }) = self.capture {
                     if let Some(conflict) = self.runtime.shortcut_conflict(id, slot, &t) {
@@ -808,11 +810,11 @@ impl Controller {
                         }
                     }
                 } else {
-                    self.capture_error = self.tr(keys::CAPTURE_INVALID).into();
+                    self.capture_error = self.tr(keys::CAPTURE_INVALID);
                 }
             } else if self.runtime.capture_invalid {
                 self.runtime.capture_invalid = false;
-                self.capture_error = self.tr(keys::CAPTURE_INVALID).into();
+                self.capture_error = self.tr(keys::CAPTURE_INVALID);
             }
         }
         if let Some(e) = self.runtime.error.take() {
@@ -865,7 +867,8 @@ impl Controller {
             warning_enabled,
             now,
         ) {
-            self.error(self.tr(keys::RECEIVER_TIMEOUT));
+            let message = self.tr(keys::RECEIVER_TIMEOUT);
+            self.error(&message);
         }
         self.flush(false);
         if !self.hidden || self.last_ui_sync.elapsed() >= Duration::from_secs(1) {
@@ -879,7 +882,7 @@ impl Controller {
                 ui.get_state_color() as u8,
                 &tip,
                 self.runtime.listening,
-                i18n::tray_labels(self.zh()),
+                i18n::tray_labels(self.locale()),
             );
             let dropped = self
                 .logs
@@ -901,11 +904,11 @@ impl Controller {
     fn sync(&mut self, ui: &AppWindow) {
         if self.last_system_poll.elapsed() >= Duration::from_secs(1) {
             self.system_theme = desktop::system_dark();
-            self.system_language = desktop::system_chinese();
+            self.system_language = desktop::system_locale_id();
             self.last_system_poll = Instant::now();
         }
-        let zh = self.zh();
-        i18n::apply(ui, zh);
+        let locale = self.locale();
+        i18n::apply(ui, locale);
         let o = &self.runtime.config.options;
         let dark = match o.theme {
             ThemeSetting::System => self.system_theme,
@@ -922,10 +925,15 @@ impl Controller {
             ThemeSetting::Light => 1,
             ThemeSetting::Dark => 2,
         });
+        ui.set_language_options(i18n::language_options(locale));
         ui.set_language_choice(match o.language {
             Language::System => 0,
-            Language::Chinese => 1,
-            Language::English => 2,
+            ref selected => {
+                1 + i18n::locale::all()
+                    .iter()
+                    .position(|compiled| compiled.id() == selected.locale())
+                    .unwrap_or_default() as i32
+            }
         });
         ui.set_auto_start(o.autostart);
         ui.set_auto_listen(o.auto_listen);
@@ -967,7 +975,7 @@ impl Controller {
                 (self.passed && !self.recovering && flags.iter().any(|v| !*v))
                     .then(|| self.tr(keys::RECEIVER_UNAVAILABLE).to_owned())
             })
-            .or_else(|| timeout.then(|| self.tr(keys::STARTUP_TIMEOUT).into()));
+            .or_else(|| timeout.then(|| self.tr(keys::STARTUP_TIMEOUT)));
         if self.fatal.is_some() {
             ui.set_mode(3);
         }
@@ -980,13 +988,13 @@ impl Controller {
             keys::CHECK_ADVERTISING,
         ]
         .map(|key| self.tr(key));
-        let checks_key = (flags, failure.is_some(), zh);
+        let checks_key = (flags, failure.is_some(), locale);
         if self.previous_checks != Some(checks_key) {
             self.previous_checks = Some(checks_key);
             ui.set_checks(ModelRc::new(VecModel::from(
                 (0..4)
                     .map(|i| CheckRow {
-                        title: names[i].into(),
+                        title: names[i].clone().into(),
                         state: if flags[i] {
                             2
                         } else if i == first {
@@ -1038,16 +1046,19 @@ impl Controller {
         } else {
             2
         });
+        let receiver_none = self.tr(keys::RECEIVER_NONE);
         ui.set_device_name(
             s.selected_target()
                 .map(|t| t.name.as_str())
-                .unwrap_or(self.tr(keys::RECEIVER_NONE))
+                .unwrap_or(&receiver_none)
                 .into(),
         );
         ui.set_diagnostics(format!("Adapter={} · Peripheral={} · Service={} · Advertising={}\nLink={:?} · Subscription={:?} · Input={}\n{}: {}",s.adapter,s.peripheral,s.service,s.broadcasting,target.map(|t|t.link),target.map(|t|t.subscribed),s.input,self.tr(keys::DIAGNOSTICS_INPUTS),self.runtime.matched).into());
         let keyboard_layout = crate::platform::keyboard_layout();
-        if self.previous_bindings != Some((self.runtime.bindings_revision, zh, keyboard_layout)) {
-            self.previous_bindings = Some((self.runtime.bindings_revision, zh, keyboard_layout));
+        if self.previous_bindings != Some((self.runtime.bindings_revision, locale, keyboard_layout))
+        {
+            self.previous_bindings =
+                Some((self.runtime.bindings_revision, locale, keyboard_layout));
             let mut rows = Vec::new();
             let mut summary = Vec::new();
             for definition in taprelay_core::function::FUNCTION_CATALOG {
@@ -1115,19 +1126,23 @@ impl Controller {
         if self
             .previous_devices
             .as_ref()
-            .is_none_or(|(targets, selected, locale, adapter)| {
+            .is_none_or(|(targets, selected, previous, adapter)| {
                 targets != &s.targets
                     || selected != &s.selected
-                    || *locale != zh
+                    || *previous != locale
                     || *adapter != s.adapter_state
             })
         {
-            self.previous_devices =
-                Some((s.targets.clone(), s.selected.clone(), zh, s.adapter_state));
+            self.previous_devices = Some((
+                s.targets.clone(),
+                s.selected.clone(),
+                locale,
+                s.adapter_state,
+            ));
             let rows: Vec<_> = s
                 .targets
                 .iter()
-                .map(|d| crate::receiver_view::row(d, s, |key| self.tr(key).to_owned()))
+                .map(|d| crate::receiver_view::row(d, s, |key| self.tr(key)))
                 .collect();
             ui.set_paired_devices(ModelRc::new(VecModel::from(
                 rows.iter()

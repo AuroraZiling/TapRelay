@@ -11,6 +11,8 @@ struct ChoiceOption {
     value: string,
 }
 
+export { ChoiceOption }
+
 component Section inherits VerticalLayout {
     in property <string> title;
     in property <string> badge;
@@ -46,6 +48,7 @@ export component SettingsPage inherits ScrollArea {
     in property <string> data-directory;
     in property <bool> elevated;
     in property <int> language-choice;
+    in property <[ChoiceOption]> language-options;
     in-out property <bool> notifications;
     in-out property <bool> connection-wait-warning;
     in-out property <bool> start-hidden;
@@ -55,11 +58,6 @@ export component SettingsPage inherits ScrollArea {
         { label: I18n.text.theme-system, value: "system" },
         { label: I18n.text.theme-light, value: "light" },
         { label: I18n.text.theme-dark, value: "dark" },
-    ];
-    property <[ChoiceOption]> language-options: [
-        { label: I18n.text.language-system, value: "system" },
-        { label: I18n.text.language-chinese, value: "chinese" },
-        { label: I18n.text.language-english, value: "english" },
     ];
     content-height: settings.preferred-height;
     settings := VerticalLayout {

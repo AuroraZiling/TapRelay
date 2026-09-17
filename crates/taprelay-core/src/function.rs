@@ -89,9 +89,7 @@ impl FunctionId {
 
 /// A tap and its optional long press share one shortcut because they share one
 /// physical key: the app, not the receiver, decides which gesture the user
-/// meant. `media.previous` / `media.next` keep their stable ids so an existing
-/// configuration survives the merge; the removed `media.rewind` and
-/// `media.fast-forward` ids are folded into them while loading.
+/// meant.
 pub const FUNCTION_CATALOG: [FunctionDefinition; 4] = [
     FunctionDefinition {
         id: FunctionId::MediaPlayPause,
@@ -141,13 +139,9 @@ pub fn function_ids() -> impl Iterator<Item = FunctionId> {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModifierSet {
-    #[serde(default)]
     pub ctrl: bool,
-    #[serde(default)]
     pub shift: bool,
-    #[serde(default)]
     pub alt: bool,
-    #[serde(default)]
     pub win: bool,
 }
 
@@ -254,7 +248,6 @@ impl PrimaryInput {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Shortcut {
-    #[serde(default)]
     pub modifiers: ModifierSet,
     pub primary: PrimaryInput,
 }
@@ -305,9 +298,7 @@ impl Shortcut {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FunctionConfig {
-    #[serde(default)]
     pub enabled: bool,
-    #[serde(default)]
     pub shortcuts: Vec<Shortcut>,
 }
 
@@ -319,14 +310,10 @@ pub fn default_configs() -> FunctionConfigs {
         .collect()
 }
 
-/// Add newly-known functions without changing a user's existing entries.
-pub fn complete_configs(configs: &mut FunctionConfigs) {
-    for id in function_ids() {
-        configs.entry(id).or_default();
-    }
-}
-
 pub fn valid_configs(configs: &FunctionConfigs) -> bool {
+    if configs.len() != FUNCTION_CATALOG.len() {
+        return false;
+    }
     let mut seen = HashSet::new();
     configs.values().all(|config| {
         config.shortcuts.len() <= 2
@@ -372,13 +359,11 @@ mod tests {
     }
 
     #[test]
-    fn merged_function_ids_are_still_accepted_but_the_removed_ones_are_not() {
-        assert_eq!(
-            FunctionId::from_stable_id("media.previous"),
-            Some(FunctionId::MediaPrevious)
-        );
-        assert_eq!(FunctionId::from_stable_id("media.rewind"), None);
-        assert_eq!(FunctionId::from_stable_id("media.fast-forward"), None);
+    fn function_ids_parse_from_their_persisted_names() {
+        for id in function_ids() {
+            assert_eq!(FunctionId::from_stable_id(id.stable_id()), Some(id));
+        }
+        assert_eq!(FunctionId::from_stable_id("media.unknown"), None);
     }
 
     #[test]
@@ -451,6 +436,13 @@ mod tests {
             .unwrap()
             .shortcuts
             .push(shortcut);
+        assert!(!valid_configs(&configs));
+    }
+
+    #[test]
+    fn every_current_function_must_have_a_config() {
+        let mut configs = default_configs();
+        configs.remove(&FunctionId::MediaMute);
         assert!(!valid_configs(&configs));
     }
 }

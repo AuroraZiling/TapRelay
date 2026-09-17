@@ -6,7 +6,6 @@ import { Caption, Label } from "../components/primitives.slint";
 import { SwitchRow } from "../components/switch-row.slint";
 import { Badge, BadgeVariant } from "../vendor/components/badge.slint";
 
-// One button in an either/or group: what the user reads and what Rust decodes.
 struct ChoiceOption {
     label: string,
     value: string,
@@ -52,8 +51,6 @@ export component SettingsPage inherits ScrollArea {
     in-out property <bool> start-hidden;
     in property <int> theme-choice;
     callback action(string, string);
-    // One row per choice, so the visible label and the value sent to Rust are
-    // declared together instead of being zipped by list position.
     property <[ChoiceOption]> theme-options: [
         { label: I18n.text.theme-system, value: "system" },
         { label: I18n.text.theme-light, value: "light" },

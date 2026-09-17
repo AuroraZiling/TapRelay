@@ -20,7 +20,6 @@ mod ui_tests;
 fn main() {
     logging::install_panic_handler();
     if let Err(e) = gui::run() {
-        // Last-resort native error surface, including failures before the renderer exists.
         platform::desktop::show_error(&format!("TapRelay: {e:#}"));
     }
 }

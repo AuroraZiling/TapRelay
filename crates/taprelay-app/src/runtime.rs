@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 use std::time::{Duration, Instant};
 use taprelay_core::{
     command::{COMMAND_TTL, CommandPhase, MediaCommand, QueuedCommand},
-    function::{FunctionAction, FunctionId, Shortcut, complete_configs},
+    function::{FunctionAction, FunctionId, Shortcut},
     input::{InputCode, InputEvent, InputState, Recorder},
     input_router::{RouteResult, RoutedInput, RoutedOutput, RouterReason},
     state::Snapshot,
@@ -75,11 +75,7 @@ impl Runtime {
             }
         }
     }
-    pub fn new(mut config: Config) -> Self {
-        complete_configs(&mut config.functions);
-        // Device selection is session-only. Older config files may still
-        // deserialize a device record, but it must never be restored or used.
-        config.device = None;
+    pub fn new(config: Config) -> Self {
         let startup_restore = config
             .remembered_device
             .as_ref()
@@ -793,17 +789,8 @@ mod tests {
     }
 
     #[test]
-    fn new_runtime_keeps_functions_disabled_and_does_not_restore_device() {
-        let mut config = Config::default();
-        config.device = Some(crate::config::Device {
-            id: "old-endpoint".into(),
-            name: "Old tablet".into(),
-            identity: vec![],
-            aliases: vec![],
-            legacy_verified: false,
-        });
-        let runtime = Runtime::new(config);
-        assert!(runtime.config.device.is_none());
+    fn new_runtime_keeps_functions_disabled() {
+        let runtime = Runtime::new(Config::default());
         assert!(
             runtime
                 .config
@@ -822,7 +809,6 @@ mod tests {
             name: "Tablet".into(),
             identity: vec!["container:tablet".into()],
             aliases: vec![],
-            legacy_verified: false,
         });
         let mut runtime = Runtime::new(config);
         let mut offered = None;
@@ -871,7 +857,6 @@ mod tests {
             name: "Tablet".into(),
             identity: vec!["container:tablet".into()],
             aliases: vec![],
-            legacy_verified: false,
         };
         let restored = taprelay_core::state::Target {
             id: "gatt-endpoint".into(),

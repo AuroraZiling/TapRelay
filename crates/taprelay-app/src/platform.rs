@@ -1,4 +1,3 @@
-//! Platform boundary. Views and the session never import Windows APIs.
 use anyhow::Result;
 use taprelay_core::{
     command::QueuedCommand,

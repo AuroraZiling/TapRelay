@@ -29,7 +29,7 @@ pub fn init(
         .try_init()?;
     Ok((counter, guard))
 }
-/// Retention is date based, not file-count based; sparse logging must also expire.
+
 pub fn cleanup(dir: &Path, today: time::Date) -> anyhow::Result<()> {
     for item in std::fs::read_dir(dir)? {
         let item = item?;
@@ -64,8 +64,6 @@ pub fn cleanup(dir: &Path, today: time::Date) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Independent emergency output: do not re-enter tracing or acquire its locks
-/// from a panic hook. Native access violations/abort/OOM require OS crash dumps.
 pub fn install_panic_handler() {
     if let Ok(exe) = std::env::current_exe()
         && let Some(parent) = exe.parent()

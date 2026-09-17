@@ -615,7 +615,8 @@ impl Runtime {
                         if !self.capture_state.update(event) {
                             continue;
                         }
-                        self.capture_preview = self.capture_state.description();
+                        self.capture_preview =
+                            self.capture_state.description_with(platform::key_name);
                         if self.learned.is_none() {
                             self.learned = self.recorder.observe(&self.capture_state, event);
                             if self.recorder.take_invalid() {

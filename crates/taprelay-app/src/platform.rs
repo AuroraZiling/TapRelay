@@ -146,6 +146,26 @@ pub fn input(sender: mpsc::Sender<RoutedInput>) -> Result<Box<dyn InputSource>> 
         anyhow::bail!("Input is not implemented on this platform")
     }
 }
+pub fn key_name(key: u8) -> String {
+    #[cfg(windows)]
+    {
+        taprelay_windows::input::key_name(key)
+    }
+    #[cfg(not(windows))]
+    {
+        taprelay_core::input::key_name(key)
+    }
+}
+pub fn keyboard_layout() -> usize {
+    #[cfg(windows)]
+    {
+        taprelay_windows::input::keyboard_layout()
+    }
+    #[cfg(not(windows))]
+    {
+        0
+    }
+}
 pub fn transport(remembered: Option<taprelay_core::state::Target>) -> Result<Box<dyn Transport>> {
     #[cfg(windows)]
     {

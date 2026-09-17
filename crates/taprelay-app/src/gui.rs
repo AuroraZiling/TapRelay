@@ -399,7 +399,7 @@ struct Controller {
         bool,
         taprelay_core::devices::AdapterState,
     )>,
-    previous_bindings: Option<(u64, bool)>,
+    previous_bindings: Option<(u64, bool, usize)>,
     previous_checks: Option<([bool; 4], bool, bool)>,
     system_theme: bool,
     system_language: bool,
@@ -1047,8 +1047,9 @@ impl Controller {
                 .into(),
         );
         ui.set_diagnostics(format!("Adapter={} · Peripheral={} · Service={} · Advertising={}\nLink={:?} · Subscription={:?} · Input={}\n{}: {}",s.adapter,s.peripheral,s.service,s.broadcasting,target.map(|t|t.link),target.map(|t|t.subscribed),s.input,self.tr(keys::DIAGNOSTICS_INPUTS),self.runtime.matched).into());
-        if self.previous_bindings != Some((self.runtime.bindings_revision, zh)) {
-            self.previous_bindings = Some((self.runtime.bindings_revision, zh));
+        let keyboard_layout = crate::platform::keyboard_layout();
+        if self.previous_bindings != Some((self.runtime.bindings_revision, zh, keyboard_layout)) {
+            self.previous_bindings = Some((self.runtime.bindings_revision, zh, keyboard_layout));
             let mut rows = Vec::new();
             let mut summary = Vec::new();
             for definition in taprelay_core::function::FUNCTION_CATALOG {
@@ -1072,27 +1073,27 @@ impl Controller {
                     .shortcuts
                     .iter()
                     .enumerate()
-                    .map(|(slot, shortcut)| ShortcutItem {
-                        text: shortcut.display().into(),
-                        keys: ModelRc::new(VecModel::from(
-                            shortcut
-                                .key_labels()
-                                .into_iter()
-                                .map(Into::into)
-                                .collect::<Vec<slint::SharedString>>(),
-                        )),
-                        slot: slot as i32,
-                        enabled: config.enabled,
+                    .map(|(slot, shortcut)| {
+                        let keys = shortcut.key_labels_with(crate::platform::key_name);
+                        ShortcutItem {
+                            text: keys.join("+").into(),
+                            keys: ModelRc::new(VecModel::from(
+                                keys.into_iter()
+                                    .map(Into::into)
+                                    .collect::<Vec<slint::SharedString>>(),
+                            )),
+                            slot: slot as i32,
+                            enabled: config.enabled,
+                        }
                     })
                     .collect::<Vec<_>>();
                 if config.enabled {
                     for shortcut in &config.shortcuts {
+                        let keys = shortcut.key_labels_with(crate::platform::key_name);
                         summary.push(BindingRow {
-                            text: shortcut.display().into(),
+                            text: keys.join("+").into(),
                             keys: ModelRc::new(VecModel::from(
-                                shortcut
-                                    .key_labels()
-                                    .into_iter()
+                                keys.into_iter()
                                     .map(Into::into)
                                     .collect::<Vec<slint::SharedString>>(),
                             )),

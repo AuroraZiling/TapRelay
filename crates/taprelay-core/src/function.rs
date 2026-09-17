@@ -6,7 +6,7 @@
 
 use crate::{
     command::MediaCommand,
-    input::{InputCode, MouseButton, key_name, modifier},
+    input::{InputCode, MouseButton, modifier},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
@@ -229,6 +229,10 @@ impl PrimaryInput {
     }
 
     pub fn label(&self) -> String {
+        self.label_with(crate::input::key_name)
+    }
+
+    pub fn label_with(&self, key_name: impl FnOnce(u8) -> String) -> String {
         match self {
             Self::Keyboard { key } => key_name(*key),
             Self::Mouse { button } => format!(
@@ -274,8 +278,12 @@ impl Shortcut {
     }
 
     pub fn key_labels(&self) -> Vec<String> {
+        self.key_labels_with(crate::input::key_name)
+    }
+
+    pub fn key_labels_with(&self, key_name: impl FnOnce(u8) -> String) -> Vec<String> {
         let mut labels = self.modifiers.labels();
-        labels.push(self.primary.label());
+        labels.push(self.primary.label_with(key_name));
         labels
     }
 

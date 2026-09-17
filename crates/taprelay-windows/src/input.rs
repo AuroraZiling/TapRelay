@@ -735,6 +735,56 @@ fn keyboard_code(event: &KBDLLHOOKSTRUCT) -> Option<InputCode> {
     Some(InputCode::Key(key))
 }
 
+pub fn key_name(key: u8) -> String {
+    unsafe {
+        let layout = GetKeyboardLayout(0);
+        let (virtual_key, scan_code) = if key == 0xe0 {
+            (u32::from(VK_RETURN.0), 0xe01c)
+        } else {
+            (
+                u32::from(key),
+                MapVirtualKeyExW(u32::from(key), MAPVK_VK_TO_VSC_EX, Some(layout)),
+            )
+        };
+
+        if matches!(key, 0x30..=0x5a | 0xba..=0xc0 | 0xdb..=0xdf | 0xe2) {
+            let mut text = [0u16; 8];
+            let state = [0u8; 256];
+            const DO_NOT_CHANGE_KEYBOARD_STATE: u32 = 4;
+            let count = ToUnicodeEx(
+                virtual_key,
+                scan_code,
+                &state,
+                &mut text,
+                DO_NOT_CHANGE_KEYBOARD_STATE,
+                Some(layout),
+            );
+            if count != 0 {
+                let length = count.unsigned_abs() as usize;
+                let label = String::from_utf16_lossy(&text[..length]);
+                if !label.trim().is_empty() {
+                    return label.to_uppercase();
+                }
+            }
+        }
+
+        if scan_code != 0 {
+            let extended = u32::from(scan_code & 0xff00 != 0) << 24;
+            let parameter = ((scan_code & 0xff) << 16) | extended;
+            let mut text = [0u16; 64];
+            let count = GetKeyNameTextW(parameter as i32, &mut text);
+            if count > 0 {
+                return String::from_utf16_lossy(&text[..count as usize]);
+            }
+        }
+    }
+    taprelay_core::input::key_name(key)
+}
+
+pub fn keyboard_layout() -> usize {
+    unsafe { GetKeyboardLayout(0).0 as usize }
+}
+
 unsafe extern "system" fn keyboard_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     if code == HC_ACTION as i32 {
         let mut consume = false;
@@ -902,6 +952,13 @@ mod tests {
             replay_key(0x0d, false).dwFlags.0 & KEYEVENTF_EXTENDEDKEY.0,
             0
         );
+    }
+
+    #[test]
+    fn native_key_names_never_expose_virtual_key_codes() {
+        for key in [0x14, 0x2c, 0x5d, 0x90, 0xa6, 0xaf, 0xb3, 0xba, 0xc3, 0xe0] {
+            assert!(!key_name(key).starts_with("VK"));
+        }
     }
 
     #[test]

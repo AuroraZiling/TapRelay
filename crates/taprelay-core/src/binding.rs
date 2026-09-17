@@ -18,14 +18,13 @@ pub struct BindingKey {
 pub struct IndexedBinding {
     pub key: BindingKey,
     pub shortcut: Shortcut,
-    /// The tap gesture, emitted on release for a merged function.
+    /// Tap gesture
     pub action: FunctionAction,
-    /// The long-press gesture, emitted once the hold threshold elapses.
+    /// Long-press gesture
     pub hold_action: Option<FunctionAction>,
 }
 
-/// Disabled entries remain in the config and therefore remain in this global
-/// uniqueness check. They are absent from the runtime index below.
+/// Valid Check for conflicting, duplicate or invalid shortcuts in the configs.
 pub fn valid(configs: &FunctionConfigs) -> bool {
     let mut seen = HashSet::new();
     configs.values().all(|config| {

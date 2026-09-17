@@ -1061,7 +1061,7 @@ impl Controller {
                 // pair and leaving the reader to guess which half is the hold.
                 let mut gestures = vec![GestureAction {
                     gesture: self.tr(keys::BINDINGS_GESTURE_PRESS).into(),
-                    action: self.tr(definition.action.name_key()).into(),
+                    action: self.tr(definition.tap_action.name_key()).into(),
                 }];
                 if let Some(hold) = definition.hold_action {
                     gestures.push(GestureAction {

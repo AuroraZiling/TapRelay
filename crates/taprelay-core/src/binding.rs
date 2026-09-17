@@ -1,7 +1,7 @@
 //! Shortcut indexing and global binding invariants.
 
 use crate::{
-    function::{FunctionAction, FunctionConfigs, FunctionId, Shortcut, function_definition},
+    function::{FunctionConfigs, FunctionId, Shortcut},
     input::{InputCode, InputState},
 };
 use std::collections::HashSet;
@@ -18,10 +18,6 @@ pub struct BindingKey {
 pub struct IndexedBinding {
     pub key: BindingKey,
     pub shortcut: Shortcut,
-    /// Tap gesture
-    pub action: FunctionAction,
-    /// Long-press gesture
-    pub hold_action: Option<FunctionAction>,
 }
 
 /// Valid Check for conflicting, duplicate or invalid shortcuts in the configs.
@@ -57,15 +53,12 @@ impl BindingIndex {
             if !config.enabled {
                 continue;
             }
-            let definition = function_definition(id);
             for (slot, shortcut) in config.shortcuts.iter().cloned().enumerate() {
                 let binding_index = index.bindings.len();
                 index.candidates[shortcut.primary_code().index()].push(binding_index);
                 index.bindings.push(IndexedBinding {
                     key: BindingKey { function: id, slot },
                     shortcut,
-                    action: definition.action,
-                    hold_action: definition.hold_action,
                 });
             }
         }

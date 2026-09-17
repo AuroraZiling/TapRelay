@@ -7,7 +7,7 @@
 
 use crate::{
     binding::{BindingIndex, BindingKey},
-    function::{Activation, FunctionAction, FunctionConfigs, FunctionId},
+    function::{FunctionAction, FunctionConfigs, FunctionId, function_definition},
     input::{InputCode, InputEvent, InputState, modifier},
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -58,7 +58,6 @@ pub enum RoutedOutput {
     Function {
         binding: BindingKey,
         action: FunctionAction,
-        activation: Activation,
         down: bool,
         token: u64,
         revision: u64,
@@ -91,9 +90,6 @@ impl RouteResult {
 struct ActiveToken {
     binding: BindingKey,
     shortcut: crate::function::Shortcut,
-    /// The tap gesture, emitted on release unless the hold gesture took over.
-    action: FunctionAction,
-    hold_action: Option<FunctionAction>,
     token: u64,
     revision: u64,
     created: Instant,
@@ -188,11 +184,7 @@ impl InputRouter {
                 let replacement = next_index
                     .find(token.binding)
                     .and_then(|index| next_index.binding(index))
-                    .is_none_or(|binding| {
-                        binding.shortcut != token.shortcut
-                            || binding.action != token.action
-                            || binding.hold_action != token.hold_action
-                    });
+                    .is_none_or(|binding| binding.shortcut != token.shortcut);
                 replacement.then_some(code)
             })
             .collect();
@@ -244,12 +236,11 @@ impl InputRouter {
             self.suppressed_until_up
                 .insert(active.shortcut.primary_code());
             if active.hold_started
-                && let Some(action) = active.hold_action
+                && let Some(action) = function_definition(active.binding.function).hold_action
             {
                 result.outputs.push(RoutedOutput::Function {
                     binding: active.binding,
                     action,
-                    activation: Activation::Hold,
                     down: false,
                     token: active.token,
                     revision: active.revision,
@@ -555,12 +546,13 @@ impl InputRouter {
     ) -> RouteResult {
         self.next_token = self.next_token.wrapping_add(1).max(1);
         let token = self.next_token;
+        let definition = function_definition(binding.key.function);
         let mut result = RouteResult {
             revision: self.revision,
             consume: true,
             outputs: vec![RoutedOutput::Feedback {
                 binding: binding.key,
-                action: binding.action,
+                action: definition.tap_action,
             }],
         };
 
@@ -568,12 +560,11 @@ impl InputRouter {
         // meant yet: the tap is emitted on release, and the hold gesture
         // becomes due at the threshold. A plain tap has nothing to wait for,
         // so it keeps firing on the press edge.
-        let deadline = binding.hold_action.map(|_| created + HOLD_THRESHOLD);
+        let deadline = definition.hold_action.map(|_| created + HOLD_THRESHOLD);
         if deadline.is_none() {
             result.outputs.push(RoutedOutput::Function {
                 binding: binding.key,
-                action: binding.action,
-                activation: Activation::Press,
+                action: definition.tap_action,
                 down: true,
                 token,
                 revision: self.revision,
@@ -592,8 +583,6 @@ impl InputRouter {
             ActiveToken {
                 binding: binding.key,
                 shortcut: binding.shortcut,
-                action: binding.action,
-                hold_action: binding.hold_action,
                 token,
                 revision: self.revision,
                 created,
@@ -632,7 +621,7 @@ impl InputRouter {
         for code in due {
             let Some((binding, action, token, revision)) =
                 self.active.get(&code).and_then(|active| {
-                    active
+                    function_definition(active.binding.function)
                         .hold_action
                         .map(|action| (active.binding, action, active.token, active.revision))
                 })
@@ -650,7 +639,6 @@ impl InputRouter {
                 result.outputs.push(RoutedOutput::Function {
                     binding,
                     action,
-                    activation: Activation::Hold,
                     down: true,
                     token,
                     revision,
@@ -670,14 +658,14 @@ impl InputRouter {
             self.release_hold(active, result, released);
             return;
         }
-        if active.hold_action.is_none() {
+        let definition = function_definition(active.binding.function);
+        if definition.hold_action.is_none() {
             // The tap was already emitted on the press edge.
             return;
         }
         result.outputs.push(RoutedOutput::Function {
             binding: active.binding,
-            action: active.action,
-            activation: Activation::Press,
+            action: definition.tap_action,
             down: true,
             token: active.token,
             revision: active.revision,
@@ -689,7 +677,7 @@ impl InputRouter {
     }
 
     fn release_hold(&mut self, active: &ActiveToken, result: &mut RouteResult, created: Instant) {
-        let Some(action) = active.hold_action else {
+        let Some(action) = function_definition(active.binding.function).hold_action else {
             return;
         };
         if !active.hold_started {
@@ -702,7 +690,6 @@ impl InputRouter {
                 result.outputs.push(RoutedOutput::Function {
                     binding: active.binding,
                     action,
-                    activation: Activation::Hold,
                     down: false,
                     token: active.token,
                     revision: active.revision,

@@ -684,7 +684,6 @@ impl Runtime {
                 }
                 RoutedOutput::Function {
                     action: FunctionAction::Media(action),
-                    activation: _,
                     down,
                     created,
                     ..

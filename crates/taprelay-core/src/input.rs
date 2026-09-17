@@ -266,8 +266,6 @@ impl InputState {
     }
 }
 
-/// Records exactly one physical primary down and the logical modifiers that
-/// existed at that edge. It never constructs a shortcut from a peak held set.
 #[derive(Default)]
 pub struct Recorder {
     primary: Option<PrimaryInput>,

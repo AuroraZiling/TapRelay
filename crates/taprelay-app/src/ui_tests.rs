@@ -648,7 +648,7 @@ fn preview_function_layouts(ui: &AppWindow, out: &std::path::Path) {
                 gestures: ModelRc::new(VecModel::from({
                     let mut gestures = vec![GestureAction {
                         gesture: i18n::text(zh, "bindings.gesture.press").into(),
-                        action: i18n::text(zh, d.action.name_key()).into(),
+                        action: i18n::text(zh, d.tap_action.name_key()).into(),
                     }];
                     if let Some(hold) = d.hold_action {
                         gestures.push(GestureAction {

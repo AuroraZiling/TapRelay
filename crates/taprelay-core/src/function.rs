@@ -1,9 +1,3 @@
-//! The stable function catalog and its persisted, user-editable configuration.
-//!
-//! The catalog is deliberately static. A function's display metadata,
-//! activation semantics, and output operation live here so the UI, recorder,
-//! and runtime cannot grow separate lists of special cases.
-
 use crate::{
     command::MediaCommand,
     input::{InputCode, MouseButton, modifier},
@@ -15,15 +9,6 @@ use std::collections::{BTreeMap, HashSet};
 #[serde(rename_all = "lowercase")]
 pub enum CategoryId {
     Media,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Activation {
-    /// A tap: the output is a single momentary press.
-    Press,
-    /// A long press: the output stays pressed until the shortcut is released.
-    Hold,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,7 +30,7 @@ pub struct FunctionDefinition {
     pub category: CategoryId,
     /// Emitted when the shortcut is tapped, or immediately when the function
     /// has no hold gesture.
-    pub action: FunctionAction,
+    pub tap_action: FunctionAction,
     /// Emitted once the shortcut stays held past
     /// [`crate::input_router::HOLD_THRESHOLD`]. `None` makes the function a
     /// plain tap that never waits for the release edge.
@@ -94,7 +79,7 @@ pub const FUNCTION_CATALOG: [FunctionDefinition; 4] = [
     FunctionDefinition {
         id: FunctionId::MediaPlayPause,
         category: CategoryId::Media,
-        action: FunctionAction::Media(MediaCommand::PlayPause),
+        tap_action: FunctionAction::Media(MediaCommand::PlayPause),
         hold_action: None,
         name_key: "function.media.playpause",
         category_key: "function.category.media",
@@ -102,7 +87,7 @@ pub const FUNCTION_CATALOG: [FunctionDefinition; 4] = [
     FunctionDefinition {
         id: FunctionId::MediaPrevious,
         category: CategoryId::Media,
-        action: FunctionAction::Media(MediaCommand::Previous),
+        tap_action: FunctionAction::Media(MediaCommand::Previous),
         hold_action: Some(FunctionAction::Media(MediaCommand::Rewind)),
         name_key: "function.media.previous",
         category_key: "function.category.media",
@@ -110,7 +95,7 @@ pub const FUNCTION_CATALOG: [FunctionDefinition; 4] = [
     FunctionDefinition {
         id: FunctionId::MediaNext,
         category: CategoryId::Media,
-        action: FunctionAction::Media(MediaCommand::Next),
+        tap_action: FunctionAction::Media(MediaCommand::Next),
         hold_action: Some(FunctionAction::Media(MediaCommand::FastForward)),
         name_key: "function.media.next",
         category_key: "function.category.media",
@@ -118,7 +103,7 @@ pub const FUNCTION_CATALOG: [FunctionDefinition; 4] = [
     FunctionDefinition {
         id: FunctionId::MediaMute,
         category: CategoryId::Media,
-        action: FunctionAction::Media(MediaCommand::Mute),
+        tap_action: FunctionAction::Media(MediaCommand::Mute),
         hold_action: None,
         name_key: "function.media.mute",
         category_key: "function.category.media",
@@ -347,7 +332,7 @@ mod tests {
     fn skip_functions_pair_a_tap_with_a_held_seek() {
         let previous = function_definition(FunctionId::MediaPrevious);
         assert_eq!(
-            previous.action,
+            previous.tap_action,
             FunctionAction::Media(MediaCommand::Previous)
         );
         assert_eq!(
@@ -355,7 +340,7 @@ mod tests {
             Some(FunctionAction::Media(MediaCommand::Rewind))
         );
         let next = function_definition(FunctionId::MediaNext);
-        assert_eq!(next.action, FunctionAction::Media(MediaCommand::Next));
+        assert_eq!(next.tap_action, FunctionAction::Media(MediaCommand::Next));
         assert_eq!(
             next.hold_action,
             Some(FunctionAction::Media(MediaCommand::FastForward))

@@ -3,17 +3,15 @@ name: Windows Release
 on:
   push:
     tags: ['v*']
-  delete:
 
 concurrency:
-  group: windows-release-${{ github.event_name == 'delete' && github.event.ref || github.ref_name }}
+  group: windows-release-${{ github.ref_name }}
   cancel-in-progress: true
 
 permissions: {}
 
 jobs:
   release:
-    if: github.event_name == 'push'
     runs-on: windows-latest
     timeout-minutes: 90
     permissions:
@@ -103,29 +101,3 @@ jobs:
               data: asset,
             });
             core.info(`Published ${name} to ${release.html_url}`);
-
-  delete-release:
-    if: github.event_name == 'delete' && github.event.ref_type == 'tag' && startsWith(github.event.ref, 'v')
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: write
-    steps:
-      - name: Delete release for removed tag
-        uses: actions/github-script@v8
-        env:
-          TAG_NAME: ${{ github.event.ref }}
-        with:
-          script: |
-            const tag = process.env.TAG_NAME;
-            if (!/^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(tag)) {
-              core.notice('Ignoring a non-stable release tag.');
-              return;
-            }
-            const releases = await github.paginate(github.rest.repos.listReleases, {
-              ...context.repo, per_page: 100,
-            });
-            for (const release of releases.filter(release => release.tag_name === tag)) {
-              await github.rest.repos.deleteRelease({ ...context.repo, release_id: release.id });
-              core.info(`Deleted ${tag}`);
-            }

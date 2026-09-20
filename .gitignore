@@ -1,7 +1,19 @@
-/target/
+target/
 /artifacts/
-/logs/
+logs/
+/release-assets/
+/release-package/
 /.idea/
 /references/
+
+.env
+.env.*
+!.env.example
+.cargo/credentials
+.cargo/credentials.toml
+credentials.json
+
+config.json
+!config.json.example
 
 AGENTS.md

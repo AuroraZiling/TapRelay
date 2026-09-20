@@ -69,6 +69,103 @@ fn render_all_views_without_hardware() {
     check_navigation_and_settings(&ui);
     check_surface_redraw(&ui, &render_window);
     check_binding_layouts_and_actions(&ui);
+    check_about_links(&ui);
+}
+
+fn check_about_links(ui: &AppWindow) {
+    use slint::platform::{PointerEventButton, WindowEvent};
+    ui.set_mode(2);
+    ui.set_page(3);
+    let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let observed = actions.clone();
+    ui.on_action(move |name, value| {
+        observed
+            .borrow_mut()
+            .push((name.to_string(), value.to_string()));
+    });
+    for locale in ["en", "zh-cn"] {
+        i18n::apply(ui, locale);
+        for dark in [false, true] {
+            ui.global::<Theme>().set_mode(if dark {
+                ThemeMode::Dark
+            } else {
+                ThemeMode::Light
+            });
+            for (width, height) in [(900., 500.), (1120., 700.)] {
+                ui.window().set_size(slint::LogicalSize::new(width, height));
+                let _ = ui.window().take_snapshot().unwrap();
+                ui.window().dispatch_event(WindowEvent::PointerScrolled {
+                    position: slint::LogicalPosition::new(500., 350.),
+                    delta_x: 0.,
+                    delta_y: -3000.,
+                });
+                i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+                slint::platform::update_timers_and_animations();
+                let snapshot = ui.window().take_snapshot().unwrap();
+                if let Some(dir) = std::env::var_os("TAPRELAY_UI_SNAPSHOT_DIR") {
+                    let dir = std::path::PathBuf::from(dir);
+                    std::fs::create_dir_all(&dir).unwrap();
+                    std::fs::write(
+                        dir.join(format!(
+                            "about-{locale}-{dark}-{}x{}.rgba",
+                            snapshot.width(),
+                            snapshot.height()
+                        )),
+                        snapshot.as_bytes(),
+                    )
+                    .unwrap();
+                }
+                let license = binding_element(ui, "settings-license");
+                let notices = binding_element(ui, "settings-third-party-notices");
+                let repository = binding_element(ui, "settings-repository");
+                assert!(
+                    license.absolute_position().x + license.size().width
+                        <= notices.absolute_position().x
+                );
+                assert_eq!(license.absolute_position().y, notices.absolute_position().y);
+                assert!(
+                    license.absolute_position().y + license.size().height
+                        < repository.absolute_position().y
+                );
+                for (command, label_key) in [
+                    ("repository", i18n::keys::SETTINGS_REPOSITORY),
+                    ("license", i18n::keys::SETTINGS_LICENSE),
+                    (
+                        "third-party-notices",
+                        i18n::keys::SETTINGS_THIRD_PARTY_NOTICES,
+                    ),
+                ] {
+                    let button = binding_element(ui, &format!("settings-{command}"));
+                    assert_eq!(
+                        button.accessible_label().as_deref(),
+                        Some(i18n::text(locale, label_key).as_str())
+                    );
+                    let origin = button.absolute_position();
+                    let size = button.size();
+                    assert!(origin.x >= 0. && origin.x + size.width <= width);
+                    assert!(origin.y >= 0. && origin.y + size.height <= height);
+                    actions.borrow_mut().clear();
+                    let position = slint::LogicalPosition::new(
+                        origin.x + size.width / 2.,
+                        origin.y + size.height / 2.,
+                    );
+                    ui.window()
+                        .dispatch_event(WindowEvent::PointerMoved { position });
+                    ui.window().dispatch_event(WindowEvent::PointerPressed {
+                        position,
+                        button: PointerEventButton::Left,
+                    });
+                    ui.window().dispatch_event(WindowEvent::PointerReleased {
+                        position,
+                        button: PointerEventButton::Left,
+                    });
+                    button.invoke_accessible_default_action();
+                    assert_eq!(*actions.borrow(), vec![(command.into(), String::new()); 2]);
+                    assert!(crate::action::Action::try_from(command).is_ok());
+                }
+            }
+        }
+    }
 }
 
 fn render_pages(ui: &AppWindow) {

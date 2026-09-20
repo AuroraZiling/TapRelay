@@ -171,12 +171,47 @@ export component SettingsPage inherits ScrollArea {
             }
         }
         Section {
-            title: I18n.text.settings-about;
-            Label {
-                text: "TapRelay " + root.app-version;
+            title: I18n.text.settings-licensing;
+            badge: "GPL-3.0-only";
+            HorizontalLayout {
+                alignment: start;
+                spacing: 8px;
+                Button {
+                    text: I18n.text.settings-license;
+                    accessible-id: "settings-license";
+                    variant: link;
+                    clicked => { root.action("license", ""); }
+                }
+                Button {
+                    text: I18n.text.settings-third-party-notices;
+                    accessible-id: "settings-third-party-notices";
+                    variant: link;
+                    clicked => { root.action("third-party-notices", ""); }
+                }
             }
-            Caption {
-                text: root.data-directory;
+        }
+        Section {
+            title: I18n.text.settings-about;
+            VerticalLayout {
+                spacing: 4px;
+                HorizontalLayout {
+                    alignment: start;
+                    cross-axis-alignment: center;
+                    spacing: 8px;
+                    Label {
+                        horizontal-stretch: 0;
+                        text: "TapRelay " + root.app-version;
+                    }
+                    Button {
+                        text: I18n.text.settings-repository;
+                        accessible-id: "settings-repository";
+                        variant: link;
+                        clicked => { root.action("repository", ""); }
+                    }
+                }
+                Caption {
+                    text: root.data-directory;
+                }
             }
             HorizontalLayout {
                 alignment: start;

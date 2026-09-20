@@ -641,6 +641,13 @@ impl Controller {
             }
             Action::TrayReset => self.desktop.restore(),
             Action::BluetoothSettings => self.runtime.bluetooth_settings()?,
+            Action::Repository => desktop::open("https://github.com/AuroraZiling/TapRelay")?,
+            Action::License => {
+                desktop::open("https://github.com/AuroraZiling/TapRelay/blob/main/LICENSE")?
+            }
+            Action::ThirdPartyNotices => desktop::open(
+                "https://github.com/AuroraZiling/TapRelay/blob/main/THIRD_PARTY_NOTICES.md",
+            )?,
             Action::DataFolder => desktop::open(
                 &self
                     .path

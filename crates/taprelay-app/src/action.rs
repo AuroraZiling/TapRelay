@@ -17,6 +17,7 @@ actions! {
     Listen => "listen", Test => "test", Refresh => "refresh", Retry => "retry",
     Resume => "resume", TrayReset => "tray-reset", BluetoothSettings => "bluetooth-settings",
     DataFolder => "data-folder", LogsFolder => "logs-folder",
+    Repository => "repository", License => "license", ThirdPartyNotices => "third-party-notices",
     // Payload: the device id the row was built from.
     Device => "device",
     PairDevice => "pair-device", DisconnectDevice => "disconnect-device",

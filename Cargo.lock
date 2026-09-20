@@ -2607,9 +2607,9 @@ dependencies = [
 
 [[package]]
 name = "lucide-slint"
-version = "1.43.0"
+version = "1.47.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6dbd8b5cdd7ae26ed7d7e35120708690e7f335a4715fe14d1fa92aafd035c12f"
+checksum = "d4dfa1b264bc706c9e6ec1f6c3c5bfec514f89dcf61477cb8174956b6d8e31a4"
 
 [[package]]
 name = "lyon_algorithms"

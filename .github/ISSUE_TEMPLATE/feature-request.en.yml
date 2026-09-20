@@ -1,0 +1,33 @@
+name: Feature Request
+description: Suggest features related to TapRelay
+title: "[Feat] "
+labels:
+  - enhancement
+type: feature
+body:
+  - type: checkboxes
+    attributes:
+      label: Please use the search function first to check whether this feature has already been proposed.
+      options:
+        - label: I have searched for duplicate Issues.
+          required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: New Feature Description
+      description: Please describe in detail the new feature you want to add.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: App Version
+      description: Enter the version you are using.
+      placeholder: e.g. 0.1.0
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives or Additional Information
+      description: Optional. Describe alternatives you have tried, or provide relevant device information.

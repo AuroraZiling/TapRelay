@@ -43,13 +43,19 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
       - run: cargo rustc --release --locked -p taprelay-app -- -C target-feature=+crt-static
-      - name: Stage single executable
+      - name: Package portable ZIP
         shell: pwsh
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
+          $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Path release-assets -Force | Out-Null
-          Copy-Item -LiteralPath target/release/taprelay.exe -Destination "release-assets/TapRelay_$($env:VERSION)_windows_x64.exe"
+          New-Item -ItemType Directory -Path release-package -Force | Out-Null
+          Copy-Item -LiteralPath target/release/taprelay.exe -Destination release-package/TapRelay.exe
+          Copy-Item -LiteralPath LICENSE -Destination release-package/LICENSE
+          Copy-Item -LiteralPath THIRD_PARTY_NOTICES.md -Destination release-package/THIRD_PARTY_NOTICES.md
+          $files = @('release-package/TapRelay.exe', 'release-package/LICENSE', 'release-package/THIRD_PARTY_NOTICES.md')
+          Compress-Archive -LiteralPath $files -DestinationPath "release-assets/TapRelay_$($env:VERSION)_Windows_x64.zip" -Force
       - name: Publish GitHub Release
         uses: actions/github-script@v7
         env:
@@ -70,9 +76,9 @@ jobs:
             if (object.type !== 'commit' || object.sha !== context.sha) {
               throw new Error('The tag no longer points to the commit that was built.');
             }
-            const name = `TapRelay_${process.env.VERSION}_windows_x64.exe`;
+            const name = `TapRelay_${process.env.VERSION}_Windows_x64.zip`;
             const asset = fs.readFileSync(`release-assets/${name}`);
-            if (!asset.length) throw new Error('Release executable is empty.');
+            if (!asset.length) throw new Error('Release ZIP is empty.');
             let release;
             try {
               ({ data: release } = await github.rest.repos.getReleaseByTag({ ...repo, tag }));
@@ -91,7 +97,7 @@ jobs:
             }
             await github.rest.repos.uploadReleaseAsset({
               ...repo, release_id: release.id, name,
-              headers: { 'content-type': 'application/octet-stream', 'content-length': asset.length },
+              headers: { 'content-type': 'application/zip', 'content-length': asset.length },
               data: asset,
             });
             core.info(`Published ${name} to ${release.html_url}`);

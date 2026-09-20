@@ -1,0 +1,54 @@
+name: Bug Report
+description: Submit a bug report to help improve TapRelay
+title: "[Bug] "
+labels:
+  - bug
+type: bug
+body:
+  - type: checkboxes
+    attributes:
+      label: Please confirm the following
+      options:
+        - label: I have searched for related Issues
+          required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Problem Description
+      description: Please describe the problem you encountered in detail. If necessary, add screenshots to help explain.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: App Version
+      description: The version where the problem occurs; for local builds, please include the commit number.
+      placeholder: e.g. 0.1.0
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Runtime Environment
+      description: Information such as the operating system and hardware environment where the problem occurs.
+      placeholder: e.g. Windows 11 22631
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: Note the relevant shortcuts and whether the software is running as administrator. If the issue is intermittent, please describe how often it occurs.
+      placeholder: If it cannot be reproduced, you may leave this blank
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: Briefly and clearly describe the result you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Information
+      description: Add any other relevant context about this issue.

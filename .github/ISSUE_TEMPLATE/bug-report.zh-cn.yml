@@ -1,0 +1,54 @@
+name: 错误报告
+description: 提交错误报告以帮助改进 TapRelay
+title: "[Bug] "
+labels:
+  - bug
+type: bug
+body:
+  - type: checkboxes
+    attributes:
+      label: 请确认以下事项
+      options:
+        - label: 我已经查找过相关的 Issue
+          required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      description: 请详细描述遇到的问题。如有必要，请添加截图以帮助说明问题。
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: 应用版本
+      description: 出现问题的版本；本地构建请附上提交编号。
+      placeholder: 例如 0.1.0
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 运行环境
+      description: 出现问题的操作系统、硬件环境等信息。
+      placeholder: 例如 Windows 11 22631
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 注明相关快捷键，以及软件是否以管理员身份运行。如果问题偶发，请说明出现频率。
+      placeholder: 如果无法重现，可留空
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期表现
+      description: 简洁明了地描述你期望发生的结果。
+    validations:
+      required: true
+  - type: textarea
+    id: additional
+    attributes:
+      label: 补充信息
+      description: 添加关于此问题的其他相关上下文信息。

@@ -26,7 +26,7 @@ export global BindingUi {
     callback set-function-enabled(string, bool);
     callback key-input(string, bool);
 }
-export struct BindingRow { text: string, keys: [string], enabled: bool }
+export struct BindingRow { text: string, keys: [string], enabled: bool, function-name: string }
 export struct DeviceRow { id: string, name: string, detail: string, selected: bool, action: string, action-label: string, enabled: bool, paired: bool, device-kind: string, status: string }
 export struct CheckRow { title: string, state: int }
 export struct RelayStatus {

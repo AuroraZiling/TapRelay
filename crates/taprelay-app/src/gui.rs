@@ -1101,6 +1101,7 @@ impl Controller {
                         let keys = shortcut.key_labels_with(crate::platform::key_name);
                         summary.push(BindingRow {
                             text: keys.join("+").into(),
+                            function_name: self.tr(definition.name_key).into(),
                             keys: ModelRc::new(VecModel::from(
                                 keys.into_iter()
                                     .map(Into::into)

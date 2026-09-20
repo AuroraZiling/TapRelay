@@ -76,6 +76,10 @@ export component OverviewPage inherits Rectangle {
                                 for binding in root.bindings: ShortcutPill {
                                     text: binding.text;
                                     visible: binding.enabled;
+                                    accessible-role: text;
+                                    accessible-label: binding.text;
+                                    accessible-description: binding.function-name;
+                                    Tooltip { text: @markdown("\{binding.function-name}"); }
                                 }
                             }
                         }

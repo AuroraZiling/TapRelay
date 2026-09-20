@@ -70,11 +70,13 @@ fn render_all_views_without_hardware() {
     ui.set_bindings(ModelRc::new(VecModel::from(vec![
         BindingRow {
             text: "F8".into(),
+            function_name: "Play / pause".into(),
             keys: ModelRc::new(VecModel::from(vec!["F8".into()])),
             enabled: true,
         },
         BindingRow {
             text: "LCtrl + ]".into(),
+            function_name: "Next track".into(),
             keys: ModelRc::new(VecModel::from(vec!["LCtrl".into(), "]".into()])),
             enabled: true,
         },
@@ -178,6 +180,7 @@ fn render_all_views_without_hardware() {
             }
         }
     }
+    preview_overview_binding_tooltips(&ui);
     // Tap waves must change pixels beyond the counter, then disappear completely.
     ui.set_mode(1);
     ui.set_wizard_page(3);
@@ -847,6 +850,56 @@ fn preview_function_layouts(ui: &AppWindow, out: &std::path::Path) {
             BindingUiAction::Begin("app.toggle-listening".into(), 0),
         ]
     );
+}
+
+fn preview_overview_binding_tooltips(ui: &AppWindow) {
+    ui.set_mode(2);
+    ui.set_page(0);
+    ui.set_problem("".into());
+    ui.window().set_size(slint::LogicalSize::new(1000., 700.));
+    ui.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerMoved {
+            position: slint::LogicalPosition::new(70., 680.),
+        });
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
+    let _ = ui.window().take_snapshot().unwrap();
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
+    for shortcut in ["F8", "LCtrl + ]"] {
+        let pill = ui
+            .root_element()
+            .query_descendants()
+            .match_predicate(move |element| {
+                element
+                    .accessible_label()
+                    .is_some_and(|label| label == shortcut)
+            })
+            .find_first()
+            .unwrap();
+        let idle = ui.window().take_snapshot().unwrap();
+        let position = pill.absolute_position();
+        ui.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerMoved {
+                position: slint::LogicalPosition::new(position.x + 5., position.y + 5.),
+            });
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
+        let hovered = ui.window().take_snapshot().unwrap();
+        assert!(
+            hovered.as_slice() != idle.as_slice(),
+            "Hovering {shortcut} must display its function tooltip"
+        );
+        ui.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerMoved {
+                position: slint::LogicalPosition::new(70., 680.),
+            });
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
+        let _ = ui.window().take_snapshot().unwrap();
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
+        let dismissed = ui.window().take_snapshot().unwrap();
+        assert!(
+            dismissed.as_slice() == idle.as_slice(),
+            "Leaving {shortcut} must dismiss its function tooltip"
+        );
+    }
 }
 
 // Content may be clipped, but cannot resize the two page-owned grid rows.

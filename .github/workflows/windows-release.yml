@@ -5,26 +5,52 @@ on:
     tags: ['v*']
 
 concurrency:
-  group: windows-release-${{ github.ref_name }}
+  group: windows-release-${{ github.ref }}
   cancel-in-progress: true
 
 permissions: {}
 
 jobs:
-  release:
+  check:
+    name: Check
     runs-on: windows-latest
     timeout-minutes: 90
     permissions:
-      contents: write
+      contents: read
+    env:
+      SLINT_EMIT_DEBUG_INFO: '1'
     steps:
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: nightly-2026-09-20
           components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows-check
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+
+  build:
+    name: Build
+    runs-on: windows-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      artifact-id: ${{ steps.artifact.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
       - name: Resolve release version
+        if: startsWith(github.ref, 'refs/tags/')
         id: version
         shell: pwsh
         env:
@@ -37,13 +63,15 @@ jobs:
           $version = $env:TAG_NAME.Substring(1)
           "version=$version" >> $env:GITHUB_OUTPUT
           "TAPRELAY_VERSION=$version" >> $env:GITHUB_ENV
-      - run: cargo fmt --all -- --check
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - run: cargo test --workspace --locked
-        env:
-          SLINT_EMIT_DEBUG_INFO: '1'
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-09-20
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows-release
       - run: cargo rustc --release --locked -p taprelay-app -- -C target-feature=+crt-static
       - name: Package portable ZIP
+        if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -56,11 +84,36 @@ jobs:
           Copy-Item -LiteralPath THIRD_PARTY_NOTICES.md -Destination release-package/THIRD_PARTY_NOTICES.md
           $files = @('release-package/TapRelay.exe', 'release-package/LICENSE', 'release-package/THIRD_PARTY_NOTICES.md')
           Compress-Archive -LiteralPath $files -DestinationPath "release-assets/TapRelay_$($env:VERSION)_Windows_x64.zip" -Force
+      - name: Upload release package
+        if: startsWith(github.ref, 'refs/tags/')
+        id: artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-release
+          path: release-assets/TapRelay_${{ steps.version.outputs.version }}_Windows_x64.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+          overwrite: true
+
+  release:
+    name: Publish
+    needs: [check, build]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          path: release-assets
       - name: Publish GitHub Release
         uses: actions/github-script@v8
         env:
           TAG_NAME: ${{ github.ref_name }}
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ needs.build.outputs.version }}
         with:
           script: |
             const fs = require('node:fs');

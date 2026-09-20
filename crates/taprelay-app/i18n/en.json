@@ -37,7 +37,7 @@
   "language.zh_cn": "简体中文",
   "language.en": "English",
   "language.system": "System language",
-  "function.category.media": "Media",
+  "function.app.togglelistening": "Toggle input listening",
   "function.media.playpause": "Play / Pause",
   "function.media.previous": "Previous / Rewind",
   "function.media.next": "Next / Fast Forward",

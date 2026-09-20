@@ -74,12 +74,22 @@ impl BindingIndex {
     }
 
     pub fn best_match(&self, code: InputCode, state: &InputState) -> Option<usize> {
+        self.best_match_where(code, state, |_| true)
+    }
+
+    pub fn best_match_where(
+        &self,
+        code: InputCode,
+        state: &InputState,
+        allowed: impl Fn(FunctionId) -> bool,
+    ) -> Option<usize> {
         self.candidates[code.index()]
             .iter()
             .copied()
             .find(|&index| {
                 let binding = &self.bindings[index];
-                binding.shortcut.primary_code() == code
+                allowed(binding.key.function)
+                    && binding.shortcut.primary_code() == code
                     && state.logical_modifiers() == binding.shortcut.modifiers
             })
     }
@@ -89,13 +99,21 @@ impl BindingIndex {
     }
 
     pub fn uses_modifier(&self, code: InputCode) -> bool {
+        self.uses_modifier_where(code, |_| true)
+    }
+
+    pub fn uses_modifier_where(
+        &self,
+        code: InputCode,
+        allowed: impl Fn(FunctionId) -> bool,
+    ) -> bool {
         let InputCode::Key(key) = code else {
             return false;
         };
         let logical = crate::function::ModifierSet::from_keys([key]);
-        self.bindings
-            .iter()
-            .any(|binding| logical.is_subset_of(binding.shortcut.modifiers))
+        self.bindings.iter().any(|binding| {
+            allowed(binding.key.function) && logical.is_subset_of(binding.shortcut.modifiers)
+        })
     }
 }
 

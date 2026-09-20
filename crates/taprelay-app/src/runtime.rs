@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 use std::time::{Duration, Instant};
 use taprelay_core::{
     command::{COMMAND_TTL, CommandPhase, MediaCommand, QueuedCommand},
-    function::{FunctionAction, FunctionId, Shortcut},
+    function::{AppCommand, FunctionAction, FunctionId, Shortcut},
     input::{InputCode, InputEvent, InputState, Recorder},
     input_router::{RouteResult, RoutedInput, RoutedOutput, RouterReason},
     state::Snapshot,
@@ -46,6 +46,7 @@ pub struct Runtime {
     pub capture_cancelled: bool,
     pub capture_invalid: bool,
     input: Option<Box<dyn InputSource>>,
+    input_initialized: bool,
     transport: Option<Box<dyn Transport>>,
     events: mpsc::Receiver<RoutedInput>,
     sender: mpsc::Sender<RoutedInput>,
@@ -94,6 +95,7 @@ impl Runtime {
             capture_cancelled: false,
             capture_invalid: false,
             input: None,
+            input_initialized: false,
             transport: None,
             events,
             sender,
@@ -226,6 +228,28 @@ impl Runtime {
         Ok(())
     }
 
+    fn input_required(&self) -> bool {
+        self.listening
+            || self.recording()
+            || self
+                .config
+                .functions
+                .get(&FunctionId::AppToggleListening)
+                .is_some_and(|config| config.enabled && !config.shortcuts.is_empty())
+    }
+
+    fn sync_input(&mut self) -> Result<()> {
+        self.input_initialized = true;
+        if self.input_required() {
+            self.ensure_input()?;
+        }
+        self.configure_input();
+        if !self.input_required() {
+            self.input.take();
+        }
+        Ok(())
+    }
+
     fn configure_input(&mut self) {
         let result = self
             .input
@@ -247,7 +271,7 @@ impl Runtime {
         }
         self.listening = on;
         self.configure_input();
-        if !on && !self.recording() {
+        if !self.input_required() {
             self.input.take();
         }
         if !on {
@@ -358,7 +382,7 @@ impl Runtime {
         self.capture_state = InputState::default();
         self.recorder.reset();
         self.discard_events();
-        if !self.listening {
+        if !self.input_required() {
             self.input.take();
         }
     }
@@ -397,7 +421,9 @@ impl Runtime {
 
     pub fn bindings_changed(&mut self) {
         self.bindings_revision += 1;
-        self.configure_input();
+        if let Err(error) = self.sync_input() {
+            self.error = Some(error.to_string());
+        }
     }
 
     pub fn set_function_enabled(&mut self, id: FunctionId, enabled: bool) -> Result<()> {
@@ -506,6 +532,11 @@ impl Runtime {
     }
 
     pub fn tick(&mut self) {
+        if !self.input_initialized
+            && let Err(error) = self.sync_input()
+        {
+            self.error = Some(error.to_string());
+        }
         let stopped = self
             .transport
             .as_ref()
@@ -557,7 +588,7 @@ impl Runtime {
             .as_ref()
             .is_some_and(|input| !input.is_finished());
         self.configure_input();
-        if (self.listening || self.recording()) && !self.state.input {
+        if self.input_required() && self.input.is_some() && !self.state.input {
             self.error = Some(
                 self.input
                     .as_ref()
@@ -568,6 +599,7 @@ impl Runtime {
             self.capture_cancelled = true;
             self.invalidate(RouterReason::ListenerStopped);
             self.finish_recording();
+            self.input.take();
         }
 
         if self.recording() && self.capture_waiting() && !platform::desktop::any_input_held() {
@@ -677,11 +709,28 @@ impl Runtime {
                     tracing::info!(?binding, ?action, "Input recognized");
                 }
                 RoutedOutput::Function {
+                    action: FunctionAction::App(AppCommand::ToggleListening),
+                    down,
+                    created,
+                    ..
+                } => {
+                    if down
+                        && !self.recording()
+                        && created >= self.epoch
+                        && let Err(error) = self.set_listening(!self.listening)
+                    {
+                        self.error = Some(error.to_string());
+                    }
+                }
+                RoutedOutput::Function {
                     action: FunctionAction::Media(action),
                     down,
                     created,
                     ..
                 } => {
+                    if down && (!self.listening || created < self.epoch) {
+                        continue;
+                    }
                     if let Err(error) = self.enqueue_media(
                         action,
                         if down {
@@ -1005,5 +1054,112 @@ mod tests {
             .unwrap();
         runtime.tick();
         assert_eq!(runtime.matched, 0);
+    }
+    fn app_runtime() -> Runtime {
+        let mut config = Config::default();
+        config.functions.insert(
+            FunctionId::AppToggleListening,
+            FunctionConfig {
+                enabled: true,
+                shortcuts: vec![Shortcut::keyboard(ModifierSet::empty(), 0x78)],
+            },
+        );
+        let mut runtime = Runtime::new(config);
+        runtime.input = Some(Box::new(FakeInput));
+        runtime
+    }
+
+    fn function_output(action: FunctionAction, down: bool, created: Instant) -> RouteResult {
+        RouteResult {
+            outputs: vec![RoutedOutput::Function {
+                binding: taprelay_core::binding::BindingKey {
+                    function: FunctionId::AppToggleListening,
+                    slot: 0,
+                },
+                action,
+                down,
+                created,
+                token: 1,
+                revision: 0,
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn app_shortcut_keeps_input_alive_at_startup_and_across_listener_changes() {
+        let mut runtime = app_runtime();
+        runtime.tick();
+        assert!(runtime.input_initialized);
+        assert!(runtime.state.input);
+        assert!(!runtime.listening);
+        let action = FunctionAction::App(AppCommand::ToggleListening);
+        for expected in [true, false, true] {
+            runtime.apply_router_outputs(function_output(action, true, Instant::now()));
+            assert_eq!(runtime.listening, expected);
+            assert!(runtime.input.is_some());
+            runtime.apply_router_outputs(function_output(action, false, Instant::now()));
+            assert_eq!(runtime.listening, expected);
+        }
+        assert!(runtime.receipts.is_empty());
+        assert!(runtime.error.is_none());
+    }
+
+    #[test]
+    fn removing_or_disabling_last_app_binding_releases_idle_input() {
+        let mut runtime = app_runtime();
+        runtime
+            .set_function_enabled(FunctionId::AppToggleListening, false)
+            .unwrap();
+        assert!(runtime.input.is_none());
+        let mut runtime = app_runtime();
+        runtime
+            .remove_shortcut(FunctionId::AppToggleListening, 0)
+            .unwrap();
+        assert!(runtime.input.is_none());
+        let mut runtime = app_runtime();
+        runtime.capture = CapturePhase::Recording;
+        runtime.finish_recording();
+        assert!(runtime.input.is_some());
+    }
+
+    #[test]
+    fn paused_or_stale_media_presses_do_not_reach_transport() {
+        let mut runtime = app_runtime();
+        runtime.transport = Some(Box::new(FakeTransport));
+        runtime.state.ready = true;
+        runtime.state.selected = Some("receiver".into());
+        let action = FunctionAction::Media(MediaCommand::PlayPause);
+        runtime.apply_router_outputs(function_output(action, true, Instant::now()));
+        assert!(runtime.receipts.is_empty());
+        let stale = Instant::now();
+        runtime.set_listening(false).unwrap();
+        runtime.set_listening(true).unwrap();
+        runtime.apply_router_outputs(function_output(action, true, stale));
+        assert!(runtime.receipts.is_empty());
+        runtime.apply_router_outputs(function_output(action, true, Instant::now()));
+        assert_eq!(runtime.receipts.len(), 1);
+    }
+
+    #[test]
+    fn failed_idle_app_hook_is_reported_without_automatic_restart() {
+        struct FailedInput;
+        impl InputSource for FailedInput {
+            fn is_finished(&self) -> bool {
+                true
+            }
+            fn failure(&self) -> Option<String> {
+                Some("hook failed".into())
+            }
+        }
+        let mut runtime = app_runtime();
+        runtime.input_initialized = true;
+        runtime.input = Some(Box::new(FailedInput));
+        runtime.tick();
+        assert_eq!(runtime.error.as_deref(), Some("hook failed"));
+        assert!(runtime.input.is_none());
+        runtime.tick();
+        assert!(runtime.input.is_none());
+        assert!(!runtime.listening);
     }
 }

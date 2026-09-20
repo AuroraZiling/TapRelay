@@ -701,15 +701,16 @@ fn preview_function_layouts(ui: &AppWindow, out: &std::path::Path) {
                 let shot = ui.window().take_snapshot().unwrap();
                 assert_eq!((shot.width(), shot.height()), (width as u32, height as u32));
                 if mode == 2 {
-                    // The shortcut must leave the trigger column clear.
-                    let stride = shot.width() as usize;
-                    let gap_x = width as usize - 356;
-                    let background = shot.as_slice()[165 * stride + gap_x];
-                    assert!(
-                        (176..201).all(|y| (gap_x..gap_x + 5)
-                            .all(|x| shot.as_slice()[y * stride + x] == background)),
-                        "Long shortcut labels must not invade the trigger column"
-                    );
+                    let function_column = binding_element(ui, "binding-function-media.play-pause");
+                    for slot in 0..2 {
+                        let shortcut =
+                            binding_element(ui, &format!("binding-slot-media.play-pause-{slot}"));
+                        assert!(
+                            shortcut.absolute_position().x + shortcut.size().width
+                                <= function_column.absolute_position().x,
+                            "Long shortcut labels must not invade the trigger column"
+                        );
+                    }
                 }
                 let mut bytes =
                     format!("P6\n{} {}\n255\n", shot.width(), shot.height()).into_bytes();
@@ -832,6 +833,20 @@ fn preview_function_layouts(ui: &AppWindow, out: &std::path::Path) {
         "Recording must lock function switches"
     );
     set_binding_capture(ui, "", -1, "", "");
+    ui.window().set_size(slint::LogicalSize::new(1120., 900.));
+    let _ = ui.window().take_snapshot().unwrap();
+    let app = ui.global::<BindingUi>().get_rows().row_data(4).unwrap();
+    assert_eq!(app.id.as_str(), "app.toggle-listening");
+    actions.borrow_mut().clear();
+    binding_element(ui, "binding-enabled-app.toggle-listening").invoke_accessible_default_action();
+    binding_element(ui, "binding-slot-app.toggle-listening-0").invoke_accessible_default_action();
+    assert_eq!(
+        *actions.borrow(),
+        vec![
+            BindingUiAction::Toggle("app.toggle-listening".into(), false),
+            BindingUiAction::Begin("app.toggle-listening".into(), 0),
+        ]
+    );
 }
 
 // Content may be clipped, but cannot resize the two page-owned grid rows.

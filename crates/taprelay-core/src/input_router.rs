@@ -312,7 +312,7 @@ impl InputRouter {
                 outputs: Vec::new(),
             });
         }
-        if !self.listening || self.recording {
+        if self.recording {
             if event.down {
                 self.local_held.insert(event.code);
             }
@@ -373,7 +373,7 @@ impl InputRouter {
     }
 
     fn route_continuous(&mut self, input: PhysicalInput) -> RouteResult {
-        if !self.listening || self.recording {
+        if self.recording {
             return RouteResult::pass(input);
         }
         let mut result = RouteResult {
@@ -423,7 +423,7 @@ impl InputRouter {
             };
         }
 
-        if !self.listening || self.recording {
+        if self.recording {
             if event.down {
                 self.local_held.insert(event.code);
             }
@@ -461,7 +461,11 @@ impl InputRouter {
         }
 
         if event.down
-            && let Some(index) = self.index.best_match(event.code, &self.physical)
+            && let Some(index) = self
+                .index
+                .best_match_where(event.code, &self.physical, |id| {
+                    self.listening || id == FunctionId::AppToggleListening
+                })
         {
             let binding = self.index.binding(index).expect("index entry").clone();
             return self.activate(binding, event.captured);
@@ -495,7 +499,9 @@ impl InputRouter {
 
         if event.down
             && matches!(event.code, InputCode::Key(key) if modifier(key))
-            && self.index.uses_modifier(event.code)
+            && self.index.uses_modifier_where(event.code, |id| {
+                self.listening || id == FunctionId::AppToggleListening
+            })
         {
             if !self.pending_modifiers.contains(&event.code) {
                 self.pending_modifiers.push(event.code);
@@ -511,7 +517,7 @@ impl InputRouter {
     }
 
     fn normal_input(&mut self, event: InputEvent) -> RouteResult {
-        if !self.listening || self.recording {
+        if self.recording {
             return RouteResult::pass(PhysicalInput::Edge {
                 code: event.code,
                 down: event.down,
@@ -1254,5 +1260,132 @@ mod tests {
                 down: false
             })]
         ));
+    }
+    #[test]
+    fn app_toggle_survives_pause_without_repeating_or_leaking_edges() {
+        for shortcut in [
+            Shortcut::keyboard(ModifierSet::empty(), 0x78),
+            Shortcut::mouse(ModifierSet::empty(), crate::input::MouseButton::Side1),
+            Shortcut::keyboard(
+                ModifierSet {
+                    ctrl: true,
+                    ..Default::default()
+                },
+                0x78,
+            ),
+        ] {
+            let mut router = router_with(shortcut.clone(), FunctionId::AppToggleListening);
+            let action = FunctionAction::App(crate::function::AppCommand::ToggleListening);
+            for listening in [false, true, false] {
+                router.set_listening(listening);
+                if shortcut.modifiers.ctrl {
+                    assert!(
+                        router
+                            .route_event(event(InputCode::Key(0x11), true))
+                            .consume
+                    );
+                }
+                let code = shortcut.primary_code();
+                assert_eq!(
+                    outputs(&router.route_event(event(code, true))),
+                    [(action, true)]
+                );
+                router.set_listening(!listening);
+                let repeat = router.route_event(event(code, true));
+                assert!(repeat.consume);
+                assert!(outputs(&repeat).is_empty());
+                assert!(outputs(&router.tick(Instant::now() + HOLD_THRESHOLD)).is_empty());
+                let release = router.route_event(event(code, false));
+                assert!(release.consume);
+                assert!(outputs(&release).is_empty());
+                if shortcut.modifiers.ctrl {
+                    assert!(
+                        router
+                            .route_event(event(InputCode::Key(0x11), false))
+                            .consume
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn paused_media_modifiers_pass_through_and_recording_disables_app_shortcuts() {
+        let mut router = router_with(
+            Shortcut::keyboard(
+                ModifierSet {
+                    ctrl: true,
+                    ..Default::default()
+                },
+                0x58,
+            ),
+            FunctionId::MediaPlayPause,
+        );
+        router.set_listening(false);
+        for (code, down) in [(0x11, true), (0x58, true), (0x58, false), (0x11, false)] {
+            let result = router.route_event(event(InputCode::Key(code), down));
+            assert!(!result.consume);
+            assert!(outputs(&result).is_empty());
+        }
+        let mut router = router_with(
+            Shortcut::keyboard(ModifierSet::empty(), 0x78),
+            FunctionId::AppToggleListening,
+        );
+        router.set_recording(true);
+        for down in [true, false] {
+            let result = router.route_event(event(InputCode::Key(0x78), down));
+            assert!(!result.consume);
+            assert!(outputs(&result).is_empty());
+        }
+    }
+    #[test]
+    fn app_pause_releases_media_hold_and_suppresses_its_remaining_edges() {
+        let mut configs = default_configs();
+        for (id, key) in [
+            (FunctionId::MediaNext, 0x58),
+            (FunctionId::AppToggleListening, 0x78),
+        ] {
+            configs.insert(
+                id,
+                FunctionConfig {
+                    enabled: true,
+                    shortcuts: vec![Shortcut::keyboard(ModifierSet::empty(), key)],
+                },
+            );
+        }
+        let mut router = InputRouter::new(&configs, 1);
+        router.set_listening(true);
+        let now = Instant::now();
+        router.route_event(event_at(InputCode::Key(0x58), true, now));
+        assert_eq!(
+            outputs(&router.tick(now + HOLD_THRESHOLD)),
+            [(media(MediaCommand::FastForward), true)]
+        );
+        assert_eq!(
+            outputs(&router.route_event(event(InputCode::Key(0x78), true))),
+            [(
+                FunctionAction::App(crate::function::AppCommand::ToggleListening),
+                true
+            )]
+        );
+        assert_eq!(
+            outputs(&router.set_listening(false)),
+            [(media(MediaCommand::FastForward), false)]
+        );
+        assert!(outputs(&router.tick(now + HOLD_THRESHOLD * 2)).is_empty());
+        for code in [0x58, 0x78] {
+            let result = router.route_event(event(InputCode::Key(code), false));
+            assert!(result.consume);
+            assert!(outputs(&result).is_empty());
+        }
+        assert!(
+            !router
+                .route_event(event(InputCode::Key(0x58), true))
+                .consume
+        );
+        assert_eq!(
+            outputs(&router.route_event(event(InputCode::Key(0x78), true))).len(),
+            1
+        );
     }
 }

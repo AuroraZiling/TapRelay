@@ -196,8 +196,11 @@ impl Config {
     pub fn load(path: &Path) -> Result<Self> {
         match std::fs::read(path) {
             Ok(bytes) => {
-                let c: Self = serde_json::from_slice(&bytes)
+                let mut c: Self = serde_json::from_slice(&bytes)
                     .context("Invalid configuration; move config.json aside to start fresh")?;
+                c.functions
+                    .entry(taprelay_core::function::FunctionId::AppToggleListening)
+                    .or_default();
                 c.validate()?;
                 Ok(c)
             }
@@ -374,5 +377,34 @@ mod tests {
         std::fs::write(&unknown, &invalid_bytes).unwrap();
         assert!(Config::load(&unknown).is_err());
         assert_eq!(std::fs::read(&unknown).unwrap(), invalid_bytes);
+    }
+    #[test]
+    fn legacy_config_only_gains_the_app_function_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut original = Config::default();
+        original
+            .functions
+            .get_mut(&taprelay_core::function::FunctionId::MediaMute)
+            .unwrap()
+            .enabled = true;
+        let mut json = serde_json::to_value(&original).unwrap();
+        json["functions"]
+            .as_object_mut()
+            .unwrap()
+            .remove("app.toggle-listening");
+        let bytes = serde_json::to_vec(&json).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        let loaded = Config::load(&path).unwrap();
+        assert_eq!(loaded.functions, original.functions);
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        loaded.save(&path).unwrap();
+        assert_eq!(Config::load(&path).unwrap().functions, original.functions);
+        json["functions"]
+            .as_object_mut()
+            .unwrap()
+            .remove("media.mute");
+        std::fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+        assert!(Config::load(&path).is_err());
     }
 }

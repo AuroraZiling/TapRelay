@@ -9,17 +9,25 @@ use std::collections::{BTreeMap, HashSet};
 #[serde(rename_all = "lowercase")]
 pub enum CategoryId {
     Media,
+    App,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppCommand {
+    ToggleListening,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FunctionAction {
     Media(MediaCommand),
+    App(AppCommand),
 }
 
 impl FunctionAction {
     pub const fn name_key(self) -> &'static str {
         match self {
             Self::Media(command) => command.name_key(),
+            Self::App(AppCommand::ToggleListening) => "function.app.togglelistening",
         }
     }
 }
@@ -36,7 +44,6 @@ pub struct FunctionDefinition {
     /// plain tap that never waits for the release edge.
     pub hold_action: Option<FunctionAction>,
     pub name_key: &'static str,
-    pub category_key: &'static str,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -49,6 +56,8 @@ pub enum FunctionId {
     MediaNext,
     #[serde(rename = "media.mute")]
     MediaMute,
+    #[serde(rename = "app.toggle-listening")]
+    AppToggleListening,
 }
 
 impl FunctionId {
@@ -58,6 +67,7 @@ impl FunctionId {
             Self::MediaPrevious => "media.previous",
             Self::MediaNext => "media.next",
             Self::MediaMute => "media.mute",
+            Self::AppToggleListening => "app.toggle-listening",
         }
     }
 
@@ -67,19 +77,19 @@ impl FunctionId {
             "media.previous" => Self::MediaPrevious,
             "media.next" => Self::MediaNext,
             "media.mute" => Self::MediaMute,
+            "app.toggle-listening" => Self::AppToggleListening,
             _ => return None,
         })
     }
 }
 
-pub const FUNCTION_CATALOG: [FunctionDefinition; 4] = [
+pub const FUNCTION_CATALOG: [FunctionDefinition; 5] = [
     FunctionDefinition {
         id: FunctionId::MediaPlayPause,
         category: CategoryId::Media,
         tap_action: FunctionAction::Media(MediaCommand::PlayPause),
         hold_action: None,
         name_key: "function.media.playpause",
-        category_key: "function.category.media",
     },
     FunctionDefinition {
         id: FunctionId::MediaPrevious,
@@ -87,7 +97,6 @@ pub const FUNCTION_CATALOG: [FunctionDefinition; 4] = [
         tap_action: FunctionAction::Media(MediaCommand::Previous),
         hold_action: Some(FunctionAction::Media(MediaCommand::Rewind)),
         name_key: "function.media.previous",
-        category_key: "function.category.media",
     },
     FunctionDefinition {
         id: FunctionId::MediaNext,
@@ -95,7 +104,6 @@ pub const FUNCTION_CATALOG: [FunctionDefinition; 4] = [
         tap_action: FunctionAction::Media(MediaCommand::Next),
         hold_action: Some(FunctionAction::Media(MediaCommand::FastForward)),
         name_key: "function.media.next",
-        category_key: "function.category.media",
     },
     FunctionDefinition {
         id: FunctionId::MediaMute,
@@ -103,7 +111,13 @@ pub const FUNCTION_CATALOG: [FunctionDefinition; 4] = [
         tap_action: FunctionAction::Media(MediaCommand::Mute),
         hold_action: None,
         name_key: "function.media.mute",
-        category_key: "function.category.media",
+    },
+    FunctionDefinition {
+        id: FunctionId::AppToggleListening,
+        category: CategoryId::App,
+        tap_action: FunctionAction::App(AppCommand::ToggleListening),
+        hold_action: None,
+        name_key: "function.app.togglelistening",
     },
 ];
 
@@ -320,7 +334,7 @@ mod tests {
 
     #[test]
     fn catalog_has_stable_order_and_all_functions_default_off() {
-        assert_eq!(FUNCTION_CATALOG.len(), 4);
+        assert_eq!(FUNCTION_CATALOG.len(), 5);
         assert_eq!(FUNCTION_CATALOG[0].id, FunctionId::MediaPlayPause);
         assert!(default_configs().values().all(|config| !config.enabled));
     }
@@ -434,5 +448,22 @@ mod tests {
         let mut configs = default_configs();
         configs.remove(&FunctionId::MediaMute);
         assert!(!valid_configs(&configs));
+    }
+    #[test]
+    fn app_shortcuts_conflict_with_media_even_when_disabled() {
+        let mut configs = default_configs();
+        let shortcut = Shortcut::keyboard(ModifierSet::empty(), 0x78);
+        configs
+            .get_mut(&FunctionId::AppToggleListening)
+            .unwrap()
+            .shortcuts
+            .push(shortcut.clone());
+        configs
+            .get_mut(&FunctionId::MediaMute)
+            .unwrap()
+            .shortcuts
+            .push(shortcut);
+        assert!(!valid_configs(&configs));
+        assert!(!crate::binding::valid(&configs));
     }
 }

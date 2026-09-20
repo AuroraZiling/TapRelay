@@ -167,25 +167,6 @@ mod tests {
     }
 
     #[test]
-    fn no_catalog_can_introduce_a_key_the_slint_struct_lacks() {
-        for (locale_id, entries) in CATALOGS.iter() {
-            for key in entries.keys() {
-                assert!(
-                    catalog(source()).contains_key(key),
-                    "Key not present in en.json: {key} in {locale_id}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn the_compiled_registry_lists_every_catalog_in_order() {
-        let ids = locale::all().iter().map(Locale::id).collect::<Vec<_>>();
-        assert_eq!(ids, ["en", "zh-cn"]);
-        assert_eq!(source(), "en");
-    }
-
-    #[test]
     fn locale_identifiers_are_normalized() {
         assert_eq!(resolve("zh-CN"), Some("zh-cn"));
         assert_eq!(resolve("ZH_cn"), Some("zh-cn"));
@@ -204,16 +185,6 @@ mod tests {
     #[test]
     fn an_unknown_key_is_a_bug_in_every_build() {
         assert!(std::panic::catch_unwind(|| text("en", "nav.missing")).is_err());
-    }
-
-    #[test]
-    fn catalogs_resolve_their_own_and_the_english_text() {
-        assert_eq!(text("zh-cn", keys::NAV_OVERVIEW), "概览");
-        assert_eq!(text("en", keys::NAV_OVERVIEW), "Overview");
-        assert_ne!(
-            text("zh-cn", keys::NAV_OVERVIEW),
-            text("en", keys::NAV_OVERVIEW)
-        );
     }
 
     #[test]

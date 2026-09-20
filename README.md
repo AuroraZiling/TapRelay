@@ -24,10 +24,9 @@ This is a personal project, so device compatibility is at the *works on my machi
 
 ## Screenshots
 
-<p align="center">
-  <img src=".github/assets/showcase-home-en.webp" width="48%" alt="TapRelay overview"/>
-  <img src=".github/assets/showcase-bindings-en.webp" width="48%" alt="TapRelay bindings"/>
-</p>
+![TapRelay overview](.github/assets/showcase-home-en.webp)
+
+![TapRelay bindings](.github/assets/showcase-bindings-en.webp)
 
 ## Settings and limitations
 

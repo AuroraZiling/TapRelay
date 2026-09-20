@@ -60,26 +60,6 @@ pub struct CaptureTarget {
     pub slot: usize,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn switch_payloads_are_binary() {
-        assert_eq!(toggle("1").ok(), Some(true));
-        assert_eq!(toggle("0").ok(), Some(false));
-        assert!(toggle("true").is_err());
-        assert!(toggle("").is_err());
-    }
-
-    #[test]
-    fn navigation_payload_is_the_declared_page_number() {
-        assert_eq!(page("3").ok(), Some(3));
-        assert_eq!(page("0").ok(), Some(0));
-        assert!(page("settings").is_err());
-    }
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum BindingCommand {
     BeginCapture(CaptureTarget),

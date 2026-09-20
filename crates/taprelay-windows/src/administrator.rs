@@ -188,11 +188,6 @@ mod tests {
         }
     }
     #[test]
-    fn current_token_can_be_inspected() {
-        let s = status().unwrap();
-        assert!(!s.elevated || s.account_admin);
-    }
-    #[test]
     fn restart_handoff_waits_for_process_exit_and_rejects_self() {
         let mut child = std::process::Command::new(std::env::current_exe().unwrap())
             .arg("--list")

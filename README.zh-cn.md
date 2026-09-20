@@ -24,10 +24,9 @@
 
 ## 截图
 
-<p align="center">
-  <img src=".github/assets/showcase-home-zh.webp" width="48%" alt="TapRelay overview"/>
-  <img src=".github/assets/showcase-bindings-zh.webp" width="48%" alt="TapRelay bindings"/>
-</p>
+![TapRelay overview](.github/assets/showcase-home-zh.webp)
+
+![TapRelay bindings](.github/assets/showcase-bindings-zh.webp)
 
 ## 设置与限制
 

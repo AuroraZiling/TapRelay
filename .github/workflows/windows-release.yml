@@ -19,7 +19,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -42,6 +42,8 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+        env:
+          SLINT_EMIT_DEBUG_INFO: '1'
       - run: cargo rustc --release --locked -p taprelay-app -- -C target-feature=+crt-static
       - name: Package portable ZIP
         shell: pwsh
@@ -57,7 +59,7 @@ jobs:
           $files = @('release-package/TapRelay.exe', 'release-package/LICENSE', 'release-package/THIRD_PARTY_NOTICES.md')
           Compress-Archive -LiteralPath $files -DestinationPath "release-assets/TapRelay_$($env:VERSION)_Windows_x64.zip" -Force
       - name: Publish GitHub Release
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         env:
           TAG_NAME: ${{ github.ref_name }}
           VERSION: ${{ steps.version.outputs.version }}
@@ -110,7 +112,7 @@ jobs:
       contents: write
     steps:
       - name: Delete release for removed tag
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         env:
           TAG_NAME: ${{ github.event.ref }}
         with:

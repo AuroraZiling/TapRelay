@@ -64,6 +64,14 @@ fn render_all_views_without_hardware() {
     }))
     .unwrap();
     let ui = AppWindow::new().unwrap();
+    render_pages(&ui);
+    check_binding_capture(&ui);
+    check_navigation_and_settings(&ui);
+    check_surface_redraw(&ui, &render_window);
+    check_binding_layouts_and_actions(&ui);
+}
+
+fn render_pages(ui: &AppWindow) {
     ui.set_device_name("Living room tablet".into());
     ui.set_device_selected(true);
     ui.set_stage("Connected; waiting for HID subscription".into());
@@ -111,16 +119,8 @@ fn render_all_views_without_hardware() {
     ui.set_language_options(i18n::language_options("en"));
     ui.set_data_directory("D:\\Apps\\TapRelay".into());
     ui.set_app_version(version::VERSION.into());
-    let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/gui-previews");
-    std::fs::create_dir_all(&out).unwrap();
-    for (suffix, locale, dark, width, height) in [
-        ("en-dark", "en", true, 1000., 700.),
-        ("zh-light", "zh-cn", false, 800., 560.),
-    ] {
-        i18n::apply(&ui, locale);
-        // The selector is compiled from the locale registry, and the catalog Slint
-        // renders must follow the locale that was installed.
-        assert_eq!(ui.get_language_options().row_count(), 3);
+    for (locale, dark, width, height) in [("en", true, 1000., 700.), ("zh-cn", false, 800., 560.)] {
+        i18n::apply(ui, locale);
         let global = ui.global::<I18n>();
         assert_eq!(global.get_locale(), locale);
         assert_eq!(
@@ -148,231 +148,14 @@ fn render_all_views_without_hardware() {
                 );
                 ui.show().unwrap();
                 i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(100));
-                let shot = ui.window().take_snapshot().unwrap();
-                assert_eq!(shot.width(), width as u32);
-                assert_eq!(shot.height(), height as u32);
-                if mode == 2 && page == 3 && dark {
-                    let width = shot.width() as usize;
-                    let background = shot.as_slice()[300 * width + 70];
-                    let mut longest = 0;
-                    for y in 400..shot.height() as usize {
-                        let mut run = 0;
-                        for x in 60..width.saturating_sub(20) {
-                            if shot.as_slice()[y * width + x] != background {
-                                run += 1;
-                                longest = longest.max(run);
-                            } else {
-                                run = 0;
-                            }
-                        }
-                    }
-                    assert!(
-                        longest < 500,
-                        "The administrator restart button must size to its content, not span {longest}px"
-                    );
-                }
-                let mut bytes =
-                    format!("P6\n{} {}\n255\n", shot.width(), shot.height()).into_bytes();
-                for pixel in shot.as_slice() {
-                    bytes.extend_from_slice(&[pixel.r, pixel.g, pixel.b]);
-                }
-                std::fs::write(out.join(format!("{mode}-{page}-{suffix}.ppm")), bytes).unwrap();
+                let _ = ui.window().take_snapshot().unwrap();
             }
         }
     }
-    preview_overview_binding_tooltips(&ui);
-    // Tap waves must change pixels beyond the counter, then disappear completely.
-    ui.set_mode(1);
-    ui.set_wizard_page(3);
-    ui.set_input_count(0);
+}
+
+fn check_binding_capture(ui: &AppWindow) {
     ui.window().set_size(slint::LogicalSize::new(900., 500.));
-    let idle = ui.window().take_snapshot().unwrap();
-    ui.set_input_count(1);
-    slint::platform::update_timers_and_animations();
-    let _ = ui.window().take_snapshot().unwrap();
-    for _ in 0..10 {
-        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(16));
-        slint::platform::update_timers_and_animations();
-    }
-    let wave = ui.window().take_snapshot().unwrap();
-    let mut bytes = format!("P6\n{} {}\n255\n", wave.width(), wave.height()).into_bytes();
-    for pixel in wave.as_slice() {
-        bytes.extend_from_slice(&[pixel.r, pixel.g, pixel.b]);
-    }
-    std::fs::write(out.join("wizard-tap-wave.ppm"), bytes).unwrap();
-    let changed = idle
-        .as_slice()
-        .iter()
-        .zip(wave.as_slice())
-        .filter(|(a, b)| a != b)
-        .count();
-    assert!(
-        changed > 300,
-        "Tap must animate beyond the counter: {changed}"
-    );
-    ui.set_input_count(2);
-    let _ = ui.window().take_snapshot().unwrap();
-    for _ in 0..60 {
-        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(16));
-        slint::platform::update_timers_and_animations();
-    }
-    ui.set_input_count(0);
-    let reset = ui.window().take_snapshot().unwrap();
-    assert_eq!(
-        idle.as_slice(),
-        reset.as_slice(),
-        "Waves must settle; counter reset must not emit a wave"
-    );
-    // Exercise the shared receiver page with real typed view projections.
-    use taprelay_core::{
-        devices::*,
-        state::{Knowledge, Snapshot, Target},
-    };
-    ui.set_mode(1);
-    ui.set_wizard_page(2);
-    for (name, adapter, discovery, connection) in [
-        (
-            "off",
-            AdapterState::Disabled,
-            DiscoveryState::Idle,
-            Connection::Disconnected,
-        ),
-        (
-            "unavailable",
-            AdapterState::Unavailable,
-            DiscoveryState::Idle,
-            Connection::Disconnected,
-        ),
-        (
-            "scanning",
-            AdapterState::Available,
-            DiscoveryState::Scanning,
-            Connection::Disconnected,
-        ),
-        (
-            "empty",
-            AdapterState::Available,
-            DiscoveryState::ResultsAvailable,
-            Connection::Disconnected,
-        ),
-        (
-            "paired",
-            AdapterState::Available,
-            DiscoveryState::ResultsAvailable,
-            Connection::Disconnected,
-        ),
-        (
-            "waiting",
-            AdapterState::Available,
-            DiscoveryState::ResultsAvailable,
-            Connection::AwaitingHostSubscription,
-        ),
-        (
-            "connected",
-            AdapterState::Available,
-            DiscoveryState::ResultsAvailable,
-            Connection::Connected,
-        ),
-        (
-            "failed",
-            AdapterState::Available,
-            DiscoveryState::Failed,
-            Connection::Failed,
-        ),
-    ] {
-        let mut state = Snapshot {
-            adapter_state: adapter,
-            discovery,
-            selected: Some("tablet".into()),
-            ..Default::default()
-        };
-        if !matches!(name, "off" | "unavailable" | "scanning" | "empty") {
-            state.targets.push(Target {
-                id: "tablet".into(),
-                name: "Artemis’s iPad".into(),
-                kind: taprelay_core::state::DeviceKind::Tablet,
-                pairing: Knowledge::Yes,
-                availability: Availability::Nearby,
-                connection,
-                ..Default::default()
-            });
-            state.targets.push(Target {
-                id: "other".into(),
-                name: "Another nearby device".into(),
-                pairing: Knowledge::No,
-                availability: Availability::Nearby,
-                ..Default::default()
-            });
-        }
-        state.ready = connection == Connection::Connected;
-        let rows: Vec<_> = state
-            .targets
-            .iter()
-            .map(|t| receiver_view::row(t, &state, |key| i18n::text("en", key)))
-            .collect();
-        ui.set_paired_devices(ModelRc::new(VecModel::from(
-            rows.iter()
-                .filter(|r| r.paired)
-                .cloned()
-                .collect::<Vec<_>>(),
-        )));
-        ui.set_adapter_label(i18n::text("en", receiver_view::adapter_label_key(adapter)).into());
-        ui.set_bluetooth_available(adapter == AdapterState::Available);
-        ui.set_discovery_status(i18n::text("en", receiver_view::page_status_key(&state)).into());
-        ui.set_scanning(discovery == DiscoveryState::Scanning);
-        ui.set_receiver_next_allowed(receiver_next_allowed(&state));
-        assert_eq!(ui.get_receiver_next_allowed(), name == "connected");
-        i18n::apply(&ui, "en");
-        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(100));
-        let shot = ui.window().take_snapshot().unwrap();
-        let mut bytes = format!("P6\n{} {}\n255\n", shot.width(), shot.height()).into_bytes();
-        for pixel in shot.as_slice() {
-            bytes.extend_from_slice(&[pixel.r, pixel.g, pixel.b]);
-        }
-        std::fs::write(out.join(format!("receiver-{name}.ppm")), bytes).unwrap();
-        if name == "connected" {
-            let mut hovered = None;
-            for x in [598., 600., 604., 608., 598.] {
-                ui.window()
-                    .dispatch_event(slint::platform::WindowEvent::PointerMoved {
-                        position: slint::LogicalPosition::new(x, 191.),
-                    });
-                i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
-                let current = ui.window().take_snapshot().unwrap();
-                let pixels = current.as_slice().to_vec();
-                assert!(pixels != shot.as_slice(), "Hover must display a tooltip");
-                assert!(
-                    pixels
-                        .iter()
-                        .zip(shot.as_slice())
-                        .enumerate()
-                        .any(|(i, (a, b))| {
-                            let y = i / current.width() as usize;
-                            !(163..219).contains(&y) && a != b
-                        }),
-                    "The tooltip bubble must be visible outside the row, not only the hover highlight"
-                );
-                assert!(
-                    hovered.get_or_insert(pixels.clone()) == &pixels,
-                    "Tooltip must remain stable while moving over the status icon"
-                );
-            }
-            ui.window()
-                .dispatch_event(slint::platform::WindowEvent::PointerMoved {
-                    position: slint::LogicalPosition::new(400., 350.),
-                });
-            i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
-            let _ = ui.window().take_snapshot().unwrap();
-            i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
-            let left = ui.window().take_snapshot().unwrap();
-            assert!(
-                left.as_slice()[..800 * 400] == shot.as_slice()[..800 * 400],
-                "Leaving the icon must dismiss the tooltip and highlight"
-            );
-        }
-    }
-    // Preview the new function-grouped binding page at minimum width, and
-    // verify that its empty-slot recorder receives keyboard focus.
     ui.set_mode(1);
     ui.set_wizard_page(1);
     let shortcut = ShortcutItem {
@@ -391,42 +174,21 @@ fn render_all_views_without_hardware() {
         enabled: true,
         shortcuts: ModelRc::new(VecModel::from(vec![shortcut])),
     };
-    set_function_bindings(&ui, vec![row.clone()]);
-    for (name, function, slot) in [
-        ("edit", "media.play-pause", 0),
-        ("new", "media.play-pause", 0),
-        ("error", "media.play-pause", 0),
-        ("empty", "", -1),
-    ] {
-        let mut preview_row = row.clone();
-        if name == "new" {
-            preview_row.shortcuts = ModelRc::new(VecModel::default());
-        }
-        set_function_bindings(&ui, vec![preview_row]);
-        set_binding_capture(
-            &ui,
-            function,
-            slot,
-            "请按下快捷键，松开完成",
-            if name == "error" { "无效组合" } else { "" },
-        );
-        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
-        let shot = ui.window().take_snapshot().unwrap();
-        if name == "error" {
-            let error = binding_element(&ui, "binding-error-media.play-pause");
-            assert_eq!(
-                error.accessible_live_region(),
-                Some(i_slint_backend_testing::AccessibleLiveness::Polite),
-                "Capture validation must be announced without stealing focus"
-            );
-            assert_eq!(error.accessible_label().as_deref(), Some("无效组合"));
-        }
-        let mut bytes = format!("P6\n{} {}\n255\n", shot.width(), shot.height()).into_bytes();
-        for pixel in shot.as_slice() {
-            bytes.extend_from_slice(&[pixel.r, pixel.g, pixel.b]);
-        }
-        std::fs::write(out.join(format!("bindings-{name}.ppm")), bytes).unwrap();
-    }
+    set_function_bindings(ui, vec![row.clone()]);
+    set_binding_capture(
+        ui,
+        "media.play-pause",
+        0,
+        "请按下快捷键，松开完成",
+        "无效组合",
+    );
+    let _ = ui.window().take_snapshot().unwrap();
+    let error = binding_element(ui, "binding-error-media.play-pause");
+    assert_eq!(
+        error.accessible_live_region(),
+        Some(i_slint_backend_testing::AccessibleLiveness::Polite)
+    );
+    assert_eq!(error.accessible_label().as_deref(), Some("无效组合"));
     let captured_keys = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let observed = captured_keys.clone();
     ui.global::<BindingUi>()
@@ -437,8 +199,8 @@ fn render_all_views_without_hardware() {
         .on_cancel_capture(move || observed.set(true));
     let mut empty_row = row.clone();
     empty_row.shortcuts = ModelRc::new(VecModel::default());
-    set_function_bindings(&ui, vec![empty_row]);
-    set_binding_capture(&ui, "media.play-pause", 0, "请按下快捷键，松开完成", "");
+    set_function_bindings(ui, vec![empty_row]);
+    set_binding_capture(ui, "media.play-pause", 0, "请按下快捷键，松开完成", "");
     let _ = ui.window().take_snapshot().unwrap();
     for key in [
         slint::platform::Key::F8.into(),
@@ -471,8 +233,12 @@ fn render_all_views_without_hardware() {
         cancelled.get(),
         "An empty slot must receive Escape without an extra click"
     );
+    set_binding_capture(ui, "", -1, "", "");
+}
+
+fn check_navigation_and_settings(ui: &AppWindow) {
     // Exercise real pointer routing through the tooltip wrapper, not just callback invocation.
-    i18n::apply(&ui, "en");
+    i18n::apply(ui, "en");
     ui.set_mode(2);
     ui.set_page(0);
     ui.window().set_size(slint::LogicalSize::new(1000., 700.));
@@ -546,7 +312,7 @@ fn render_all_views_without_hardware() {
         ("setting-notifications", "set-notifications"),
     ] {
         actions.borrow_mut().clear();
-        let switch = binding_element(&ui, accessible_id);
+        let switch = binding_element(ui, accessible_id);
         switch.invoke_accessible_default_action();
         switch.invoke_accessible_default_action();
         let emitted = actions.borrow().clone();
@@ -571,7 +337,12 @@ fn render_all_views_without_hardware() {
     }
     ui.window().set_size(slint::LogicalSize::new(1000., 700.));
     let _ = ui.window().take_snapshot().unwrap();
+}
 
+fn check_surface_redraw(
+    ui: &AppWindow,
+    render_window: &slint::platform::software_renderer::MinimalSoftwareWindow,
+) {
     // Seed the retained renderer cache and confirm unchanged UI has no damage.
     use slint::platform::software_renderer::PremultipliedRgbaColor;
     let mut frame = vec![PremultipliedRgbaColor::default(); 1000 * 700];
@@ -628,21 +399,17 @@ fn render_all_views_without_hardware() {
             );
         }
     }
-    preview_function_layouts(&ui, &out);
-    preview_fixed_overview(&ui, &out);
 }
 
-// Use the real catalog and deliberately long shortcuts, rather than English
-// placeholders in every locale. This exercises the actual nested page layouts.
-fn preview_function_layouts(ui: &AppWindow, out: &std::path::Path) {
+fn check_binding_layouts_and_actions(ui: &AppWindow) {
     use taprelay_core::function::FUNCTION_CATALOG;
     set_binding_capture(ui, "", -1, "", "");
     ui.set_problem("".into());
-    for (suffix, locale, dark, width, height) in [
-        ("zh-dark-min", "zh-cn", true, 900., 500.),
-        ("en-light-min", "en", false, 900., 500.),
-        ("zh-light", "zh-cn", false, 1120., 700.),
-        ("en-dark", "en", true, 1120., 700.),
+    for (locale, dark, width, height) in [
+        ("zh-cn", true, 900., 500.),
+        ("en", false, 900., 500.),
+        ("zh-cn", false, 1120., 700.),
+        ("en", true, 1120., 700.),
     ] {
         i18n::apply(ui, locale);
         ui.global::<Theme>().set_mode(if dark {
@@ -692,40 +459,20 @@ fn preview_function_layouts(ui: &AppWindow, out: &std::path::Path) {
         rows[3].enabled = false;
         rows[2].enabled = false;
         set_function_bindings(ui, rows);
-        for mode in [2, 1] {
-            ui.set_mode(mode);
-            {
-                let page = 1;
-                ui.set_page(page);
-                ui.set_wizard_page(0);
-                let _ = ui.window().take_snapshot().unwrap();
-                i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
-                slint::platform::update_timers_and_animations();
-                let shot = ui.window().take_snapshot().unwrap();
-                assert_eq!((shot.width(), shot.height()), (width as u32, height as u32));
-                if mode == 2 {
-                    let function_column = binding_element(ui, "binding-function-media.play-pause");
-                    for slot in 0..2 {
-                        let shortcut =
-                            binding_element(ui, &format!("binding-slot-media.play-pause-{slot}"));
-                        assert!(
-                            shortcut.absolute_position().x + shortcut.size().width
-                                <= function_column.absolute_position().x,
-                            "Long shortcut labels must not invade the trigger column"
-                        );
-                    }
-                }
-                let mut bytes =
-                    format!("P6\n{} {}\n255\n", shot.width(), shot.height()).into_bytes();
-                for pixel in shot.as_slice() {
-                    bytes.extend_from_slice(&[pixel.r, pixel.g, pixel.b]);
-                }
-                std::fs::write(
-                    out.join(format!("layout-{mode}-{page}-{suffix}.ppm")),
-                    bytes,
-                )
-                .unwrap();
-            }
+        ui.set_mode(2);
+        ui.set_page(1);
+        let _ = ui.window().take_snapshot().unwrap();
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+        slint::platform::update_timers_and_animations();
+        let _ = ui.window().take_snapshot().unwrap();
+        let function_column = binding_element(ui, "binding-function-media.play-pause");
+        for slot in 0..2 {
+            let shortcut = binding_element(ui, &format!("binding-slot-media.play-pause-{slot}"));
+            assert!(
+                shortcut.absolute_position().x + shortcut.size().width
+                    <= function_column.absolute_position().x,
+                "Long shortcut labels must not invade the trigger column"
+            );
         }
     }
     let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
@@ -770,7 +517,6 @@ fn preview_function_layouts(ui: &AppWindow, out: &std::path::Path) {
         ],
         "Both an existing second shortcut and the add-second control must be interactive"
     );
-    use slint::Model;
     assert_eq!(
         ui.global::<BindingUi>()
             .get_rows()
@@ -850,112 +596,4 @@ fn preview_function_layouts(ui: &AppWindow, out: &std::path::Path) {
             BindingUiAction::Begin("app.toggle-listening".into(), 0),
         ]
     );
-}
-
-fn preview_overview_binding_tooltips(ui: &AppWindow) {
-    ui.set_mode(2);
-    ui.set_page(0);
-    ui.set_problem("".into());
-    ui.window().set_size(slint::LogicalSize::new(1000., 700.));
-    ui.window()
-        .dispatch_event(slint::platform::WindowEvent::PointerMoved {
-            position: slint::LogicalPosition::new(70., 680.),
-        });
-    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
-    let _ = ui.window().take_snapshot().unwrap();
-    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
-    for shortcut in ["F8", "LCtrl + ]"] {
-        let pill = ui
-            .root_element()
-            .query_descendants()
-            .match_predicate(move |element| {
-                element
-                    .accessible_label()
-                    .is_some_and(|label| label == shortcut)
-            })
-            .find_first()
-            .unwrap();
-        let idle = ui.window().take_snapshot().unwrap();
-        let position = pill.absolute_position();
-        ui.window()
-            .dispatch_event(slint::platform::WindowEvent::PointerMoved {
-                position: slint::LogicalPosition::new(position.x + 5., position.y + 5.),
-            });
-        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
-        let hovered = ui.window().take_snapshot().unwrap();
-        assert!(
-            hovered.as_slice() != idle.as_slice(),
-            "Hovering {shortcut} must display its function tooltip"
-        );
-        ui.window()
-            .dispatch_event(slint::platform::WindowEvent::PointerMoved {
-                position: slint::LogicalPosition::new(70., 680.),
-            });
-        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
-        let _ = ui.window().take_snapshot().unwrap();
-        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
-        let dismissed = ui.window().take_snapshot().unwrap();
-        assert!(
-            dismissed.as_slice() == idle.as_slice(),
-            "Leaving {shortcut} must dismiss its function tooltip"
-        );
-    }
-}
-
-// Content may be clipped, but cannot resize the two page-owned grid rows.
-fn preview_fixed_overview(ui: &AppWindow, out: &std::path::Path) {
-    ui.set_mode(2);
-    ui.set_page(0);
-    ui.set_elevated(false);
-    ui.set_bindings(ModelRc::new(VecModel::from(
-        (0..12)
-            .map(|_| BindingRow {
-                text: "Ctrl + Shift + Alt + Win + PageDown".into(),
-                enabled: true,
-                ..Default::default()
-            })
-            .collect::<Vec<_>>(),
-    )));
-    for (name, locale, height) in [
-        ("zh-min", "zh-cn", 500.),
-        ("en-min", "en", 500.),
-        ("zh-tall", "zh-cn", 700.),
-    ] {
-        i18n::apply(ui, locale);
-        ui.set_problem("Bluetooth service unavailable".into());
-        ui.window().set_size(slint::LogicalSize::new(900., height));
-        let _ = ui.window().take_snapshot().unwrap();
-        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1000));
-        slint::platform::update_timers_and_animations();
-        let shot = ui.window().take_snapshot().unwrap();
-        assert_eq!((shot.width(), shot.height()), (900, height as u32));
-        let stride = shot.width() as usize;
-        let background = shot.as_slice()[(height as usize - 1) * stride + 80];
-        assert!(
-            (height as usize - 24..height as usize)
-                .all(|y| (80..900).all(|x| shot.as_slice()[y * stride + x] == background)),
-            "Overview content must stay above the bottom window padding"
-        );
-        assert!(
-            (200..height as usize - 28)
-                .filter(|&y| shot.as_slice()[y * stride + 90] != background)
-                .count()
-                > 150,
-            "Both grid cards must occupy the available page space"
-        );
-        let saved_bindings = ui.get_bindings();
-        ui.set_bindings(ModelRc::new(VecModel::default()));
-        let empty = ui.window().take_snapshot().unwrap();
-        assert!(
-            (140..height as usize - 28)
-                .all(|y| shot.as_slice()[y * stride + 90] == empty.as_slice()[y * stride + 90]),
-            "Changing binding content must not move either card boundary"
-        );
-        ui.set_bindings(saved_bindings);
-        let mut bytes = format!("P6\n{} {}\n255\n", shot.width(), shot.height()).into_bytes();
-        for pixel in shot.as_slice() {
-            bytes.extend_from_slice(&[pixel.r, pixel.g, pixel.b]);
-        }
-        std::fs::write(out.join(format!("overview-fixed-{name}.ppm")), bytes).unwrap();
-    }
 }

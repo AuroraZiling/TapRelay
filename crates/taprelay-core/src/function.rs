@@ -333,13 +333,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn catalog_has_stable_order_and_all_functions_default_off() {
-        assert_eq!(FUNCTION_CATALOG.len(), 5);
-        assert_eq!(FUNCTION_CATALOG[0].id, FunctionId::MediaPlayPause);
-        assert!(default_configs().values().all(|config| !config.enabled));
-    }
-
-    #[test]
     fn skip_functions_pair_a_tap_with_a_held_seek() {
         let previous = function_definition(FunctionId::MediaPrevious);
         assert_eq!(

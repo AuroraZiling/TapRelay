@@ -23,7 +23,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@1.94.0
+      - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt, clippy
       - name: Resolve release version

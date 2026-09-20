@@ -40,7 +40,7 @@ This is a personal project, so device compatibility is at the *works on my machi
 
 Build on Windows with Rust, the MSVC C++ build tools and a Windows SDK. The build script requires the SDK resource compiler (`rc.exe`).
 
-`rust-toolchain.toml` selects nightly; the release workflow uses 1.94.0.
+Local builds and releases use the Rust `nightly` channel, configured in `rust-toolchain.toml` and the release workflow.
 
 ```powershell
 cargo run --locked -p taprelay-app

@@ -16,8 +16,8 @@ export component ScrollArea inherits Rectangle {
         interactive: root.drag-to-scroll;
         width: parent.width;
         height: parent.height;
-        viewport-width: parent.width;
-        viewport-height: root.content-height;
+        content-width: parent.width;
+        content-height: root.content-height;
         @children
     }
 
@@ -33,7 +33,7 @@ export component ScrollArea inherits Rectangle {
             x: 0;
             width: parent.width;
             height: max(24px, flick.height * flick.height / root.content-height);
-            y: -flick.viewport-y * flick.height / root.content-height;
+            y: -flick.content-y * flick.height / root.content-height;
             background: Tokens.color-border-hairline-strong;
             border-radius: 3px;
         }

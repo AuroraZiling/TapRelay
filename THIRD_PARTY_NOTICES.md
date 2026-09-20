@@ -121,11 +121,11 @@ SOFTWARE.
 
 ## Slint
 
-This desktop application uses [Slint](https://github.com/slint-ui/slint) 1.17.1 (`slint`, `slint-build` and
+This desktop application uses [Slint](https://github.com/slint-ui/slint) 1.18.0 (`slint`, `slint-build` and
 related crates). Slint offers multiple licensing options. TapRelay selects the
 **GNU General Public License, version 3 only** (`GPL-3.0-only`) option.
 
-See the [license text](https://github.com/slint-ui/slint/blob/cf62c975c311e7036d599ed8ed0b7e6a8386a934/LICENSES/GPL-3.0-only.txt)
+See the [license text](https://github.com/slint-ui/slint/blob/v1.18.0/LICENSES/GPL-3.0-only.txt)
 and [official licensing information](https://slint.dev/pricing).
 
 ## Maintenance

@@ -40,7 +40,7 @@
 
 在 Windows 上构建，需要 Rust、MSVC C++ 构建工具和 Windows SDK。构建脚本需要 SDK 中的资源编译器（`rc.exe`）。
 
-`rust-toolchain.toml` 为 nightly，发布流程使用 1.94.0。
+本地构建和发布均使用 Rust `nightly` 通道，在 `rust-toolchain.toml` 和发布流程中配置。
 
 ```powershell
 cargo run --locked -p taprelay-app

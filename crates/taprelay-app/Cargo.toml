@@ -21,7 +21,7 @@ time = { version = "0.3.55", features = [
     "local-offset",
     "macros",
 ] }
-slint = { version = "=1.17.1", default-features = false, features = [
+slint = { version = "=1.18.0", default-features = false, features = [
     "std",
     "backend-winit",
     "unstable-winit-030",
@@ -34,15 +34,15 @@ tracing-appender = "0.2.5"
 tempfile = "3.27.0"
 
 [build-dependencies]
-slint-build = "=1.17.1"
+slint-build = "=1.18.0"
 serde_json = "1.0.151"
 lucide-slint = "1.47.0"
 
 [dev-dependencies]
-i-slint-backend-testing = { version = "=1.17.1", features = [
+i-slint-backend-testing = { version = "=1.18.0", features = [
     "renderer-software",
 ] }
 
 [target.'cfg(windows)'.dependencies]
-i-slint-core = "=1.17.1"
+i-slint-core = "=1.18.0"
 taprelay-windows = { path = "../taprelay-windows" }

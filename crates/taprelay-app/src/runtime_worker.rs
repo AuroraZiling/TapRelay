@@ -1,6 +1,11 @@
 //! UI facade. The engine and native adapters are constructed and destroyed on
 //! one worker; UI work never holds a lock needed by input delivery.
-use crate::{action::BindingCommand, config::Config, feedback::TestStatus, runtime::Runtime};
+use crate::{
+    action::BindingCommand,
+    config::{Config, Device},
+    feedback::TestStatus,
+    runtime::Runtime,
+};
 use anyhow::{Context, Result};
 use std::{
     ops::{Deref, DerefMut},
@@ -9,7 +14,7 @@ use std::{
     time::Duration,
 };
 use taprelay_core::{
-    function::{FunctionId, Shortcut},
+    function::{FunctionConfigs, FunctionId, Shortcut},
     input::InputEvent,
     state::Snapshot,
 };
@@ -17,7 +22,8 @@ use taprelay_core::{
 type Command = Box<dyn FnOnce(&mut Runtime) + Send>;
 
 pub struct View {
-    pub config: Config,
+    functions: FunctionConfigs,
+    remembered_device: Option<Device>,
     pub state: Snapshot,
     pub learned: Option<Shortcut>,
     pub matched: u64,
@@ -34,7 +40,8 @@ pub struct View {
 impl View {
     fn take(runtime: &mut Runtime) -> Self {
         Self {
-            config: runtime.config.clone(),
+            functions: runtime.functions.clone(),
+            remembered_device: runtime.remembered_device.clone(),
             state: runtime.state.clone(),
             learned: runtime.learned.take(),
             matched: runtime.matched,
@@ -51,6 +58,7 @@ impl View {
     }
 }
 pub struct RuntimeHandle {
+    pub config: Config,
     view: View,
     pub window_keys: Vec<InputEvent>,
     commands: Option<mpsc::SyncSender<Command>>,
@@ -69,18 +77,13 @@ impl DerefMut for RuntimeHandle {
 }
 impl RuntimeHandle {
     pub fn new(config: Config) -> Result<Self> {
-        Self::with_engine(config, Runtime::new)
-    }
-    pub(crate) fn with_engine(
-        config: Config,
-        create: impl FnOnce(Config) -> Runtime + Send + 'static,
-    ) -> Result<Self> {
+        let runtime_config = config.clone();
         let (tx, rx) = mpsc::sync_channel::<Command>(64);
         let (started, ready) = mpsc::sync_channel(1);
         let worker = thread::Builder::new()
             .name("taprelay-runtime".into())
             .spawn(move || {
-                let mut runtime = create(config);
+                let mut runtime = Runtime::new(runtime_config);
                 if started.send(View::take(&mut runtime)).is_err() {
                     return;
                 }
@@ -92,7 +95,7 @@ impl RuntimeHandle {
                         Ok(command) => command(&mut runtime),
                         Err(mpsc::TryRecvError::Disconnected) => break,
                         Err(mpsc::TryRecvError::Empty) => {
-                            thread::park_timeout(runtime.wake_delay());
+                            thread::park_timeout(Duration::from_millis(50));
                         }
                     }
                 }
@@ -100,6 +103,7 @@ impl RuntimeHandle {
             })?;
         let view = ready.recv().context("Runtime worker failed to start")?;
         Ok(Self {
+            config,
             view,
             window_keys: vec![],
             commands: Some(tx),
@@ -107,16 +111,17 @@ impl RuntimeHandle {
         })
     }
 
-    fn request<T: Send + 'static>(
-        &self,
-        command: impl FnOnce(&mut Runtime) -> T + Send + 'static,
-    ) -> Result<T> {
+    fn update(
+        &mut self,
+        command: impl FnOnce(&mut Runtime) -> Result<()> + Send + 'static,
+    ) -> Result<()> {
         let (tx, rx) = mpsc::sync_channel(1);
         self.commands
             .as_ref()
             .context("Runtime stopped")?
             .try_send(Box::new(move |runtime| {
-                let _ = tx.send(command(runtime));
+                let result = command(runtime);
+                let _ = tx.send((result, View::take(runtime)));
             }))
             .map_err(|_| anyhow::anyhow!("Runtime command queue unavailable"))?;
         self.worker
@@ -124,27 +129,15 @@ impl RuntimeHandle {
             .context("Runtime stopped")?
             .thread()
             .unpark();
-        rx.recv_timeout(Duration::from_secs(5))
-            .context("Runtime command timed out")
-    }
-
-    fn update(
-        &mut self,
-        command: impl FnOnce(&mut Runtime) -> Result<()> + Send + 'static,
-    ) -> Result<()> {
-        let (result, view) = self.request(move |runtime| {
-            let result = command(runtime);
-            (result, View::take(runtime))
-        })?;
+        let (result, view) = rx
+            .recv_timeout(Duration::from_secs(5))
+            .context("Runtime command timed out")?;
         self.apply(view);
         result
     }
     fn apply(&mut self, mut view: View) {
-        // Presentation preferences belong to the UI; only function edits are
-        // owned by the engine. Preserve unread one-shot results across commands.
-        view.config.options = self.view.config.options.clone();
-        view.config.window = self.view.config.window.clone();
-        view.config.wizard = self.view.config.wizard.clone();
+        self.config.functions = std::mem::take(&mut view.functions);
+        self.config.remembered_device = view.remembered_device.take();
         if view.learned.is_none() {
             view.learned = self.view.learned.take();
         }
@@ -239,5 +232,40 @@ impl RuntimeHandle {
 impl Drop for RuntimeHandle {
     fn drop(&mut self) {
         self.shutdown();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn worker_updates_preserve_ui_preferences_and_unread_results() {
+        let mut handle = RuntimeHandle::new(Config::default()).unwrap();
+        handle.config.options.theme = crate::config::Theme::Dark;
+        handle.config.window.width = 1100.;
+        handle.config.wizard.dismissed = true;
+        let preferences = serde_json::to_value(&handle.config).unwrap();
+        let result = handle.update(|runtime| {
+            runtime
+                .functions
+                .get_mut(&FunctionId::MediaMute)
+                .unwrap()
+                .enabled = true;
+            runtime.remembered_device = Some(Device::from_target(&Default::default()));
+            runtime.error = Some("pending notification".into());
+            runtime.capture_invalid = true;
+            anyhow::bail!("command failed")
+        });
+        assert_eq!(result.unwrap_err().to_string(), "command failed");
+        handle.tick();
+        let updated = serde_json::to_value(&handle.config).unwrap();
+        for field in ["options", "window", "wizard"] {
+            assert_eq!(updated[field], preferences[field]);
+        }
+        assert!(handle.config.functions[&FunctionId::MediaMute].enabled);
+        assert!(handle.config.remembered_device.is_some());
+        assert_eq!(handle.error.as_deref(), Some("pending notification"));
+        assert!(handle.capture_invalid);
     }
 }

@@ -1,5 +1,6 @@
 mod discovery;
 mod maintenance;
+mod restore;
 use std::{
     cell::RefCell,
     rc::Rc,
@@ -113,7 +114,6 @@ const HID_CONTROL_POINT_CHARACTERISTIC: u16 = 0x2a4c;
 const REPORT_CHARACTERISTIC: u16 = 0x2a4d;
 const PROTOCOL_MODE_CHARACTERISTIC: u16 = 0x2a4e;
 const PROTOCOL_MODE: [u8; 1] = [1];
-const STARTUP_RESTORE_WINDOW: Duration = Duration::from_secs(1);
 // Windows reserves the Device Information Service (0x180A), so do not try to
 // publish it: CreateAsync returns DisabledByPolicy and aborts the whole build.
 const ADVERTISED_SERVICES: &[u16] = &[HID_SERVICE, BATTERY_SERVICE];
@@ -204,15 +204,15 @@ impl BleHandle {
         let stopping = stop.clone();
         let revision = Arc::new(AtomicU64::new(1));
         let worker_revision = revision.clone();
-        let startup_subscription_observed = Arc::new(AtomicBool::new(false));
-        let worker_startup_subscription = startup_subscription_observed.clone();
         let thread = thread::Builder::new()
             .name("taprelay-bluetooth".into())
             .spawn(move || {
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
                     || -> Result<(), BackendError> {
-                        let mut startup_restore = remembered;
-                        let mut startup_restore_deadline = None;
+                        let startup_restore = Rc::new(RefCell::new(restore::Restore::new(
+                            remembered,
+                            Instant::now(),
+                        )));
                         let _apartment = super::Apartment::new()?;
                         let mut discovery = discovery::Discovery::new();
                         let manager = Rc::new(RefCell::new(Coordinator::default()));
@@ -226,12 +226,6 @@ impl BleHandle {
                             if let Err(e) = discovery.tick() {
                                 tracing::error!("Bluetooth discovery: {e}");
                                 discovery.fail();
-                            }
-                            if discovery.adapter != AdapterState::Unknown
-                                && discovery.adapter != AdapterState::Available
-                            {
-                                startup_restore.take();
-                                startup_restore_deadline = None;
                             }
                             if discovery.adapter == AdapterState::Available
                                 && (previous_adapter != AdapterState::Available
@@ -252,23 +246,14 @@ impl BleHandle {
                                     activity: TransportActivity::CheckingEnvironment,
                                     ..Default::default()
                                 });
-                                worker_startup_subscription.store(false, Ordering::Release);
                                 match Server::create(
                                     tx.clone(),
                                     worker_revision.clone(),
                                     manager.clone(),
-                                    worker_startup_subscription.clone(),
+                                    startup_restore.clone(),
                                 ) {
-                                    Ok(s) => {
-                                        if startup_restore.is_some() {
-                                            startup_restore_deadline =
-                                                Some(Instant::now() + STARTUP_RESTORE_WINDOW);
-                                        }
-                                        server = Some(s);
-                                    }
+                                    Ok(s) => server = Some(s),
                                     Err(e) => {
-                                        startup_restore.take();
-                                        startup_restore_deadline = None;
                                         tracing::error!("{e}");
                                         tx.send_modify(|s| s.last_error = Some(e.to_string()));
                                     }
@@ -283,18 +268,23 @@ impl BleHandle {
                                     s.connected = candidates;
                                     s.state.adapter_state = discovery.adapter;
                                     s.state.discovery = discovery.state;
-                                    if let Err(e) = s.refresh() {
-                                        startup_restore.take();
-                                        startup_restore_deadline = None;
-                                        s.fail(&e);
-                                    } else if startup_restore_due(
-                                        worker_startup_subscription.load(Ordering::Acquire),
-                                        startup_restore_deadline,
-                                        Instant::now(),
-                                    ) && let Some(remembered) = startup_restore.take()
+                                    if startup_restore
+                                        .borrow()
+                                        .refresh_due(discovery.adapter, Instant::now())
                                     {
-                                        startup_restore_deadline = None;
-                                        s.try_startup_restore(&remembered);
+                                        if let Err(e) = s.refresh() {
+                                            s.fail(&e);
+                                        } else {
+                                            s.try_startup_restore();
+                                            startup_restore.borrow_mut().observe(
+                                                &s.state,
+                                                worker_revision.load(Ordering::Acquire),
+                                            );
+                                        }
+                                    } else if discovery.adapter != AdapterState::Available {
+                                        s.state.ready = false;
+                                        s.state.adapter = false;
+                                        s.state.broadcasting = false;
                                     }
                                     if s.state.selected.is_none() {
                                         manager.borrow_mut().disconnect();
@@ -327,19 +317,14 @@ impl BleHandle {
                             };
                             match request {
                                 Ok(Request::Restart) => {
-                                    startup_restore.take();
-                                    startup_restore_deadline = None;
                                     restart = true;
                                 }
                                 Ok(Request::Refresh) => {
-                                    startup_restore.take();
-                                    startup_restore_deadline = None;
                                     discovery.restart();
                                     refresh_at = Instant::now();
                                 }
                                 Ok(Request::Pair(id)) => {
-                                    startup_restore.take();
-                                    startup_restore_deadline = None;
+                                    startup_restore.borrow_mut().cancel("pair");
                                     let candidate = tx
                                         .borrow()
                                         .targets
@@ -366,8 +351,11 @@ impl BleHandle {
                                     }
                                 }
                                 Ok(Request::Select(id)) => {
-                                    startup_restore.take();
-                                    startup_restore_deadline = None;
+                                    startup_restore.borrow_mut().cancel(if id.is_some() {
+                                        "select"
+                                    } else {
+                                        "disconnect"
+                                    });
                                     if let Some(id) = &id {
                                         let accepted = if let Some(server) = &server {
                                             manager.borrow_mut().connect(
@@ -531,14 +519,6 @@ fn startup_restore_candidate(
         .map(|target| target.id.clone())
 }
 
-fn startup_restore_due(
-    observed_subscription: bool,
-    deadline: Option<Instant>,
-    now: Instant,
-) -> bool {
-    observed_subscription || deadline.is_some_and(|deadline| now >= deadline)
-}
-
 fn selected_subscriber_index(
     selected: &str,
     targets: &[Target],
@@ -601,15 +581,14 @@ struct Server {
     maintenance: maintenance::Maintenance,
     connected: Vec<Target>,
     metadata: MetadataCache,
-    restoring_startup: bool,
-    startup_subscription_observed: Arc<AtomicBool>,
+    startup_restore: Rc<RefCell<restore::Restore>>,
 }
 impl Server {
     fn create(
         updates: watch::Sender<Snapshot>,
         revision: Arc<AtomicU64>,
         manager: Rc<RefCell<Coordinator>>,
-        startup_subscription_observed: Arc<AtomicBool>,
+        startup_restore: Rc<RefCell<restore::Restore>>,
     ) -> Result<Self, BackendError> {
         let d = super::diagnostics::doctor()?;
         tracing::info!(adapter = ?d.adapter_id, radio = ?d.radio_name, peripheral = ?d.peripheral_role, low_energy = ?d.low_energy, "Bluetooth capabilities inspected");
@@ -666,8 +645,7 @@ impl Server {
             maintenance: maintenance::Maintenance::new(Instant::now()),
             connected: vec![],
             metadata: MetadataCache::default(),
-            restoring_startup: false,
-            startup_subscription_observed,
+            startup_restore,
         };
         api("GATT service construction", s.build())?;
         // StartAdvertising completes asynchronously and can transiently report Aborted.
@@ -865,11 +843,9 @@ impl Server {
             })
         }))?;
         let revision = self.revision.clone();
-        let startup_subscription_observed = self.startup_subscription_observed.clone();
         let subscription_token =
             characteristic.SubscribedClientsChanged(&TypedEventHandler::new(move |_, _| {
                 callback(|| {
-                    startup_subscription_observed.store(true, Ordering::Release);
                     revision.fetch_add(1, Ordering::AcqRel);
                     tracing::info!(?kind, "HID report subscription changed");
                     Ok(())
@@ -916,14 +892,19 @@ impl Server {
         );
     }
     fn fail(&mut self, e: &BackendError) {
-        self.maintenance.failure(Instant::now());
+        let restoring = self.startup_restore.borrow().pending();
+        if restoring {
+            self.startup_restore.borrow_mut().failure(Instant::now());
+        } else {
+            self.maintenance.failure(Instant::now());
+        }
         self.synced = false;
         self.synced_reports = [false; 1];
         self.consumer = hid::ConsumerState::default();
         self.pending_pulses.clear();
         self.reset_report_state();
         self.state.ready = false;
-        self.state.last_error = Some(if self.maintenance.failures >= 6 {
+        self.state.last_error = Some(if !restoring && self.maintenance.failures >= 6 {
             format!(
                 "Automatic recovery stopped after repeated failures; disconnect and connect again: {e}"
             )
@@ -932,7 +913,7 @@ impl Server {
         });
         self.state.device_error = Some(DeviceError::ConnectionFailed);
         self.retry_at = Instant::now() + Duration::from_secs(3);
-        if self.maintenance.failures == 1 {
+        if restoring || self.maintenance.failures == 1 {
             tracing::error!("{e}; retrying with backoff");
         } else if self.maintenance.failures == 6 {
             tracing::error!(
@@ -1100,9 +1081,7 @@ impl Server {
             }
             if let Some(client) = &next_selected_clients[0] {
                 let session = client.Session()?;
-                if !self.restoring_startup {
-                    self.enable_connection_maintenance(client);
-                }
+                self.enable_connection_maintenance(client);
                 let rev = self.revision.clone();
                 let token =
                     session.SessionStatusChanged(&TypedEventHandler::new(move |_, _| {
@@ -1191,21 +1170,25 @@ impl Server {
             && !self.state.hid_suspended
             && selected_session_active
             && self.selected_clients[0].is_some();
-        if self.restoring_startup && !available {
-            self.abandon_startup_restore();
-            return Ok(());
-        }
         if !available {
             self.synced = false;
             self.synced_reports = [false; 1];
         }
-        self.state.ready = available && self.synced_reports[0];
+        self.state.ready = available
+            && self.synced_reports[0]
+            && self.state.generation == self.revision.load(Ordering::Acquire);
         self.state.activity = TransportActivity::Idle;
         self.publish();
         if available
-            && (self.restoring_startup
-                || (self.maintenance.due(Instant::now()) && Instant::now() >= self.retry_at))
+            && (if self.startup_restore.borrow().pending() {
+                self.startup_restore.borrow().due(Instant::now())
+            } else {
+                self.maintenance.due(Instant::now()) && Instant::now() >= self.retry_at
+            })
         {
+            if self.startup_restore.borrow().pending() {
+                self.startup_restore.borrow_mut().started();
+            }
             let revision = self.revision.load(Ordering::Acquire);
             let recovering = !self.synced || self.maintenance.failures > 0;
             let mut failed = None;
@@ -1230,23 +1213,12 @@ impl Server {
                 }
             }
             if let Some(error) = failed {
-                if self.restoring_startup {
-                    tracing::debug!(%error, "Remembered receiver startup synchronization failed");
-                    self.abandon_startup_restore();
-                    return Ok(());
-                }
                 self.fail(&error);
             } else if self.synced_reports[0] && revision == self.revision.load(Ordering::Acquire) {
                 self.synced = true;
                 self.maintenance.success(Instant::now());
                 self.state.last_error = None;
                 self.state.device_error = None;
-                if self.restoring_startup {
-                    self.restoring_startup = false;
-                    if let Some(client) = self.selected_clients[0].clone() {
-                        self.enable_connection_maintenance(&client);
-                    }
-                }
                 if recovering {
                     tracing::info!("Media HID report synchronization completed");
                 }
@@ -1254,7 +1226,9 @@ impl Server {
                 self.synced = false;
             }
         }
-        self.state.ready = available && self.synced_reports[0];
+        self.state.ready = available
+            && self.synced_reports[0]
+            && self.state.generation == self.revision.load(Ordering::Acquire);
         if available && let Err(error) = self.process_due_pulses() {
             self.fail(&error);
         }
@@ -1369,29 +1343,16 @@ impl Server {
             Err(e) => tracing::warn!("Inspect native connection maintenance: {e}"),
         }
     }
-    fn abandon_startup_restore(&mut self) {
-        self.restoring_startup = false;
-        self.manager.borrow_mut().disconnect();
-        if let Err(error) = self.select(None) {
-            tracing::debug!(%error, "Could not fully release failed startup restore");
-        }
-        self.state.selected = None;
-        self.state.ready = false;
-        self.state.activity = TransportActivity::Idle;
-        self.state.last_error = None;
-        self.state.device_error = None;
-        self.publish();
-    }
-    fn try_startup_restore(&mut self, remembered: &Target) {
-        let selected = {
-            let suspended = self
+    fn try_startup_restore(&mut self) {
+        let selected = self.startup_restore.borrow().candidate(
+            &self.state,
+            &self
                 .suspended
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            startup_restore_candidate(remembered, &self.state.targets, &suspended)
-        };
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            Instant::now(),
+        );
         let Some(selected) = selected else {
-            tracing::debug!("Remembered receiver has no active HID subscription at startup");
             return;
         };
         if !self
@@ -1401,21 +1362,14 @@ impl Server {
         {
             return;
         }
+        self.startup_restore.borrow_mut().started();
         if let Err(error) = self.select(Some(selected)) {
-            tracing::debug!(%error, "Remembered receiver could not be selected at startup");
-            self.abandon_startup_restore();
-            return;
-        }
-        self.restoring_startup = true;
-        if let Err(error) = self.refresh() {
-            tracing::debug!(%error, "Remembered receiver startup synchronization failed");
-            self.abandon_startup_restore();
-        } else if !self.state.ready {
-            self.abandon_startup_restore();
+            self.state.selected = None;
+            self.manager.borrow_mut().disconnect();
+            self.fail(&error);
         }
     }
     fn select(&mut self, target: Option<String>) -> Result<(), BackendError> {
-        self.restoring_startup = false;
         self.state.selected = target;
         self.state.ready = false;
         self.release_maintenance();
@@ -1590,19 +1544,6 @@ fn characteristic(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn startup_restore_waits_for_initial_subscription_enumeration() {
-        let now = Instant::now();
-        let deadline = now + STARTUP_RESTORE_WINDOW;
-        assert!(!startup_restore_due(false, Some(deadline), now));
-        assert!(startup_restore_due(
-            true,
-            Some(deadline),
-            now + Duration::from_millis(300)
-        ));
-        assert!(startup_restore_due(false, Some(deadline), deadline));
-    }
 
     #[test]
     fn startup_restore_requires_same_active_unsuspended_subscriber() {

@@ -8,7 +8,7 @@ use crate::{
     i18n::{self, keys},
     logging,
     platform::desktop::{self, Desktop, DesktopEvent},
-    runtime_worker::RuntimeHandle as Runtime,
+    runtime_worker::RuntimeHandle,
 };
 use anyhow::{Context, Result, bail};
 use slint::{ComponentHandle, ModelRc, VecModel};
@@ -369,7 +369,7 @@ mod startup_option_tests {
 }
 
 struct Controller {
-    runtime: Runtime,
+    runtime: RuntimeHandle,
     path: PathBuf,
     logs: Option<tracing_appender::non_blocking::ErrorCounter>,
     desktop: Desktop,
@@ -420,7 +420,7 @@ impl Controller {
         let persisted_remembered_device = config.remembered_device.clone();
         let now = Instant::now();
         Ok(Self {
-            runtime: Runtime::new(config)?,
+            runtime: RuntimeHandle::new(config)?,
             path,
             logs,
             desktop,

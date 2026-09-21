@@ -3,7 +3,7 @@ use crate::{
     input::{InputCode, MouseButton, modifier},
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -315,17 +315,7 @@ pub fn default_configs() -> FunctionConfigs {
 }
 
 pub fn valid_configs(configs: &FunctionConfigs) -> bool {
-    if configs.len() != FUNCTION_CATALOG.len() {
-        return false;
-    }
-    let mut seen = HashSet::new();
-    configs.values().all(|config| {
-        config.shortcuts.len() <= 2
-            && config
-                .shortcuts
-                .iter()
-                .all(|shortcut| shortcut.valid() && seen.insert(shortcut.clone()))
-    })
+    configs.len() == FUNCTION_CATALOG.len() && crate::binding::valid(configs)
 }
 
 #[cfg(test)]

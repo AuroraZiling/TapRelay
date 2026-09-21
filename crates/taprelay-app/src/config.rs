@@ -5,18 +5,13 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
-use taprelay_core::{
-    binding,
-    function::{self, FunctionConfigs},
-};
+use taprelay_core::function::{self, FunctionConfigs};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub schema: u32,
     pub functions: FunctionConfigs,
-    /// The last receiver that reached a usable HID session. This is only a
-    /// hint for one passive restore check during the next application start.
     pub remembered_device: Option<Device>,
     pub wizard: Wizard,
     pub options: Options,
@@ -167,10 +162,6 @@ impl Device {
             ..Default::default()
         }
     }
-
-    pub fn matches(&self, target: &taprelay_core::state::Target) -> bool {
-        self.as_target().same_device(target)
-    }
 }
 impl Config {
     pub fn validate(&self) -> Result<()> {
@@ -180,10 +171,6 @@ impl Config {
         );
         ensure!(
             function::valid_configs(&self.functions),
-            "Invalid or duplicate shortcut"
-        );
-        ensure!(
-            binding::valid(&self.functions),
             "Invalid or duplicate shortcut"
         );
         ensure!(self.wizard.page <= 3, "Invalid wizard page");

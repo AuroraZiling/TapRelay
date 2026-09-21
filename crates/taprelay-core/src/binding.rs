@@ -117,16 +117,6 @@ impl BindingIndex {
     }
 }
 
-pub fn all_shortcuts(configs: &FunctionConfigs) -> impl Iterator<Item = (BindingKey, &Shortcut)> {
-    configs.iter().flat_map(|(&function, config)| {
-        config
-            .shortcuts
-            .iter()
-            .enumerate()
-            .map(move |(slot, shortcut)| (BindingKey { function, slot }, shortcut))
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

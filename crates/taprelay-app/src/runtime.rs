@@ -4,15 +4,15 @@
 
 use crate::{
     action::BindingCommand,
-    config::Config,
+    config::{Config, Device},
     feedback::TestStatus,
     platform::{self, InputSource, Transport},
 };
 use anyhow::{Context, Result};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use taprelay_core::{
     command::{COMMAND_TTL, CommandPhase, MediaCommand, QueuedCommand},
-    function::{AppCommand, FunctionAction, FunctionId, Shortcut},
+    function::{AppCommand, FunctionAction, FunctionConfigs, FunctionId, Shortcut},
     input::{InputCode, InputEvent, InputState, Recorder},
     input_router::{RouteResult, RoutedInput, RoutedOutput, RouterReason},
     state::Snapshot,
@@ -34,7 +34,8 @@ struct Receipt {
 }
 
 pub struct Runtime {
-    pub config: Config,
+    pub functions: FunctionConfigs,
+    pub remembered_device: Option<Device>,
     pub state: Snapshot,
     pub learned: Option<Shortcut>,
     pub matched: u64,
@@ -63,12 +64,10 @@ pub struct Runtime {
     last_transport_ready: bool,
     invalidating: bool,
     startup_restore: Option<taprelay_core::state::Target>,
+    startup_retry_at: Option<Instant>,
 }
 
 impl Runtime {
-    pub fn wake_delay(&self) -> Duration {
-        Duration::from_millis(50)
-    }
     fn discard_events(&mut self) {
         while let Ok(input) = self.events.try_recv() {
             if let RoutedInput::Control(result) = input {
@@ -83,7 +82,8 @@ impl Runtime {
             .map(|device| device.as_target());
         let (sender, events) = mpsc::channel(1024);
         Self {
-            config,
+            functions: config.functions,
+            remembered_device: config.remembered_device,
             state: Snapshot::default(),
             learned: None,
             matched: 0,
@@ -112,17 +112,26 @@ impl Runtime {
             last_transport_ready: false,
             invalidating: false,
             startup_restore,
+            startup_retry_at: None,
         }
     }
 
     pub fn start_bluetooth(&mut self) -> Result<()> {
-        self.start_bluetooth_with(platform::transport)
+        match self.start_bluetooth_with(platform::transport) {
+            Err(error) if self.startup_restore.is_some() => {
+                tracing::warn!(%error, retry_seconds = 5, "Bluetooth startup will retry");
+                self.state.last_error = Some(error.to_string());
+                Ok(())
+            }
+            result => result,
+        }
     }
 
     fn start_bluetooth_with(
         &mut self,
         create: impl FnOnce(Option<taprelay_core::state::Target>) -> Result<Box<dyn Transport>>,
     ) -> Result<()> {
+        self.startup_retry_at = Some(Instant::now() + std::time::Duration::from_secs(5));
         self.state.ready = false;
         self.state.service = false;
         self.state.broadcasting = false;
@@ -142,9 +151,31 @@ impl Runtime {
             return Ok(());
         }
         self.required_generation = 0;
-        let remembered = self.startup_restore.take();
+        let remembered = self.startup_restore.clone();
         self.transport = Some(create(remembered)?);
         Ok(())
+    }
+
+    fn retry_startup_with(
+        &mut self,
+        now: Instant,
+        create: impl FnOnce(Option<taprelay_core::state::Target>) -> Result<Box<dyn Transport>>,
+    ) {
+        if self.startup_restore.is_none()
+            || self
+                .transport
+                .as_ref()
+                .is_some_and(|transport| !transport.is_finished())
+            || self.startup_retry_at.is_none_or(|due| now < due)
+        {
+            return;
+        }
+        tracing::info!("Retrying Bluetooth worker for startup restore");
+        if let Err(error) = self.start_bluetooth_with(create) {
+            tracing::warn!(%error, retry_seconds = 5, "Bluetooth startup will retry");
+            self.state.last_error = Some(error.to_string());
+        }
+        self.startup_retry_at = Some(now + std::time::Duration::from_secs(5));
     }
 
     pub fn pair(&mut self, id: String) -> Result<()> {
@@ -165,7 +196,7 @@ impl Runtime {
 
     pub fn disconnect(&mut self) -> Result<()> {
         self.startup_restore = None;
-        self.config.remembered_device = None;
+        self.remembered_device = None;
         let result = self
             .transport
             .as_ref()
@@ -193,8 +224,9 @@ impl Runtime {
     }
 
     pub fn choose(&mut self, id: String) -> Result<()> {
-        self.startup_restore = None;
-        if self.state.selected.as_ref() == Some(&id)
+        let restoring = self.startup_restore.take().is_some();
+        if !restoring
+            && self.state.selected.as_ref() == Some(&id)
             && self.state.selected_target().is_some_and(|target| {
                 matches!(
                     target.connection,
@@ -232,7 +264,6 @@ impl Runtime {
         self.listening
             || self.recording()
             || self
-                .config
                 .functions
                 .get(&FunctionId::AppToggleListening)
                 .is_some_and(|config| config.enabled && !config.shortcuts.is_empty())
@@ -256,7 +287,7 @@ impl Runtime {
             .as_ref()
             .map_or_else(RouteResult::default, |input| {
                 input.configure(
-                    &self.config.functions,
+                    &self.functions,
                     self.listening,
                     self.recording(),
                     self.bindings_revision,
@@ -341,7 +372,6 @@ impl Runtime {
         match command {
             BindingCommand::BeginCapture(target) => {
                 let config = self
-                    .config
                     .functions
                     .get(&target.id)
                     .context("Function no longer exists")?;
@@ -427,11 +457,7 @@ impl Runtime {
     }
 
     pub fn set_function_enabled(&mut self, id: FunctionId, enabled: bool) -> Result<()> {
-        let function = self
-            .config
-            .functions
-            .get_mut(&id)
-            .context("Unknown function")?;
+        let function = self.functions.get_mut(&id).context("Unknown function")?;
         if function.enabled == enabled {
             return Ok(());
         }
@@ -448,7 +474,7 @@ impl Runtime {
     ) -> Result<()> {
         anyhow::ensure!(slot < 2, "Shortcut slot out of range");
         anyhow::ensure!(shortcut.valid(), "Invalid shortcut");
-        let mut candidate = self.config.functions.clone();
+        let mut candidate = self.functions.clone();
         let function = candidate.get_mut(&id).context("Unknown function")?;
         anyhow::ensure!(function.enabled, "Function is disabled");
         if slot == function.shortcuts.len() {
@@ -467,20 +493,18 @@ impl Runtime {
             taprelay_core::binding::valid(&candidate),
             "Shortcut conflicts with another function"
         );
-        self.config.functions = candidate;
+        self.functions = candidate;
         self.bindings_changed();
         Ok(())
     }
 
     pub fn remove_shortcut(&mut self, id: FunctionId, slot: usize) -> Result<()> {
-        let mut candidate = self.config.functions.clone();
-        let function = candidate.get_mut(&id).context("Unknown function")?;
+        let function = self.functions.get_mut(&id).context("Unknown function")?;
         anyhow::ensure!(
             slot < function.shortcuts.len(),
             "Shortcut slot out of range"
         );
         function.shortcuts.remove(slot);
-        self.config.functions = candidate;
         self.bindings_changed();
         Ok(())
     }
@@ -550,22 +574,23 @@ impl Runtime {
                     && (snapshot.selected == self.state.selected
                         || snapshot.selected.is_none()
                         || (self.state.selected.is_none()
-                            && self.config.remembered_device.as_ref().is_some_and(
-                                |remembered| {
-                                    snapshot
-                                        .selected_target()
-                                        .is_some_and(|target| remembered.matches(target))
-                                },
-                            )))))
+                            && self.startup_restore.as_ref().is_some_and(|remembered| {
+                                snapshot
+                                    .selected_target()
+                                    .is_some_and(|target| remembered.same_device(target))
+                            })))))
         {
             self.state = snapshot;
             if self.state.selected.is_none() {
                 self.state.ready = false;
             }
-            if self.state.ready
+            if !stopped
+                && self.state.ready
                 && let Some(target) = self.state.selected_target()
             {
-                self.config.remembered_device = Some(crate::config::Device::from_target(target));
+                self.remembered_device = Some(crate::config::Device::from_target(target));
+                self.startup_restore = None;
+                self.startup_retry_at = None;
             }
         }
         if stopped {
@@ -576,6 +601,7 @@ impl Runtime {
                 .last_error
                 .get_or_insert_with(|| "Bluetooth worker stopped; retry to restart".into());
         }
+        self.retry_startup_with(Instant::now(), platform::transport);
 
         let transport_ready = self.state.ready;
         if self.last_transport_ready && !transport_ready {
@@ -831,21 +857,149 @@ mod tests {
         }
     }
 
+    struct StoppedTransport(Option<Snapshot>);
+    impl Transport for StoppedTransport {
+        fn snapshot(&mut self) -> Option<Snapshot> {
+            self.0.take()
+        }
+        fn is_finished(&self) -> bool {
+            true
+        }
+        fn refresh(&self) -> Result<()> {
+            Ok(())
+        }
+        fn restart(&self) -> Result<u64> {
+            unreachable!()
+        }
+        fn select(&self, _: String) -> Result<u64> {
+            unreachable!()
+        }
+        fn invalidate(&self) {}
+        fn send(&self, _: QueuedCommand) -> Result<oneshot::Receiver<Result<(), String>>> {
+            unreachable!()
+        }
+    }
+
+    fn restoring_runtime() -> Runtime {
+        Runtime::new(Config {
+            remembered_device: Some(crate::config::Device {
+                id: "remembered".into(),
+                name: "Tablet".into(),
+                identity: vec!["container:tablet".into()],
+                aliases: vec![],
+            }),
+            ..Config::default()
+        })
+    }
+
+    #[test]
+    fn startup_retries_creation_and_stopped_worker_at_five_second_intervals() {
+        let mut runtime = restoring_runtime();
+        assert!(
+            runtime
+                .start_bluetooth_with(|_| anyhow::bail!("not ready"))
+                .is_err()
+        );
+        let due = runtime.startup_retry_at.unwrap();
+        runtime.retry_startup_with(due - std::time::Duration::from_millis(1), |_| {
+            panic!("too early")
+        });
+        runtime.retry_startup_with(due, |remembered| {
+            assert_eq!(remembered.unwrap().id, "remembered");
+            anyhow::bail!("still not ready")
+        });
+        runtime.retry_startup_with(due + std::time::Duration::from_secs(4), |_| {
+            panic!("too early")
+        });
+        runtime.retry_startup_with(due + std::time::Duration::from_secs(5), |remembered| {
+            assert!(remembered.is_some());
+            Ok(Box::new(StoppedTransport(None)))
+        });
+        runtime.retry_startup_with(due + std::time::Duration::from_secs(10), |remembered| {
+            assert!(remembered.is_some());
+            Ok(Box::new(FakeTransport))
+        });
+        runtime.retry_startup_with(due + std::time::Duration::from_secs(100), |_| {
+            panic!("worker is running")
+        });
+    }
+
+    #[test]
+    fn stopped_workers_stale_ready_snapshot_does_not_complete_restore() {
+        let mut runtime = restoring_runtime();
+        let target = runtime.startup_restore.clone().unwrap();
+        runtime.transport = Some(Box::new(StoppedTransport(Some(Snapshot {
+            selected: Some(target.id.clone()),
+            targets: vec![target],
+            ready: true,
+            ..Default::default()
+        }))));
+        runtime.tick();
+        assert!(!runtime.state.ready);
+        assert!(runtime.startup_restore.is_some());
+    }
+
+    #[test]
+    fn manual_actions_cancel_restore_and_reject_late_automatic_selection() {
+        for action in ["select", "disconnect", "pair"] {
+            let mut runtime = restoring_runtime();
+            let target = runtime.startup_restore.clone().unwrap();
+            runtime.transport = Some(Box::new(SnapshotTransport(Some(Snapshot {
+                selected: Some(target.id.clone()),
+                targets: vec![target],
+                ready: true,
+                generation: 2,
+                ..Default::default()
+            }))));
+            let _ = match action {
+                "select" => runtime.choose("other".into()),
+                "disconnect" => runtime.disconnect(),
+                _ => runtime.pair("other".into()),
+            };
+            runtime.tick();
+            assert!(runtime.startup_restore.is_none());
+            assert!(!runtime.state.ready);
+            assert_ne!(runtime.state.selected.as_deref(), Some("remembered"));
+            runtime
+                .retry_startup_with(Instant::now() + std::time::Duration::from_secs(600), |_| {
+                    panic!("cancelled")
+                });
+        }
+    }
+
     #[test]
     fn new_runtime_keeps_functions_disabled() {
         let runtime = Runtime::new(Config::default());
-        assert!(
-            runtime
-                .config
-                .functions
-                .values()
-                .all(|function| !function.enabled)
-        );
+        assert!(runtime.functions.values().all(|function| !function.enabled));
         assert!(runtime.state.selected.is_none());
     }
 
     #[test]
-    fn startup_offers_remembered_device_only_once() {
+    fn startup_restore_survives_transport_creation_failure() {
+        let mut runtime = Runtime::new(Config {
+            remembered_device: Some(crate::config::Device {
+                id: "remembered".into(),
+                name: "Tablet".into(),
+                identity: vec!["container:tablet".into()],
+                aliases: vec![],
+            }),
+            ..Config::default()
+        });
+        assert!(
+            runtime
+                .start_bluetooth_with(|_| anyhow::bail!("not ready"))
+                .is_err()
+        );
+        runtime
+            .start_bluetooth_with(|remembered| {
+                assert_eq!(remembered.unwrap().id, "remembered");
+                Ok(Box::new(FakeTransport))
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn startup_keeps_remembered_device_until_ready() {
         let mut config = Config::default();
         config.remembered_device = Some(crate::config::Device {
             id: "remembered".into(),
@@ -863,7 +1017,7 @@ mod tests {
             .unwrap();
         assert_eq!(offered.unwrap().id, "remembered");
         runtime.start_bluetooth().unwrap();
-        assert!(runtime.startup_restore.is_none());
+        assert!(runtime.startup_restore.is_some());
     }
 
     #[test]
@@ -885,11 +1039,11 @@ mod tests {
             ..Default::default()
         }))));
         runtime.tick();
-        let remembered = runtime.config.remembered_device.as_ref().unwrap();
+        let remembered = runtime.remembered_device.as_ref().unwrap();
         assert_eq!(remembered.id, "gatt-endpoint");
         assert_eq!(remembered.identity, ["container:tablet"]);
         assert!(runtime.disconnect().is_err());
-        assert!(runtime.config.remembered_device.is_none());
+        assert!(runtime.remembered_device.is_none());
     }
 
     #[test]
@@ -921,7 +1075,7 @@ mod tests {
         runtime.tick();
         assert!(runtime.state.ready);
         assert_eq!(
-            runtime.config.remembered_device.as_ref().unwrap().id,
+            runtime.remembered_device.as_ref().unwrap().id,
             "gatt-endpoint"
         );
 
@@ -942,7 +1096,7 @@ mod tests {
         runtime.tick();
         assert!(!runtime.state.ready);
         assert_eq!(
-            runtime.config.remembered_device.as_ref().unwrap().id,
+            runtime.remembered_device.as_ref().unwrap().id,
             "gatt-endpoint"
         );
     }
@@ -964,7 +1118,7 @@ mod tests {
         let mut runtime = Runtime::new(Config::default());
         let id = FunctionId::MediaNext;
         let shortcuts = vec![Shortcut::mouse(ModifierSet::empty(), MouseButton::Side1)];
-        runtime.config.functions.insert(
+        runtime.functions.insert(
             id,
             FunctionConfig {
                 enabled: true,
@@ -972,11 +1126,11 @@ mod tests {
             },
         );
         runtime.set_function_enabled(id, false).unwrap();
-        assert!(!runtime.config.functions[&id].enabled);
-        assert_eq!(runtime.config.functions[&id].shortcuts, shortcuts);
+        assert!(!runtime.functions[&id].enabled);
+        assert_eq!(runtime.functions[&id].shortcuts, shortcuts);
         runtime.set_function_enabled(id, true).unwrap();
-        assert!(runtime.config.functions[&id].enabled);
-        assert_eq!(runtime.config.functions[&id].shortcuts, shortcuts);
+        assert!(runtime.functions[&id].enabled);
+        assert_eq!(runtime.functions[&id].shortcuts, shortcuts);
     }
 
     #[test]
@@ -1020,18 +1174,18 @@ mod tests {
             ))
             .unwrap();
         assert!(!runtime.recording());
-        assert!(runtime.config.functions[&id].shortcuts.is_empty());
+        assert!(runtime.functions[&id].shortcuts.is_empty());
 
         runtime
             .apply_binding_command(BindingCommand::SetFunctionEnabled { id, enabled: false })
             .unwrap();
-        assert!(!runtime.config.functions[&id].enabled);
+        assert!(!runtime.functions[&id].enabled);
     }
 
     #[test]
     fn disabled_function_shortcut_can_be_saved_but_is_not_recognized() {
         let mut runtime = Runtime::new(Config::default());
-        runtime.config.functions.insert(
+        runtime.functions.insert(
             FunctionId::MediaNext,
             FunctionConfig {
                 enabled: false,

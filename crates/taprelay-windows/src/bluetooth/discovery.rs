@@ -259,7 +259,7 @@ pub(super) struct Discovery {
     radio_events: mpsc::Receiver<()>,
     radio_sender: mpsc::Sender<()>,
     check_at: Instant,
-    failed: bool,
+    retry_at: Option<Instant>,
 }
 impl Discovery {
     pub fn new() -> Self {
@@ -274,12 +274,12 @@ impl Discovery {
             radio_events,
             radio_sender,
             check_at: Instant::now(),
-            failed: false,
+            retry_at: None,
         }
     }
     pub fn restart(&mut self) {
         self.known.take();
-        self.failed = false;
+        self.retry_at = None;
     }
     pub fn tick(&mut self) -> windows::core::Result<()> {
         let radio_changed = self.radio_events.try_iter().count() > 0;
@@ -330,10 +330,9 @@ impl Discovery {
                 target.link = Knowledge::No;
             }
             self.state = DiscoveryState::Idle;
-            self.failed = false;
             return Ok(());
         }
-        if self.failed {
+        if !self.retry_due(Instant::now()) {
             return Ok(());
         }
         if self.known.is_none() {
@@ -353,7 +352,7 @@ impl Discovery {
             .as_ref()
             .is_some_and(|s| s.state == DiscoveryState::Failed)
         {
-            self.state = DiscoveryState::Failed;
+            self.fail();
         }
         Ok(())
     }
@@ -365,11 +364,25 @@ impl Discovery {
         }
     }
     pub fn fail(&mut self) {
+        self.fail_at(Instant::now());
+    }
+    fn fail_at(&mut self, now: Instant) {
         if self.radio.is_none() {
             self.adapter = AdapterState::Unavailable;
         }
-        self.failed = true;
+        self.known.take();
+        self.retry_at = Some(now + Duration::from_secs(5));
         self.state = DiscoveryState::Failed;
+        tracing::warn!(retry_seconds = 5, "Device discovery will restart");
+    }
+    fn retry_due(&mut self, now: Instant) -> bool {
+        if let Some(retry_at) = self.retry_at {
+            if now < retry_at {
+                return false;
+            }
+            self.restart();
+        }
+        true
     }
 }
 impl Drop for Discovery {

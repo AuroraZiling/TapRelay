@@ -1,4 +1,7 @@
-use super::protocol::{self, Command, Message};
+use super::{
+    Execution, WorkerProcess,
+    protocol::{self, Command, Message},
+};
 use anyhow::{Context, Result, bail};
 use std::{
     io::BufReader,
@@ -13,10 +16,28 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub struct Worker {
+pub(super) struct Native;
+
+impl Execution for Native {
+    type Worker = Worker;
+
+    fn start(&mut self, initial: Command) -> Result<Worker> {
+        Worker::start(initial)
+    }
+
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+
+    fn wait(&mut self, duration: Duration) {
+        thread::park_timeout(duration);
+    }
+}
+
+pub(super) struct Worker {
     child: Child,
     outgoing: Option<mpsc::SyncSender<Command>>,
-    pub incoming: mpsc::Receiver<Result<Message>>,
+    incoming: mpsc::Receiver<Result<Message>>,
     threads: Vec<thread::JoinHandle<()>>,
     exited: bool,
     stopping: Arc<AtomicBool>,
@@ -24,8 +45,14 @@ pub struct Worker {
 
 impl Worker {
     pub fn start(initial: Command) -> Result<Self> {
-        let child = std::process::Command::new(std::env::current_exe()?)
-            .arg("--bluetooth-worker")
+        Self::start_command(
+            std::process::Command::new(std::env::current_exe()?).arg("--bluetooth-worker"),
+            initial,
+        )
+    }
+
+    fn start_command(command: &mut std::process::Command, initial: Command) -> Result<Self> {
+        let child = command
             .creation_flags(0x08000000)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -176,10 +203,114 @@ impl Worker {
     }
 }
 
+impl WorkerProcess for Worker {
+    fn send(&self, command: Command) -> Result<()> {
+        Self::send(self, command)
+    }
+
+    fn receive(&self) -> Result<Option<Message>> {
+        match self.incoming.try_recv() {
+            Ok(message) => message.map(Some),
+            Err(mpsc::TryRecvError::Empty) => Ok(None),
+            Err(mpsc::TryRecvError::Disconnected) => bail!("Bluetooth worker reader stopped"),
+        }
+    }
+
+    fn check(&mut self) -> Result<()> {
+        Self::check(self)
+    }
+
+    fn stop(&mut self) -> Result<()> {
+        Self::stop(self)
+    }
+}
+
 impl Drop for Worker {
     fn drop(&mut self) {
         if let Err(error) = self.stop() {
             tracing::error!(%error, "Bluetooth worker cleanup failed");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn probe(script: &str) -> Worker {
+        let mut command = std::process::Command::new("powershell.exe");
+        command.args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            script,
+        ]);
+        let worker = Worker::start_command(&mut command, Command::Refresh).unwrap();
+        let message = worker
+            .incoming
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .unwrap();
+        assert!(matches!(message, Message::Failure(message) if message == "probe-ready"));
+        worker
+    }
+
+    #[test]
+    fn native_process_exchanges_frames_and_exits_normally_while_status_queue_is_full() {
+        let mut worker = probe(
+            r#"
+            $null = [Console]::In.ReadLine()
+            [Console]::Out.WriteLine('{"Failure":"probe-ready"}')
+            while ($null -ne ($line = [Console]::In.ReadLine())) {
+                if ($line -eq '"Shutdown"') {
+                    for ($i = 0; $i -lt 512; $i++) {
+                        [Console]::Out.WriteLine('{"Failure":"final-status"}')
+                    }
+                    exit 0
+                }
+            }
+            exit 1
+        "#,
+        );
+        worker.check().unwrap();
+        worker.stop().unwrap();
+        assert!(worker.exited);
+        assert!(worker.child.try_wait().unwrap().unwrap().success());
+        worker.stop().unwrap();
+        assert!(worker.send(Command::Refresh).is_err());
+    }
+
+    #[test]
+    fn native_process_that_ignores_shutdown_is_killed_and_reaped() {
+        let mut worker = probe(
+            r#"
+            $null = [Console]::In.ReadLine()
+            [Console]::Out.WriteLine('{"Failure":"probe-ready"}')
+            Start-Sleep -Seconds 60
+            exit 0
+        "#,
+        );
+        worker.stop().unwrap();
+        assert!(worker.exited);
+        assert!(!worker.child.try_wait().unwrap().unwrap().success());
+        assert!(worker.check().is_err());
+    }
+
+    #[test]
+    fn native_process_spawn_failure_is_reported() {
+        let missing = std::env::temp_dir().join(format!(
+            "taprelay-missing-worker-{}.exe",
+            std::process::id()
+        ));
+        let result =
+            Worker::start_command(&mut std::process::Command::new(missing), Command::Refresh);
+        assert!(
+            result
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("Start isolated Bluetooth worker")
+        );
     }
 }

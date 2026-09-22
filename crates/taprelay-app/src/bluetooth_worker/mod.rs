@@ -45,12 +45,17 @@ pub struct Handle {
 
 impl Handle {
     pub fn start(remembered: Option<Target>) -> Result<Self> {
+        Self::start_with(remembered, process::Native)
+    }
+
+    fn start_with<E: Execution>(remembered: Option<Target>, execution: E) -> Result<Self> {
         let revision = Arc::new(AtomicU64::new(1));
         let (link, input) = InputLink::channel(revision.clone());
         let (commands, control) = mpsc::sync_channel(16);
         let (updates, state) = watch::channel(Snapshot::default());
         let stopping = Arc::new(AtomicBool::new(false));
         let mut supervisor = Supervisor {
+            execution,
             process: None,
             control,
             input,
@@ -74,30 +79,14 @@ impl Handle {
             pending: BTreeMap::new(),
             next_id: 0,
         };
-        let failure_link = link.clone();
         let worker = thread::Builder::new()
             .name("taprelay-bluetooth-supervisor".into())
             .spawn(move || {
-                let outcome =
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| supervisor.run()));
-                drop(supervisor);
-                let message = match outcome {
-                    Ok(Ok(())) => None,
-                    Ok(Err(error)) => Some(format!("{error:#}")),
-                    Err(_) => Some("Bluetooth supervisor panicked".into()),
-                };
-                failure_link.end();
-                failure_link.set_profile_available(false);
-                if let Some(error) = message {
-                    tracing::error!(%error, "Bluetooth supervisor stopped");
-                    failure_link.fail(error.clone());
-                    updates.send_modify(|state| {
-                        taprelay_core::devices::revoke_session(state);
-                        state.profile_switching = false;
-                        state.service = false;
-                        state.broadcasting = false;
-                        state.last_error = Some(error);
-                    });
+                if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| supervisor.run()))
+                    .is_err()
+                {
+                    let _ =
+                        supervisor.finish(Err(anyhow::anyhow!("Bluetooth supervisor panicked")));
                 }
             })?;
         link.set_worker(worker.thread().clone());
@@ -192,8 +181,23 @@ struct Pending {
     reply: oneshot::Sender<Result<(), BackendError>>,
 }
 
-struct Supervisor {
-    process: Option<process::Worker>,
+trait WorkerProcess: Send {
+    fn send(&self, command: Command) -> Result<()>;
+    fn receive(&self) -> Result<Option<Message>>;
+    fn check(&mut self) -> Result<()>;
+    fn stop(&mut self) -> Result<()>;
+}
+
+trait Execution: Send + 'static {
+    type Worker: WorkerProcess;
+    fn start(&mut self, initial: Command) -> Result<Self::Worker>;
+    fn now(&self) -> Instant;
+    fn wait(&mut self, duration: Duration);
+}
+
+struct Supervisor<E: Execution> {
+    execution: E,
+    process: Option<E::Worker>,
     control: mpsc::Receiver<Control>,
     input: mpsc::Receiver<Packet>,
     updates: watch::Sender<Snapshot>,
@@ -217,8 +221,45 @@ struct Supervisor {
     next_id: u64,
 }
 
-impl Supervisor {
+impl<E: Execution> Supervisor<E> {
     fn run(&mut self) -> Result<()> {
+        let result = self.run_loop();
+        self.finish(result)
+    }
+
+    fn finish(&mut self, mut result: Result<()>) -> Result<()> {
+        self.link.end();
+        self.link.set_profile_available(false);
+        for (_, pending) in std::mem::take(&mut self.pending) {
+            let _ = pending.reply.send(Err(BackendError::Stale));
+        }
+        while let Ok(command) = self.control.try_recv() {
+            if let Control::Send(_, reply) = command {
+                let _ = reply.send(Err(BackendError::Stale));
+            }
+        }
+        taprelay_core::devices::revoke_session(&mut self.snapshot);
+        self.switching_since = None;
+        self.snapshot.service = false;
+        self.snapshot.broadcasting = false;
+        self.publish_snapshot();
+        if let Some(mut worker) = self.process.take()
+            && let Err(error) = worker.stop()
+            && result.is_ok()
+        {
+            result = Err(error);
+        }
+        if let Err(error) = &result {
+            let message = format!("{error:#}");
+            tracing::error!(%message, "Bluetooth supervisor stopped");
+            self.link.fail(message.clone());
+            self.snapshot.last_error = Some(message);
+            self.publish_snapshot();
+        }
+        result
+    }
+
+    fn run_loop(&mut self) -> Result<()> {
         self.replace_worker(Profile::MediaOnly, true)?;
         while !self.stopping.load(Ordering::Acquire) {
             if let Err(error) = self.step() {
@@ -232,12 +273,12 @@ impl Supervisor {
                     return Err(error);
                 }
             }
-            thread::park_timeout(Duration::from_millis(5));
+            self.execution.wait(Duration::from_millis(5));
         }
         Ok(())
     }
 
-    fn worker(&self) -> Result<&process::Worker> {
+    fn worker(&self) -> Result<&E::Worker> {
         self.process
             .as_ref()
             .context("Bluetooth worker unavailable")
@@ -261,7 +302,7 @@ impl Supervisor {
         } else {
             0
         };
-        self.switching_since = (replacing && publish).then(Instant::now);
+        self.switching_since = (replacing && publish).then(|| self.execution.now());
         for (_, pending) in std::mem::take(&mut self.pending) {
             let _ = pending.reply.send(Err(BackendError::Stale));
         }
@@ -284,7 +325,7 @@ impl Supervisor {
         if self.stopping.load(Ordering::Acquire) {
             return Ok(());
         }
-        self.process = Some(process::Worker::start(initial)?);
+        self.process = Some(self.execution.start(initial)?);
         Ok(())
     }
 
@@ -347,33 +388,26 @@ impl Supervisor {
             self.replace_worker(desired, self.publish)?;
         }
         for _ in 0..128 {
-            let message = self.worker()?.incoming.try_recv();
-            match message {
-                Ok(message) => self.message(message?)?,
-                Err(mpsc::TryRecvError::Empty) => break,
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    anyhow::bail!("Bluetooth worker reader stopped")
-                }
-            }
+            let Some(message) = self.worker()?.receive()? else {
+                break;
+            };
+            self.message(message)?;
         }
         self.process
             .as_mut()
             .context("Bluetooth worker unavailable")?
             .check()?;
-        if self
-            .pairing
-            .as_ref()
-            .is_some_and(|(_, since)| since.elapsed() >= Duration::from_secs(30))
-        {
+        if self.pairing.as_ref().is_some_and(|(_, since)| {
+            self.execution.now().saturating_duration_since(*since) >= Duration::from_secs(30)
+        }) {
             self.pairing = None;
             self.link.fail(
                 "Pairing target was not found after restarting Bluetooth; refresh and try again",
             );
         }
-        if self
-            .switching_since
-            .is_some_and(|since| since.elapsed() >= Duration::from_secs(30))
-        {
+        if self.switching_since.is_some_and(|since| {
+            self.execution.now().saturating_duration_since(since) >= Duration::from_secs(30)
+        }) {
             if self.profile == Profile::Full {
                 anyhow::bail!("Receiver did not subscribe to keyboard and mouse within 30 seconds");
             }
@@ -389,7 +423,12 @@ impl Supervisor {
             if !self.link.accepts(&packet) || !self.armed {
                 continue;
             }
-            if packet.captured.elapsed() > MAX_INPUT_AGE {
+            if self
+                .execution
+                .now()
+                .saturating_duration_since(packet.captured)
+                > MAX_INPUT_AGE
+            {
                 anyhow::bail!("Passthrough queue exceeded 250 ms");
             }
             self.worker()?.send(Command::Input {
@@ -405,7 +444,12 @@ impl Supervisor {
         let expired: Vec<_> = self
             .pending
             .iter()
-            .filter(|(_, pending)| pending.created.elapsed() >= Duration::from_secs(2))
+            .filter(|(_, pending)| {
+                self.execution
+                    .now()
+                    .saturating_duration_since(pending.created)
+                    >= Duration::from_secs(2)
+            })
             .map(|(id, _)| *id)
             .collect();
         for id in expired {
@@ -457,7 +501,7 @@ impl Supervisor {
                 if self.native_generation.is_some() {
                     self.worker()?.send(Command::Pair(target.id))?;
                 } else {
-                    self.pairing = Some((target, Instant::now()));
+                    self.pairing = Some((target, self.execution.now()));
                 }
             }
             Control::Invalidate => {
@@ -478,7 +522,7 @@ impl Supervisor {
                     return Ok(());
                 }
                 self.next_id = self.next_id.wrapping_add(1);
-                self.worker()?.send(Command::Media {
+                let sent = self.worker()?.send(Command::Media {
                     id: self.next_id,
                     generation: self
                         .native_generation
@@ -490,12 +534,16 @@ impl Supervisor {
                         .context("Missing native Bluetooth target")?,
                     action: command.action,
                     down: command.phase == CommandPhase::Press,
-                })?;
+                });
+                if let Err(error) = sent {
+                    let _ = reply.send(Err(BackendError::Unavailable(error.to_string())));
+                    return Err(error);
+                }
                 self.pending.insert(
                     self.next_id,
                     Pending {
                         generation: command.generation,
-                        created: Instant::now(),
+                        created: self.execution.now(),
                         reply,
                     },
                 );
@@ -511,6 +559,12 @@ impl Supervisor {
                 input_available,
             } => {
                 let generation = state.generation;
+                if self
+                    .native_generation
+                    .is_some_and(|current| generation < current)
+                {
+                    return Ok(());
+                }
                 self.native_selected = state.selected.clone();
                 if let Some((wanted, _)) = &self.pairing
                     && let Some(target) = state
@@ -620,210 +674,4 @@ impl Supervisor {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn supervisor() -> Supervisor {
-        let revision = Arc::new(AtomicU64::new(7));
-        let (link, input) = InputLink::channel(revision.clone());
-        let (_, control) = mpsc::sync_channel(1);
-        let (updates, _) = watch::channel(Snapshot::default());
-        Supervisor {
-            process: None,
-            control,
-            input,
-            updates,
-            link,
-            revision,
-            stopping: Arc::new(AtomicBool::new(false)),
-            profile: Profile::MediaOnly,
-            publish: true,
-            selected: Some("phone".into()),
-            remembered: None,
-            snapshot: Snapshot::default(),
-            native_generation: Some(3),
-            native_selected: Some("phone".into()),
-            pairing: None,
-            blocked_native: None,
-            arm: None,
-            armed: false,
-            capture_request: 0,
-            switching_since: None,
-            pending: BTreeMap::new(),
-            next_id: 0,
-        }
-    }
-
-    #[test]
-    fn profile_reconnect_uses_physical_identity_and_keeps_the_ui_selection() {
-        let mut supervisor = supervisor();
-        supervisor.snapshot.targets.push(Target {
-            id: "phone".into(),
-            identity: vec!["physical:phone".into()],
-            ..Default::default()
-        });
-        let Command::Init {
-            remembered,
-            selected,
-            ..
-        } = supervisor.initial_command(Profile::Full, true)
-        else {
-            panic!("wrong command");
-        };
-        assert!(selected.is_none());
-        assert_eq!(remembered.unwrap().identity, vec!["physical:phone"]);
-        supervisor
-            .message(Message::Status {
-                state: Box::new(Snapshot {
-                    generation: 3,
-                    ready: true,
-                    selected: Some("new-endpoint".into()),
-                    targets: vec![Target {
-                        id: "new-endpoint".into(),
-                        identity: vec!["physical:phone".into()],
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                }),
-                input_available: false,
-            })
-            .unwrap();
-        assert_eq!(supervisor.snapshot.selected.as_deref(), Some("phone"));
-        assert!(supervisor.snapshot.selected_target().is_some());
-        assert_eq!(supervisor.native_selected.as_deref(), Some("new-endpoint"));
-    }
-
-    #[test]
-    fn restarting_without_a_selection_finishes_when_advertising_is_ready() {
-        let mut supervisor = supervisor();
-        supervisor.selected = None;
-        supervisor.switching_since = Some(Instant::now());
-        supervisor
-            .message(Message::Status {
-                state: Box::new(Snapshot {
-                    generation: 3,
-                    service: true,
-                    broadcasting: true,
-                    ..Default::default()
-                }),
-                input_available: false,
-            })
-            .unwrap();
-        assert!(supervisor.switching_since.is_none());
-        assert!(!supervisor.snapshot.profile_switching);
-        assert!(!supervisor.snapshot.ready);
-    }
-
-    #[test]
-    fn keyboard_requires_explicit_request_and_disconnect_cannot_publish_it() {
-        let mut supervisor = supervisor();
-        assert_eq!(supervisor.desired_profile(), Profile::MediaOnly);
-        supervisor.link.set_profile_available(true);
-        assert!(supervisor.link.request_profile());
-        assert_eq!(supervisor.desired_profile(), Profile::Full);
-        supervisor.publish = false;
-        assert_eq!(supervisor.desired_profile(), Profile::MediaOnly);
-    }
-
-    #[test]
-    fn late_arm_ack_cannot_undo_cancellation_or_generation_change() {
-        for scenario in 0..3 {
-            let mut supervisor = supervisor();
-            supervisor.profile = Profile::Full;
-            supervisor.link.set_profile_available(true);
-            supervisor.link.request_profile();
-            supervisor.capture_request = supervisor.link.profile_request();
-            supervisor.arm = Some((3, 7));
-            if scenario != 1 {
-                supervisor.link.end();
-                if scenario == 2 {
-                    supervisor.link.request_profile();
-                }
-            } else {
-                supervisor.revision.fetch_add(1, Ordering::AcqRel);
-            }
-            supervisor
-                .message(Message::Armed {
-                    generation: 3,
-                    accepted: true,
-                })
-                .unwrap();
-            assert!(!supervisor.link.ready());
-            assert!(!supervisor.armed);
-        }
-    }
-
-    #[test]
-    fn capture_is_authorized_only_after_matching_worker_ack() {
-        let mut supervisor = supervisor();
-        supervisor.profile = Profile::Full;
-        supervisor.link.set_profile_available(true);
-        supervisor.link.request_profile();
-        supervisor.capture_request = supervisor.link.profile_request();
-        supervisor.arm = Some((3, 7));
-        assert!(!supervisor.link.begin());
-        supervisor
-            .message(Message::Armed {
-                generation: 3,
-                accepted: true,
-            })
-            .unwrap();
-        assert!(supervisor.link.begin());
-        supervisor
-            .message(Message::Status {
-                state: Box::new(Snapshot {
-                    generation: 3,
-                    ..Default::default()
-                }),
-                input_available: false,
-            })
-            .unwrap();
-        assert_eq!(supervisor.link.epoch(), 0);
-        assert!(!supervisor.link.profile_requested());
-        assert_eq!(supervisor.desired_profile(), Profile::MediaOnly);
-    }
-
-    #[test]
-    fn media_subscription_does_not_authorize_keyboard_capture() {
-        let mut supervisor = supervisor();
-        supervisor
-            .message(Message::Status {
-                state: Box::new(Snapshot {
-                    generation: 3,
-                    ready: true,
-                    selected: Some("phone".into()),
-                    ..Default::default()
-                }),
-                input_available: false,
-            })
-            .unwrap();
-        assert!(supervisor.snapshot.ready);
-        assert!(!supervisor.link.ready());
-        assert!(!supervisor.link.begin());
-        assert!(supervisor.link.request_profile());
-    }
-
-    #[test]
-    fn previous_generation_delivery_does_not_complete_new_session() {
-        let mut supervisor = supervisor();
-        let (reply, mut result) = oneshot::channel();
-        supervisor.pending.insert(
-            1,
-            Pending {
-                generation: 6,
-                created: Instant::now(),
-                reply,
-            },
-        );
-        supervisor
-            .message(Message::Reply {
-                id: 1,
-                result: Ok(()),
-            })
-            .unwrap();
-        assert!(matches!(
-            result.try_recv().unwrap(),
-            Err(BackendError::Stale)
-        ));
-    }
-}
+mod tests;

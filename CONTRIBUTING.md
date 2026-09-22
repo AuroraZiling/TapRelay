@@ -22,12 +22,18 @@ Keep each pull request focused. Explain the problem, the resulting behavior and 
 
 See the [README](README.md#build) for build requirements. Run the relevant checks from the repository root:
 
-```sh
+```powershell
 cargo fmt --all -- --check
+$env:SLINT_EMIT_DEBUG_INFO = '1'
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
+Remove-Item Env:SLINT_EMIT_DEBUG_INFO
 cargo build --workspace --locked
 ```
+
+Slint's debug metadata enables element queries in the headless UI tests; it is separate from Rust/PDB debug information. Keep it enabled across Clippy and tests to reuse generated UI code. Changing it reruns UI generation. If it was already set in your shell, restore its previous value instead of removing it.
+
+The default development profile prioritizes incremental builds and disk usage. Use `--profile debugging` for full project and dependency symbols. See [build profiles and measurements](docs/build-performance.md) for details.
 
 ## Conduct and licensing
 

@@ -45,6 +45,8 @@ Local builds and releases use the Rust `nightly` channel, configured in `rust-to
 cargo run --locked -p taprelay-app
 ```
 
+Development builds retain source locations for project backtraces and omit dependency debug information. For breakpoints and variable inspection, use `cargo run --locked -p taprelay-app --profile debugging`.
+
 To build the release executable locally:
 
 ```sh

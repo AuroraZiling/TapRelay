@@ -18,3 +18,21 @@ serde = { version = "1.0.229", features = ["derive"] }
 thiserror = "2.0.20"
 tokio = { version = "1.53.1", features = ["sync"] }
 tracing = "0.1.44"
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.debugging]
+inherits = "dev"
+debug = "full"
+
+[profile.debugging.package."*"]
+debug = "full"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "unwind"

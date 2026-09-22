@@ -45,6 +45,8 @@
 cargo run --locked -p taprelay-app
 ```
 
+开发构建保留项目代码的堆栈行号信息，关闭第三方依赖的调试信息。需要断点和变量检查时，使用 `cargo run --locked -p taprelay-app --profile debugging`。
+
 在本地构建发布版本：
 
 ```sh

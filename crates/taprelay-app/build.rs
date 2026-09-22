@@ -65,31 +65,10 @@ fn compile_windows_resources(windows_version: &str) {
     );
     let rc = out_dir.join("taprelay.rc");
     std::fs::write(&rc, rc_source).expect("Write generated Windows resource script");
-    let resource = out_dir.join("taprelay.res");
-    let compiler = std::env::var_os("RC")
-        .map(PathBuf::from)
-        .or_else(|| {
-            let kits =
-                PathBuf::from(std::env::var_os("ProgramFiles(x86)")?).join("Windows Kits/10/bin");
-            let mut versions = std::fs::read_dir(kits)
-                .ok()?
-                .filter_map(Result::ok)
-                .map(|d| d.path().join("x64/rc.exe"))
-                .filter(|p| p.is_file())
-                .collect::<Vec<_>>();
-            versions.sort();
-            versions.pop()
-        })
-        .expect("Windows SDK resource compiler is required (or set RC)");
-    let status = std::process::Command::new(compiler)
-        .arg("/nologo")
-        .arg("/fo")
-        .arg(&resource)
-        .arg(&rc)
-        .status()
-        .expect("Run Windows resource compiler");
-    assert!(status.success(), "Compile app icon and manifest");
-    println!("cargo:rustc-link-arg-bin=taprelay={}", resource.display());
+    embed_resource::compile_for(&rc, ["taprelay"], embed_resource::NONE)
+        .manifest_required()
+        .expect("Compile app icon and manifest");
+    println!("cargo:rerun-if-env-changed=RC");
     println!("cargo:rerun-if-changed=resources/taprelay.ico");
     println!("cargo:rerun-if-changed=resources/taprelay.manifest.in");
 }

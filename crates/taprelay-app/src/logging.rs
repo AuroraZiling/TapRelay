@@ -92,7 +92,8 @@ fn panic_handler_in(dir: std::path::PathBuf) {
                 "message": payload,
                 "version": crate::version::VERSION,
                 "thread": thread.name().unwrap_or("unnamed"),
-                "location": info.location().map(ToString::to_string).unwrap_or_else(|| "unknown".into())
+                "location": info.location().map(ToString::to_string).unwrap_or_else(|| "unknown".into()),
+                "backtrace": std::backtrace::Backtrace::force_capture().to_string()
             }
         });
         if std::fs::create_dir_all(&dir).is_ok()
@@ -136,6 +137,8 @@ mod tests {
                 "--nocapture",
             ])
             .env(CHILD, dir.path())
+            .env_remove("RUST_BACKTRACE")
+            .env_remove("RUST_LIB_BACKTRACE")
             .output()
             .unwrap();
         assert!(!result.status.success());
@@ -156,6 +159,10 @@ mod tests {
         for field in ["location", "thread", "version"] {
             assert!(record["fields"][field].is_string());
         }
+        let backtrace = record["fields"]["backtrace"].as_str().unwrap();
+        assert!(!backtrace.is_empty());
+        assert!(!backtrace.contains("disabled backtrace"));
+        assert!(backtrace.contains("panic_is_written_without_a_tracing_subscriber"));
     }
     #[test]
     fn retention_preserves_recent_and_unrelated_files() {

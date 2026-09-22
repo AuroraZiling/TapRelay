@@ -16,11 +16,7 @@ tokio.workspace = true
 tracing.workspace = true
 anyhow = "1.0.104"
 serde_json = "1.0.151"
-time = { version = "0.3.55", features = [
-    "formatting",
-    "local-offset",
-    "macros",
-] }
+time = { version = "0.3.55", features = ["formatting"] }
 slint = { version = "=1.18.0", default-features = false, features = [
     "std",
     "backend-winit",
@@ -29,16 +25,23 @@ slint = { version = "=1.18.0", default-features = false, features = [
     "compat-1-2",
     "accessibility",
 ] }
-tracing-subscriber = { version = "0.3.23", features = ["json"] }
+tracing-subscriber = { version = "0.3.23", default-features = false, features = [
+    "fmt",
+    "json",
+    "smallvec",
+    "tracing-log",
+] }
 tracing-appender = "0.2.5"
 tempfile = "3.27.0"
 
 [build-dependencies]
-slint-build = "=1.18.0"
+slint-build = { version = "=1.18.0", default-features = false, features = ["compat-1-18"] }
 serde_json = "1.0.151"
 lucide-slint = "1.47.0"
+embed-resource = "3.0.9"
 
 [dev-dependencies]
+time = { version = "0.3.55", features = ["macros"] }
 i-slint-backend-testing = { version = "=1.18.0", features = [
     "renderer-software",
 ] }

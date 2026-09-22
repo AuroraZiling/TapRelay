@@ -1,4 +1,9 @@
 {
+  "runtime.busy": "操作正在进行，请稍候。",
+  "runtime.slow": "操作耗时较长，仍在处理中。",
+  "runtime.finishing": "正在完成尚未保存的更改…",
+  "runtime.stopped": "后台进程已停止，请重启 TapRelay 后继续。",
+  "runtime.queue_full": "等待中的操作过多，请完成后重试。",
   "receiver.switching": "正在切换输入模式并重新连接接收端…",
   "bluetooth.enabled": "已启用",
   "bluetooth.disabled": "未启用",

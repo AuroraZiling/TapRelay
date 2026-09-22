@@ -362,6 +362,13 @@ impl Runtime {
         cleanup.revision = self.bindings_revision;
         self.apply_router_outputs(cleanup);
         self.epoch = Instant::now();
+        if let Some(capture) = &mut self.capture {
+            capture.phase = CapturePhase::WaitingForRelease;
+            capture.preview.clear();
+            capture.error = None;
+            self.capture_state = InputState::default();
+            self.recorder.reset();
+        }
         if matches!(self.test, TestStatus::Pending(_)) {
             self.test = TestStatus::Failed(
                 "Test cancelled because the input or connection session changed".into(),
@@ -576,7 +583,11 @@ impl Runtime {
 
     /// Native edges belonging to a GUI control must not also trigger a global shortcut.
     pub fn consume_ui_input(&mut self) {
-        self.ui_input_until = Instant::now();
+        self.consume_ui_input_at(Instant::now());
+    }
+
+    pub fn consume_ui_input_at(&mut self, captured: Instant) {
+        self.ui_input_until = self.ui_input_until.max(captured);
     }
 
     fn enqueue_media(
@@ -623,7 +634,7 @@ impl Runtime {
     pub fn tick(&mut self) {
         self.tick_with_capture_context(
             !self.recording() || platform::desktop::foreground_is_ours(),
-            self.capture_waiting() && platform::desktop::any_input_held(),
+            self.recording() && platform::desktop::any_input_held(),
         );
     }
 
@@ -1601,6 +1612,31 @@ mod tests {
     }
 
     #[test]
+    fn interrupted_capture_waits_for_held_keys_before_accepting_a_new_gesture() {
+        let mut runtime = capture_runtime();
+        begin_capture(&mut runtime, FunctionId::MediaPlayPause, 0);
+        runtime.tick_with_capture_context(true, false);
+        let original = runtime.functions.clone();
+        queue_capture_keys(&mut runtime, &[(0x79, true)], false);
+        runtime.tick_with_capture_context(true, true);
+        runtime.last_transport_ready = true;
+        runtime.tick_with_capture_context(true, true);
+        assert_eq!(
+            runtime.capture().unwrap().phase,
+            CapturePhase::WaitingForRelease
+        );
+        assert!(runtime.capture().unwrap().preview.is_empty());
+        queue_capture_keys(&mut runtime, &[(0x79, false)], false);
+        runtime.tick_with_capture_context(true, false);
+        assert_eq!(runtime.functions, original);
+        assert_eq!(runtime.capture().unwrap().phase, CapturePhase::Recording);
+        queue_capture_keys(&mut runtime, &[(0x7a, true), (0x7a, false)], false);
+        runtime.tick_with_capture_context(true, false);
+        assert_eq!(runtime.bindings_revision, 1);
+        assert!(runtime.capture().is_none());
+    }
+
+    #[test]
     fn capture_listener_failure_discards_candidate_and_ends_session() {
         struct FailedInput;
         impl InputSource for FailedInput {
@@ -1644,5 +1680,92 @@ mod tests {
             runtime.functions[&id].shortcuts,
             vec![Shortcut::keyboard(ModifierSet::empty(), 0x77)]
         );
+    }
+    #[test]
+    fn handoff_drains_accepted_hook_input_before_a_queued_listener_edit() {
+        use std::sync::{Arc, Mutex, mpsc as sync};
+        struct GatedInput {
+            gate: Mutex<Option<sync::Receiver<()>>>,
+            entered: sync::Sender<()>,
+            listening: Arc<Mutex<Vec<bool>>>,
+        }
+        impl InputSource for GatedInput {
+            fn is_finished(&self) -> bool {
+                false
+            }
+            fn configure(
+                &self,
+                _: &FunctionConfigs,
+                listening: bool,
+                _: bool,
+                _: u64,
+            ) -> RouteResult {
+                self.listening.lock().unwrap().push(listening);
+                if let Some(gate) = self.gate.lock().unwrap().take() {
+                    self.entered.send(()).unwrap();
+                    gate.recv_timeout(std::time::Duration::from_secs(3))
+                        .unwrap();
+                }
+                RouteResult::default()
+            }
+        }
+        let (release, gate) = sync::channel();
+        let (entered, blocked) = sync::channel();
+        let (sender, input) = sync::channel();
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let listening = observed.clone();
+        let mut handle = crate::runtime_worker::RuntimeHandle::spawn(
+            Config::default(),
+            move |_| {
+                let mut runtime = app_runtime();
+                runtime.input_initialized = true;
+                runtime.input = Some(Box::new(GatedInput {
+                    gate: Mutex::new(Some(gate)),
+                    entered,
+                    listening,
+                }));
+                sender.send(runtime.sender.clone()).unwrap();
+                runtime
+            },
+            Runtime::tick,
+            64,
+        )
+        .unwrap();
+        blocked
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .unwrap();
+        let created = Instant::now();
+        input
+            .recv()
+            .unwrap()
+            .try_send(RoutedInput::Edge {
+                event: InputEvent {
+                    code: InputCode::Key(0x78),
+                    down: true,
+                    captured: created,
+                },
+                result: function_output(
+                    FunctionAction::App(AppCommand::ToggleListening),
+                    true,
+                    created,
+                ),
+            })
+            .unwrap();
+        handle.set_listening(false).unwrap();
+        release.send(()).unwrap();
+        let deadline = Instant::now() + std::time::Duration::from_secs(3);
+        while handle.busy() {
+            handle.poll();
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        let states = observed.lock().unwrap();
+        assert!(states.contains(&true), "the accepted shortcut must execute");
+        assert_eq!(
+            states.last(),
+            Some(&false),
+            "the later edit must take effect last"
+        );
+        assert!(!handle.listening);
     }
 }

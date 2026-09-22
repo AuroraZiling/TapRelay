@@ -71,6 +71,38 @@ fn render_all_views_without_hardware() {
     check_surface_redraw(&ui, &render_window);
     check_binding_layouts_and_actions(&ui);
     check_about_links(&ui);
+    check_runtime_feedback(&ui);
+}
+
+fn check_runtime_feedback(ui: &AppWindow) {
+    ui.set_mode(2);
+    ui.set_page(0);
+    for locale in ["en", "zh-cn"] {
+        i18n::apply(ui, locale);
+        for key in [
+            i18n::keys::RUNTIME_BUSY,
+            i18n::keys::RUNTIME_SLOW,
+            i18n::keys::RUNTIME_FINISHING,
+        ] {
+            let text = i18n::text(locale, key);
+            ui.set_toast(text.clone().into());
+            assert_eq!(ui.get_toast().as_str(), text);
+            let snapshot = ui.window().take_snapshot().unwrap();
+            let width = snapshot.width();
+            let height = snapshot.height();
+            if key == i18n::keys::RUNTIME_SLOW
+                && let Some(directory) = std::env::var_os("TAPRELAY_UI_RENDER_DIR")
+            {
+                let directory = std::path::PathBuf::from(directory);
+                std::fs::create_dir_all(&directory).unwrap();
+                let mut ppm = format!("P6\n{width} {height}\n255\n").into_bytes();
+                for pixel in snapshot.as_slice() {
+                    ppm.extend_from_slice(&[pixel.r, pixel.g, pixel.b]);
+                }
+                std::fs::write(directory.join(format!("runtime-{locale}.ppm")), ppm).unwrap();
+            }
+        }
+    }
 }
 
 fn check_environment_failure(ui: &AppWindow) {

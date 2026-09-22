@@ -248,8 +248,9 @@ impl SaveQueue {
     }
     pub fn flush(&mut self, config: &Config, path: &Path, force: bool) -> Result<()> {
         if self.due.is_some_and(|d| force || Instant::now() >= d) {
-            self.due = None;
+            self.changed();
             config.save(path)?;
+            self.due = None;
         }
         Ok(())
     }
@@ -311,6 +312,22 @@ mod tests {
         q.flush(&c, &p, true).unwrap();
         assert!(Config::load(&p).unwrap().options.start_hidden);
     }
+    #[test]
+    fn failed_save_remains_pending_for_a_later_forced_flush() {
+        let directory = tempfile::tempdir().unwrap();
+        let parent = directory.path().join("temporarily-unavailable");
+        let path = parent.join("config.json");
+        let mut config = Config::default();
+        config.options.theme = Theme::Dark;
+        let mut saves = SaveQueue::default();
+        saves.changed();
+        assert!(saves.flush(&config, &path, true).is_err());
+        std::fs::create_dir(&parent).unwrap();
+        saves.flush(&config, &path, true).unwrap();
+        assert!(path.exists());
+        assert_eq!(Config::load(&path).unwrap().options.theme, Theme::Dark);
+    }
+
     #[test]
     fn invalid_config_is_not_overwritten() {
         let dir = tempfile::tempdir().unwrap();

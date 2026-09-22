@@ -1,4 +1,9 @@
 {
+  "runtime.busy": "An operation is in progress. Please wait.",
+  "runtime.slow": "This is taking longer than expected. The operation is still in progress.",
+  "runtime.finishing": "Finishing pending changes…",
+  "runtime.stopped": "The background worker has stopped. Restart TapRelay to continue.",
+  "runtime.queue_full": "Too many pending operations. Try again after they finish.",
   "receiver.switching": "Switching input mode; reconnecting to the receiver…",
   "bluetooth.enabled": "Enabled",
   "bluetooth.disabled": "Disabled",

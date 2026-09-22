@@ -9,7 +9,7 @@ use crate::{
     logging,
     platform::desktop::{self, Desktop, DesktopEvent},
     runtime::{CaptureError, CapturePhase},
-    runtime_worker::RuntimeHandle,
+    runtime_worker::{HandoffError, Notice, RuntimeHandle},
 };
 use anyhow::{Context, Result, bail};
 use slint::{ComponentHandle, ModelRc, VecModel};
@@ -34,8 +34,9 @@ fn dispatch_controller(
         tracing::error!("Ignored re-entrant UI command");
         return;
     };
+    controller.runtime.poll();
     if let Err(error) = command(&mut controller, &ui) {
-        controller.error(&format!("{error:#}"));
+        controller.command_error(&error);
         controller.sync(&ui);
     }
 }
@@ -119,7 +120,6 @@ pub fn run() -> Result<()> {
     }
     ui.window().set_maximized(size.maximized);
     let actions = Rc::new(RefCell::new(Vec::<(Action, String)>::new()));
-    let window_keys = Rc::new(RefCell::new(Vec::new()));
     let a = actions.clone();
     ui.window().on_close_requested(move || {
         a.borrow_mut().push((Action::Close, String::new()));
@@ -130,15 +130,7 @@ pub fn run() -> Result<()> {
     if controller.fatal.is_none() {
         controller.runtime.start_bluetooth()?;
     }
-    ui.show()?;
-    // Initial winit attributes only set ICON_SMALL. Updating the image after
-    // native window creation lets Slint set both title-bar and taskbar icons.
-    let icon_window = ui.as_weak();
-    slint::Timer::single_shot(Duration::ZERO, move || {
-        if let Some(ui) = icon_window.upgrade() {
-            ui.set_app_icon(ui.get_app_icon_artwork());
-        }
-    });
+    controller.present_startup(&ui)?;
     let controller = Rc::new(RefCell::new(controller));
     let action_controller = controller.clone();
     let action_window = ui.as_weak();
@@ -186,26 +178,27 @@ pub fn run() -> Result<()> {
         });
     });
     let key_controller = controller.clone();
-    let keys = window_keys.clone();
     binding_ui.on_key_input(move |text, down| {
         if desktop::ui_input_is_injected() {
             return;
         }
-        let Ok(controller) = key_controller.try_borrow() else {
+        let Ok(mut controller) = key_controller.try_borrow_mut() else {
             tracing::error!("Ignored re-entrant binding key input");
             return;
         };
+        controller.runtime.poll();
         if !controller.recording() {
             tracing::warn!("Ignored binding key input while capture was inactive");
             return;
         }
-        drop(controller);
         if let Some(key) = crate::capture_key::virtual_key(&text) {
-            keys.borrow_mut().push(taprelay_core::input::InputEvent {
-                code: taprelay_core::input::InputCode::Key(key),
-                down,
-                captured: Instant::now(),
-            });
+            controller
+                .runtime
+                .window_key(taprelay_core::input::InputEvent {
+                    code: taprelay_core::input::InputCode::Key(key),
+                    down,
+                    captured: Instant::now(),
+                });
         } else {
             tracing::debug!(key_text = %text, "Ignored unsupported binding key");
         }
@@ -234,12 +227,9 @@ pub fn run() -> Result<()> {
             let pending = std::mem::take(&mut *actions.borrow_mut());
             for (name, value) in pending {
                 if let Err(e) = c.action(&ui, name, &value) {
-                    c.error(&format!("{e:#}"));
+                    c.command_error(&e);
                 }
             }
-            c.runtime
-                .window_keys
-                .extend(window_keys.borrow_mut().drain(..));
             c.tick(&ui);
         },
     );
@@ -369,6 +359,11 @@ mod startup_option_tests {
     }
 }
 
+enum ExitIntent {
+    Quit,
+    Elevate,
+}
+
 struct Controller {
     runtime: RuntimeHandle,
     path: PathBuf,
@@ -386,11 +381,12 @@ struct Controller {
     stage_since: Instant,
     toast: String,
     toast_until: Instant,
-    previous_test: TestStatus,
+    exit: Option<ExitIntent>,
     last_error: String,
     last_notification: Instant,
     shutdown: bool,
     hidden: bool,
+    startup_pending: bool,
     previous_devices: Option<(
         Vec<Target>,
         Option<String>,
@@ -435,11 +431,12 @@ impl Controller {
             stage_since: now,
             toast: String::new(),
             toast_until: now,
-            previous_test: TestStatus::Idle,
+            exit: None,
             last_error: String::new(),
             last_notification: now - Duration::from_secs(120),
             shutdown: false,
-            hidden: false,
+            hidden: true,
+            startup_pending: true,
             previous_devices: None,
             previous_bindings: None,
             previous_checks: None,
@@ -467,6 +464,15 @@ impl Controller {
     fn say(&mut self, message: String) {
         self.toast = message;
         self.toast_until = Instant::now() + Duration::from_secs(6);
+    }
+    fn command_error(&mut self, error: &anyhow::Error) {
+        let message = match error.downcast_ref::<HandoffError>() {
+            Some(HandoffError::Busy) => self.tr(keys::RUNTIME_BUSY),
+            Some(HandoffError::Stopped) => self.tr(keys::RUNTIME_STOPPED),
+            Some(HandoffError::QueueFull) => self.tr(keys::RUNTIME_QUEUE_FULL),
+            None => format!("{error:#}"),
+        };
+        self.error(&message);
     }
     fn error(&mut self, message: &str) {
         tracing::error!("{message}");
@@ -504,11 +510,18 @@ impl Controller {
             .apply_binding_command(BindingCommand::CancelCapture)
     }
     fn binding_action(&mut self, ui: &AppWindow, command: BindingCommand) -> Result<()> {
+        if self.exit.is_some() {
+            return Ok(());
+        }
         let result = self.runtime.apply_binding_command(command);
         self.sync(ui);
         result
     }
     fn action(&mut self, ui: &AppWindow, name: Action, value: &str) -> Result<()> {
+        self.runtime.poll();
+        if self.exit.is_some() && !matches!(name, Action::Show | Action::TrayReset) {
+            return Ok(());
+        }
         if !matches!(name, Action::Show | Action::Resume | Action::TrayReset) {
             self.runtime.consume_ui_input();
         }
@@ -527,10 +540,9 @@ impl Controller {
         }
         match name {
             Action::Show => {
-                ui.show()?;
+                self.show_window(ui)?;
                 ui.window().set_minimized(false);
                 desktop::foreground_app();
-                self.hidden = false;
             }
             Action::Close => {
                 if self.runtime.config.options.close_to_tray && self.fatal.is_none() {
@@ -550,15 +562,11 @@ impl Controller {
                 }
             }
             Action::Quit => {
-                self.cancel_capture()?;
-                self.runtime.shutdown();
-                self.save_geometry(ui);
-                self.flush(true);
-                self.shutdown = true;
-                slint::quit_event_loop()?;
+                self.runtime.shutdown()?;
+                self.exit = Some(ExitIntent::Quit);
             }
             Action::Navigate => {
-                if self.recording() {
+                if !self.runtime.stopped() {
                     self.cancel_capture()?;
                 }
                 ui.set_page(action::page(value)?.clamp(0, 3));
@@ -574,16 +582,15 @@ impl Controller {
                 if self.recovering && self.started.elapsed() < Duration::from_secs(2) {
                     return Ok(());
                 }
+                if name == Action::Resume {
+                    self.runtime.resume()?;
+                } else {
+                    self.runtime.start_bluetooth()?;
+                }
                 self.recovering = true;
-                self.runtime.start_bluetooth()?;
                 self.started = Instant::now();
                 self.stage_since = Instant::now();
                 self.last_error.clear();
-                if name == Action::Resume && self.runtime.listening {
-                    self.cancel_capture()?;
-                    self.runtime.set_listening(false)?;
-                    self.runtime.set_listening(true)?;
-                }
             }
             Action::TrayReset => self.desktop.restore(),
             Action::BluetoothSettings => self.runtime.bluetooth_settings()?,
@@ -701,12 +708,8 @@ impl Controller {
                 self.saves.changed();
             }
             Action::Elevate => {
-                self.save_geometry(ui);
-                self.runtime.config.save(&self.path)?;
-                if !self.status.elevated && administrator::restart()? {
-                    self.shutdown = true;
-                    slint::quit_event_loop()?;
-                }
+                self.cancel_capture()?;
+                self.exit = Some(ExitIntent::Elevate);
             }
         }
         self.sync(ui);
@@ -717,17 +720,27 @@ impl Controller {
             return;
         }
         let now = Instant::now();
-        if self.fatal.is_none() {
+        if self.fatal.is_none() || self.exit.is_some() {
             self.runtime.tick();
+        } else {
+            self.runtime.poll();
         }
         self.track_remembered_device();
-        if let Some(e) = self.runtime.error.take() {
-            if !self.runtime.state.input {
-                self.error(&e);
-            } else {
-                tracing::warn!("{e}");
-                self.say(e);
+        while let Some(notice) = self.runtime.take_notice() {
+            match notice {
+                Notice::Error(error) => self.error(&error),
+                Notice::Test(TestStatus::Succeeded) => self.say(self.tr(keys::TEST_SENT)),
+                Notice::Test(TestStatus::Failed(error)) => self.error(&error),
+                Notice::Test(_) => {}
             }
+        }
+        if self.exit.is_some() {
+            if let Err(error) = self.finish_exit(ui) {
+                self.command_error(&error);
+                self.exit = None;
+            }
+            self.sync(ui);
+            return;
         }
         let state = &self.runtime.state;
         let passed = state.adapter && state.peripheral && state.service && state.broadcasting;
@@ -779,6 +792,9 @@ impl Controller {
             self.error(&message);
         }
         self.flush(false);
+        if let Err(error) = self.present_startup(ui) {
+            self.error(&format!("{error:#}"));
+        }
         if !self.hidden || self.last_ui_sync.elapsed() >= Duration::from_secs(1) {
             self.sync(ui);
             self.last_ui_sync = now;
@@ -809,6 +825,42 @@ impl Controller {
             }
         }
     }
+    fn show_window(&mut self, ui: &AppWindow) -> Result<()> {
+        ui.show()?;
+        // Initial winit attributes only set ICON_SMALL. Update both icon sizes after creation.
+        let icon_window = ui.as_weak();
+        slint::Timer::single_shot(Duration::ZERO, move || {
+            if let Some(ui) = icon_window.upgrade() {
+                ui.set_app_icon(ui.get_app_icon_artwork());
+            }
+        });
+        self.hidden = false;
+        self.startup_pending = false;
+        Ok(())
+    }
+
+    fn present_startup(&mut self, ui: &AppWindow) -> Result<()> {
+        if !self.startup_pending {
+            return Ok(());
+        }
+        self.sync(ui);
+        if !crate::startup_checks::should_present(
+            self.passed,
+            !ui.get_problem().is_empty(),
+            self.started.elapsed(),
+        ) {
+            return Ok(());
+        }
+        if self.passed
+            && self.runtime.config.options.start_hidden
+            && self.runtime.config.wizard.dismissed
+        {
+            self.startup_pending = false;
+            return Ok(());
+        }
+        self.show_window(ui)
+    }
+
     fn sync(&mut self, ui: &AppWindow) {
         if self.last_system_poll.elapsed() >= Duration::from_secs(1) {
             self.system_theme = desktop::system_dark();
@@ -878,6 +930,11 @@ impl Controller {
         let failure = self
             .fatal
             .clone()
+            .or_else(|| {
+                self.runtime
+                    .stopped()
+                    .then(|| self.tr(keys::RUNTIME_STOPPED))
+            })
             .or_else(|| s.last_error.clone())
             .or_else(|| {
                 (self.passed
@@ -909,6 +966,7 @@ impl Controller {
         } else if self.recovering && failure.is_none() {
             ("prepare", self.tr(keys::RECEIVER_PREPARING))
         } else if self.fatal.is_some()
+            || self.runtime.stopped()
             || (self.passed
                 && (!s.adapter
                     || (!s.service_paused
@@ -1097,26 +1155,41 @@ impl Controller {
             }
             .into(),
         });
-        if self.previous_test != self.runtime.test {
-            self.previous_test = self.runtime.test.clone();
-            let message = match &self.runtime.test {
-                TestStatus::Idle => None,
-                TestStatus::Pending(_) => Some(self.tr(keys::TEST_SENDING).to_owned()),
-                TestStatus::Succeeded => Some(self.tr(keys::TEST_SENT).to_owned()),
-                TestStatus::Failed(error) => {
-                    Some(format!("{}: {error}", self.tr(keys::ERROR_ACTION)))
-                }
-            };
-            if let Some(message) = message {
-                self.say(message);
-            }
-        }
         ui.set_input_count(self.runtime.matched.min(i32::MAX as u64) as i32);
-        ui.set_toast(if Instant::now() < self.toast_until {
+        ui.set_toast(if self.runtime.slow() {
+            self.tr(keys::RUNTIME_SLOW).into()
+        } else if self.exit.is_some() {
+            self.tr(keys::RUNTIME_FINISHING).into()
+        } else if self.runtime.progress_pending() {
+            self.tr(keys::RUNTIME_BUSY).into()
+        } else if matches!(self.runtime.test, TestStatus::Pending(_)) {
+            self.tr(keys::TEST_SENDING).into()
+        } else if Instant::now() < self.toast_until {
             self.toast.clone().into()
         } else {
             "".into()
         });
+    }
+    fn finish_exit(&mut self, ui: &AppWindow) -> Result<()> {
+        match self.exit {
+            Some(ExitIntent::Quit) if self.runtime.stopped() => {
+                self.save_geometry(ui);
+                self.flush(true);
+                self.shutdown = true;
+                slint::quit_event_loop()?;
+            }
+            Some(ExitIntent::Elevate) if !self.runtime.busy() => {
+                self.save_geometry(ui);
+                self.runtime.config.save(&self.path)?;
+                self.exit = None;
+                if !self.status.elevated && administrator::restart()? {
+                    self.runtime.shutdown()?;
+                    self.exit = Some(ExitIntent::Quit);
+                }
+            }
+            _ => {}
+        }
+        Ok(())
     }
     fn save_geometry(&mut self, ui: &AppWindow) {
         if self.hidden || self.fatal.is_some() {

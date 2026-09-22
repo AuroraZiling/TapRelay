@@ -52,6 +52,8 @@ pub enum RoutedInput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RoutedOutput {
     Local(PhysicalInput),
+    Remote(PhysicalInput),
+    EndPassthrough,
     /// Re-deliver an earlier physical input that the hook consumed while it
     /// waited to decide a later event (currently pending modifiers).
     Replay(PhysicalInput),
@@ -107,6 +109,7 @@ pub struct InputRouter {
     index: BindingIndex,
     revision: u64,
     listening: bool,
+    passthrough: bool,
     recording: bool,
     physical: InputState,
     active: BTreeMap<InputCode, ActiveToken>,
@@ -128,6 +131,7 @@ impl InputRouter {
             index: BindingIndex::new(configs),
             revision,
             listening: false,
+            passthrough: false,
             recording: false,
             physical: InputState::default(),
             active: BTreeMap::new(),
@@ -142,6 +146,49 @@ impl InputRouter {
 
     pub fn revision(&self) -> u64 {
         self.revision
+    }
+
+    pub fn passthrough(&self) -> bool {
+        self.passthrough
+    }
+
+    pub fn set_passthrough(&mut self, enabled: bool) -> RouteResult {
+        if self.passthrough == enabled {
+            return self.stamp(RouteResult::default());
+        }
+        let mut result = self.terminate(RouterReason::SessionChanged);
+        for code in std::mem::take(&mut self.local_held) {
+            result
+                .outputs
+                .push(RoutedOutput::Replay(PhysicalInput::Edge {
+                    code,
+                    down: false,
+                }));
+        }
+        self.isolate_held();
+        self.passthrough = enabled;
+        result
+    }
+
+    fn isolate_held(&mut self) {
+        for key in 0..=255 {
+            let code = InputCode::Key(key);
+            if self.physical.is_down(code) {
+                self.suppressed_until_up.insert(code);
+            }
+        }
+        for button in [
+            crate::input::MouseButton::Left,
+            crate::input::MouseButton::Right,
+            crate::input::MouseButton::Middle,
+            crate::input::MouseButton::Side1,
+            crate::input::MouseButton::Side2,
+        ] {
+            let code = InputCode::Mouse(button);
+            if self.physical.is_down(code) {
+                self.suppressed_until_up.insert(code);
+            }
+        }
     }
 
     pub fn set_listening(&mut self, listening: bool) -> RouteResult {
@@ -201,6 +248,13 @@ impl InputRouter {
 
         self.index = next_index;
         self.revision = revision;
+        if self.passthrough
+            && !configs
+                .get(&FunctionId::AppTogglePassthrough)
+                .is_some_and(|config| config.enabled && !config.shortcuts.is_empty())
+        {
+            cleanup.outputs.extend(self.set_passthrough(false).outputs);
+        }
         self.stamp(cleanup)
     }
 
@@ -210,6 +264,11 @@ impl InputRouter {
             consume: true,
             outputs: Vec::new(),
         };
+        if self.passthrough {
+            self.passthrough = false;
+            self.isolate_held();
+            result.outputs.push(RoutedOutput::EndPassthrough);
+        }
         // A modifier that was held back by the hook has not reached the host
         // yet. Replay only the non-captured prefixes before dropping the
         // router state; a captured shortcut must not leak a lone modifier.
@@ -277,8 +336,23 @@ impl InputRouter {
 
     /// Route an edge that belongs to TapRelay's own configuration window.
     /// Physical state is still updated and a captured function is released,
-    /// but this path never starts a configured function.
+    /// Only the passthrough toggle can start here; active passthrough owns
+    /// the window's input just like every other window.
     pub fn route_local_event(&mut self, event: InputEvent) -> RouteResult {
+        if self.passthrough {
+            return self.route_event(event);
+        }
+        if event.down
+            && !self.recording
+            && self
+                .index
+                .best_match_where(event.code, &self.physical, |id| {
+                    id == FunctionId::AppTogglePassthrough
+                })
+                .is_some()
+        {
+            return self.route_event(event);
+        }
         let changed = self.physical.update(event);
         if !changed {
             if self.active.contains_key(&event.code)
@@ -373,6 +447,13 @@ impl InputRouter {
     }
 
     fn route_continuous(&mut self, input: PhysicalInput) -> RouteResult {
+        if self.passthrough {
+            return RouteResult {
+                consume: true,
+                outputs: vec![RoutedOutput::Remote(input)],
+                revision: self.revision,
+            };
+        }
         if self.recording {
             return RouteResult::pass(input);
         }
@@ -391,6 +472,12 @@ impl InputRouter {
     fn route_edge(&mut self, event: InputEvent) -> RouteResult {
         let changed = self.physical.update(event);
         if !changed {
+            if self.passthrough {
+                return self.stamp(RouteResult {
+                    consume: true,
+                    ..Default::default()
+                });
+            }
             if self.active.contains_key(&event.code)
                 || self.suppressed_until_up.contains(&event.code)
             {
@@ -464,7 +551,12 @@ impl InputRouter {
             && let Some(index) = self
                 .index
                 .best_match_where(event.code, &self.physical, |id| {
-                    self.listening || id == FunctionId::AppToggleListening
+                    self.listening
+                        || self.passthrough
+                        || matches!(
+                            id,
+                            FunctionId::AppToggleListening | FunctionId::AppTogglePassthrough
+                        )
                 })
         {
             let binding = self.index.binding(index).expect("index entry").clone();
@@ -498,9 +590,14 @@ impl InputRouter {
         }
 
         if event.down
+            && !self.passthrough
             && matches!(event.code, InputCode::Key(key) if modifier(key))
             && self.index.uses_modifier_where(event.code, |id| {
-                self.listening || id == FunctionId::AppToggleListening
+                self.listening
+                    || matches!(
+                        id,
+                        FunctionId::AppToggleListening | FunctionId::AppTogglePassthrough
+                    )
             })
         {
             if !self.pending_modifiers.contains(&event.code) {
@@ -517,6 +614,16 @@ impl InputRouter {
     }
 
     fn normal_input(&mut self, event: InputEvent) -> RouteResult {
+        if self.passthrough {
+            return RouteResult {
+                revision: self.revision,
+                consume: true,
+                outputs: vec![RoutedOutput::Remote(PhysicalInput::Edge {
+                    code: event.code,
+                    down: event.down,
+                })],
+            };
+        }
         if self.recording {
             return RouteResult::pass(PhysicalInput::Edge {
                 code: event.code,

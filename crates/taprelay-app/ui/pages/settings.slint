@@ -43,6 +43,7 @@ export component SettingsPage inherits ScrollArea {
     in-out property <bool> always-admin;
     in property <string> app-version;
     in-out property <bool> auto-listen;
+    in-out property <bool> passthrough-reverse-scroll;
     in-out property <bool> auto-start;
     in-out property <bool> close-to-tray;
     in property <string> data-directory;
@@ -87,6 +88,18 @@ export component SettingsPage inherits ScrollArea {
                     clicked=> {
                         root.action("language", option.value);
                     }
+                }
+            }
+        }
+        Section {
+            title: I18n.text.settings-passthrough;
+            SwitchRow {
+                label: I18n.text.settings-passthrough-reverse-scroll;
+                description: I18n.text.settings-passthrough-reverse-scroll-hint;
+                accessibility-id: "setting-passthrough-reverse-scroll";
+                checked <=> root.passthrough-reverse-scroll;
+                toggled(v) => {
+                    root.action("set-passthrough-reverse-scroll", v ? "1" : "0");
                 }
             }
         }

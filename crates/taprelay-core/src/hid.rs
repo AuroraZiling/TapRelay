@@ -6,13 +6,62 @@
 
 use crate::{command::MediaCommand, ports::BackendError};
 use std::collections::{BTreeMap, BTreeSet};
+mod input;
+pub use input::{InputReports, keyboard_usage};
 
 pub const CONSUMER_REPORT_ID: u8 = 1;
 pub const CONSUMER_REPORT_REFERENCE: [u8; 2] = [CONSUMER_REPORT_ID, 1];
 pub const CONSUMER_REPORT_LENGTH: usize = 12; // six 16-bit usage-array entries
 
-/// Consumer Control application collection for configured media actions.
+/// Keyboard, Consumer Control and relative Mouse application collections.
 pub const REPORT_MAP: &[u8] = &[
+    // Put the keyboard first for hosts that classify by the primary collection.
+    0x05,
+    0x01,
+    0x09,
+    0x06,
+    0xa1,
+    0x01,
+    0x85,
+    0x02,
+    0x05,
+    0x07,
+    0x19,
+    0xe0,
+    0x29,
+    0xe7,
+    0x15,
+    0x00,
+    0x25,
+    0x01,
+    0x75,
+    0x01,
+    0x95,
+    0x08,
+    0x81,
+    0x02,
+    0x75,
+    0x08,
+    0x95,
+    0x01,
+    0x81,
+    0x01,
+    0x19,
+    0x00,
+    0x29,
+    0xdf,
+    0x15,
+    0x00,
+    0x26,
+    0xdf,
+    0x00,
+    0x75,
+    0x08,
+    0x95,
+    0x12,
+    0x81,
+    0x00,
+    0xc0,
     // Consumer Control, report 1: six 16-bit usage-array slots.
     0x05,
     0x0c,
@@ -43,6 +92,79 @@ pub const REPORT_MAP: &[u8] = &[
     0x81,
     0x00,
     0xc0,
+    0x05,
+    0x01,
+    0x09,
+    0x02,
+    0xa1,
+    0x01,
+    0x85,
+    0x03,
+    0x09,
+    0x01,
+    0xa1,
+    0x00,
+    0x05,
+    0x09,
+    0x19,
+    0x01,
+    0x29,
+    0x05,
+    0x15,
+    0x00,
+    0x25,
+    0x01,
+    0x75,
+    0x01,
+    0x95,
+    0x05,
+    0x81,
+    0x02,
+    0x75,
+    0x03,
+    0x95,
+    0x01,
+    0x81,
+    0x01,
+    0x05,
+    0x01,
+    0x09,
+    0x30,
+    0x09,
+    0x31,
+    0x16,
+    0x00,
+    0x80,
+    0x26,
+    0xff,
+    0x7f,
+    0x75,
+    0x10,
+    0x95,
+    0x02,
+    0x81,
+    0x06,
+    0x09,
+    0x38,
+    0x15,
+    0x81,
+    0x25,
+    0x7f,
+    0x75,
+    0x08,
+    0x95,
+    0x01,
+    0x81,
+    0x06,
+    0x05,
+    0x0c,
+    0x0a,
+    0x38,
+    0x02,
+    0x81,
+    0x06,
+    0xc0,
+    0xc0,
 ];
 
 pub const HID_INFORMATION: [u8; 4] = [0x11, 0x01, 0, 2];
@@ -51,26 +173,34 @@ pub const PROTOCOL_MODE: [u8; 1] = [1];
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ReportKind {
     Consumer,
+    Keyboard,
+    Mouse,
 }
 
 impl ReportKind {
-    pub const ALL: [Self; 1] = [Self::Consumer];
+    pub const ALL: [Self; 3] = [Self::Consumer, Self::Keyboard, Self::Mouse];
+
+    pub const fn index(self) -> usize {
+        self.id() as usize - 1
+    }
 
     pub const fn id(self) -> u8 {
         match self {
             Self::Consumer => CONSUMER_REPORT_ID,
+            Self::Keyboard => 2,
+            Self::Mouse => 3,
         }
     }
 
     pub const fn reference(self) -> [u8; 2] {
-        match self {
-            Self::Consumer => CONSUMER_REPORT_REFERENCE,
-        }
+        [self.id(), 1]
     }
 
     pub const fn payload_len(self) -> usize {
         match self {
             Self::Consumer => CONSUMER_REPORT_LENGTH,
+            Self::Keyboard => 20,
+            Self::Mouse => 7,
         }
     }
 }
@@ -136,6 +266,10 @@ impl ConsumerState {
         self.owners.is_empty()
     }
 
+    pub fn exceeds_capacity(&self) -> bool {
+        self.owners.len() > CONSUMER_REPORT_LENGTH / 2
+    }
+
     pub fn clear(&mut self) {
         self.owners.clear();
     }
@@ -169,14 +303,21 @@ pub fn click(
 mod tests {
     use super::*;
     #[test]
-    fn descriptor_exposes_only_the_media_report() {
+    fn descriptor_exposes_keyboard_media_and_mouse_reports() {
         let ids: Vec<_> = REPORT_MAP
             .windows(2)
             .filter(|bytes| bytes[0] == 0x85)
             .map(|bytes| bytes[1])
             .collect();
-        assert_eq!(ids, vec![CONSUMER_REPORT_ID]);
-        assert_eq!(ReportKind::ALL, [ReportKind::Consumer]);
+        assert_eq!(ids, vec![2, CONSUMER_REPORT_ID, 3]);
+        assert_eq!(
+            ReportKind::ALL,
+            [
+                ReportKind::Consumer,
+                ReportKind::Keyboard,
+                ReportKind::Mouse
+            ]
+        );
     }
 
     // Interpret the Consumer Array's selector table independently of the encoder.

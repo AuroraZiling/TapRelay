@@ -15,6 +15,7 @@ pub enum CategoryId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppCommand {
     ToggleListening,
+    TogglePassthrough,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,6 +29,7 @@ impl FunctionAction {
         match self {
             Self::Media(command) => command.name_key(),
             Self::App(AppCommand::ToggleListening) => "function.app.togglelistening",
+            Self::App(AppCommand::TogglePassthrough) => "function.app.togglepassthrough",
         }
     }
 }
@@ -58,6 +60,8 @@ pub enum FunctionId {
     MediaMute,
     #[serde(rename = "app.toggle-listening")]
     AppToggleListening,
+    #[serde(rename = "app.toggle-passthrough")]
+    AppTogglePassthrough,
 }
 
 impl FunctionId {
@@ -68,6 +72,7 @@ impl FunctionId {
             Self::MediaNext => "media.next",
             Self::MediaMute => "media.mute",
             Self::AppToggleListening => "app.toggle-listening",
+            Self::AppTogglePassthrough => "app.toggle-passthrough",
         }
     }
 
@@ -78,12 +83,13 @@ impl FunctionId {
             "media.next" => Self::MediaNext,
             "media.mute" => Self::MediaMute,
             "app.toggle-listening" => Self::AppToggleListening,
+            "app.toggle-passthrough" => Self::AppTogglePassthrough,
             _ => return None,
         })
     }
 }
 
-pub const FUNCTION_CATALOG: [FunctionDefinition; 5] = [
+pub const FUNCTION_CATALOG: [FunctionDefinition; 6] = [
     FunctionDefinition {
         id: FunctionId::MediaPlayPause,
         category: CategoryId::Media,
@@ -118,6 +124,13 @@ pub const FUNCTION_CATALOG: [FunctionDefinition; 5] = [
         tap_action: FunctionAction::App(AppCommand::ToggleListening),
         hold_action: None,
         name_key: "function.app.togglelistening",
+    },
+    FunctionDefinition {
+        id: FunctionId::AppTogglePassthrough,
+        category: CategoryId::App,
+        tap_action: FunctionAction::App(AppCommand::TogglePassthrough),
+        hold_action: None,
+        name_key: "function.app.togglepassthrough",
     },
 ];
 

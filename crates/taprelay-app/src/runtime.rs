@@ -65,6 +65,8 @@ pub struct Runtime {
     invalidating: bool,
     startup_restore: Option<taprelay_core::state::Target>,
     startup_retry_at: Option<Instant>,
+    passthrough_mouse_percent: u16,
+    passthrough_reverse_scroll: bool,
 }
 
 impl Runtime {
@@ -113,6 +115,8 @@ impl Runtime {
             invalidating: false,
             startup_restore,
             startup_retry_at: None,
+            passthrough_mouse_percent: config.options.passthrough_mouse_percent,
+            passthrough_reverse_scroll: config.options.passthrough_reverse_scroll,
         }
     }
 
@@ -263,10 +267,13 @@ impl Runtime {
     fn input_required(&self) -> bool {
         self.listening
             || self.recording()
-            || self
-                .functions
-                .get(&FunctionId::AppToggleListening)
-                .is_some_and(|config| config.enabled && !config.shortcuts.is_empty())
+            || self.functions.iter().any(|(id, config)| {
+                matches!(
+                    id,
+                    FunctionId::AppToggleListening | FunctionId::AppTogglePassthrough
+                ) && config.enabled
+                    && !config.shortcuts.is_empty()
+            })
     }
 
     fn sync_input(&mut self) -> Result<()> {
@@ -282,6 +289,20 @@ impl Runtime {
     }
 
     fn configure_input(&mut self) {
+        if let Some(input) = &self.input {
+            input.attach_passthrough(
+                self.transport
+                    .as_ref()
+                    .and_then(|transport| transport.input_link())
+                    .inspect(|link| {
+                        link.set_mouse_percent(self.passthrough_mouse_percent);
+                        link.set_reverse_scroll(self.passthrough_reverse_scroll);
+                    }),
+            );
+            if let Some(error) = input.passthrough_error() {
+                self.error = Some(error);
+            }
+        }
         let result = self
             .input
             .as_ref()
@@ -294,6 +315,17 @@ impl Runtime {
                 )
             });
         self.apply_router_outputs(result);
+    }
+
+    pub fn set_passthrough_reverse_scroll(&mut self, reverse: bool) {
+        self.passthrough_reverse_scroll = reverse;
+        if let Some(link) = self
+            .transport
+            .as_ref()
+            .and_then(|transport| transport.input_link())
+        {
+            link.set_reverse_scroll(reverse);
+        }
     }
 
     pub fn set_listening(&mut self, on: bool) -> Result<()> {
@@ -787,6 +819,11 @@ impl Runtime {
                     }
                 }
                 RoutedOutput::Local(_) => {}
+                RoutedOutput::Remote(_) | RoutedOutput::EndPassthrough => {}
+                RoutedOutput::Function {
+                    action: FunctionAction::App(AppCommand::TogglePassthrough),
+                    ..
+                } => {}
             }
         }
     }
@@ -1257,6 +1294,29 @@ mod tests {
         }
         assert!(runtime.receipts.is_empty());
         assert!(runtime.error.is_none());
+    }
+
+    #[test]
+    fn passthrough_binding_keeps_capture_available_with_listening_paused() {
+        let mut runtime = app_runtime();
+        let binding = runtime
+            .functions
+            .get_mut(&FunctionId::AppToggleListening)
+            .unwrap();
+        let passthrough = binding.clone();
+        binding.enabled = false;
+        runtime
+            .functions
+            .insert(FunctionId::AppTogglePassthrough, passthrough);
+        runtime.tick();
+        assert!(!runtime.listening);
+        assert!(runtime.state.input);
+        runtime.finish_recording();
+        assert!(runtime.input.is_some());
+        runtime
+            .set_function_enabled(FunctionId::AppTogglePassthrough, false)
+            .unwrap();
+        assert!(runtime.input.is_none());
     }
 
     #[test]

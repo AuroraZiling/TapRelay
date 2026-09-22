@@ -32,6 +32,7 @@ actions! {
     SetAutostart => "set-autostart",
     SetStartHidden => "set-start-hidden",
     SetAutoListen => "set-auto-listen",
+    SetPassthroughReverseScroll => "set-passthrough-reverse-scroll",
     SetCloseToTray => "set-close-to-tray",
     SetAlwaysAdmin => "set-always-admin",
     SetNotifications => "set-notifications",

@@ -727,6 +727,11 @@ impl Controller {
                 self.runtime.config.options.auto_listen = action::toggle(value)?;
                 self.saves.changed();
             }
+            Action::SetPassthroughReverseScroll => {
+                self.runtime
+                    .set_passthrough_reverse_scroll(action::toggle(value)?)?;
+                self.saves.changed();
+            }
             Action::SetCloseToTray => {
                 self.runtime.config.options.close_to_tray = action::toggle(value)?;
                 self.saves.changed();
@@ -944,6 +949,7 @@ impl Controller {
         });
         ui.set_auto_start(o.autostart);
         ui.set_auto_listen(o.auto_listen);
+        ui.set_passthrough_reverse_scroll(o.passthrough_reverse_scroll);
         ui.set_start_hidden(o.start_hidden);
         ui.set_close_to_tray(o.close_to_tray);
         ui.set_always_admin(o.always_admin);

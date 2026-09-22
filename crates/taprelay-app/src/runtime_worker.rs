@@ -202,6 +202,14 @@ impl RuntimeHandle {
     pub fn set_listening(&mut self, on: bool) -> Result<()> {
         self.update(move |r| r.set_listening(on))
     }
+    pub fn set_passthrough_reverse_scroll(&mut self, reverse: bool) -> Result<()> {
+        self.update(move |runtime| {
+            runtime.set_passthrough_reverse_scroll(reverse);
+            Ok(())
+        })?;
+        self.config.options.passthrough_reverse_scroll = reverse;
+        Ok(())
+    }
     pub fn pair(&mut self, id: String) -> Result<()> {
         self.update(move |r| r.pair(id))
     }

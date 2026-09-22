@@ -1,9 +1,11 @@
 //! Dedicated message-pump thread for WH_KEYBOARD_LL / WH_MOUSE_LL.
 //! Callbacks make a bounded, synchronous core-router decision. They never wait
 //! for Bluetooth or the UI; parsed edges and configuration results are copied
-//! to one bounded, ordered queue. Pointer motion only resolves local prefixes.
+//! to bounded, ordered queues. Active passthrough bypasses the application
+//! runtime and sends raw relative mouse input to the HID sender.
 use std::{
     cell::{Cell, RefCell},
+    collections::VecDeque,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -25,6 +27,52 @@ use windows::Win32::{
     UI::WindowsAndMessaging::*,
 };
 use windows::core::w;
+mod raw;
+use taprelay_core::{
+    function::{AppCommand, FunctionAction},
+    passthrough::{Event as PassthroughEvent, InputLink, KeyUsage},
+};
+thread_local! { static PASSTHROUGH: RefCell<Option<InputLink>> = const { RefCell::new(None) }; }
+thread_local! { static KEY_USAGES: RefCell<[Option<KeyUsage>; 256]> = const { RefCell::new([None; 256]) }; }
+thread_local! { static KEYBOARD_HOOK: RefCell<Option<Hook>> = const { RefCell::new(None) }; }
+thread_local! { static KEYBOARD_SEEN: RefCell<VecDeque<(KeyboardStamp, bool)>> = const { RefCell::new(VecDeque::new()) }; }
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct KeyboardStamp {
+    time: u32,
+    scan: u32,
+    key: u32,
+    extended: bool,
+    down: bool,
+}
+
+fn duplicate_keyboard(event: &KBDLLHOOKSTRUCT, message: u32, raw: bool) -> bool {
+    let stamp = KeyboardStamp {
+        time: event.time,
+        scan: event.scanCode,
+        key: match keyboard_code(event) {
+            Some(InputCode::Key(key)) => u32::from(key),
+            _ => event.vkCode,
+        },
+        extended: event.flags.contains(LLKHF_EXTENDED),
+        down: matches!(message, WM_KEYDOWN | WM_SYSKEYDOWN),
+    };
+    KEYBOARD_SEEN.with(|seen| {
+        let mut seen = seen.borrow_mut();
+        if let Some(index) = seen
+            .iter()
+            .position(|(other, source)| *other == stamp && *source != raw)
+        {
+            seen.remove(index);
+            return true;
+        }
+        if seen.len() == 1024 {
+            seen.pop_front();
+        }
+        seen.push_back((stamp, raw));
+        false
+    })
+}
 
 thread_local! { static DISPATCH: RefCell<Option<Sender<RoutedInput>>> = const { RefCell::new(None) }; }
 thread_local! { static POLICY: RefCell<Option<HookPolicy>> = const { RefCell::new(None) }; }
@@ -86,6 +134,7 @@ pub struct InputHandle {
     reason: Arc<Mutex<Option<String>>>,
     commands: std::sync::mpsc::SyncSender<PolicyRequest>,
     configuration: Mutex<Option<(bool, bool, u64)>>,
+    passthrough_link: Mutex<Option<InputLink>>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -209,6 +258,41 @@ fn append(target: &mut RouteResult, mut next: RouteResult) {
     target.outputs.append(&mut next.outputs);
 }
 impl InputHandle {
+    pub fn attach_passthrough(&self, link: Option<InputLink>) {
+        let mut previous = self
+            .passthrough_link
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if match (&*previous, &link) {
+            (None, None) => true,
+            (Some(a), Some(b)) => a.same(b),
+            _ => false,
+        } {
+            return;
+        }
+        *previous = link.clone();
+        self.request(
+            Box::new(move |policy| {
+                let result = policy.router.set_passthrough(false);
+                PASSTHROUGH.with(|current| {
+                    if let Some(old) = current.borrow_mut().take() {
+                        old.end();
+                    }
+                    *current.borrow_mut() = link;
+                });
+                result
+            }),
+            true,
+        );
+    }
+
+    pub fn passthrough_error(&self) -> Option<String> {
+        self.passthrough_link
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .and_then(InputLink::take_failure)
+    }
     pub fn failure(&self) -> Option<String> {
         self.reason
             .lock()
@@ -290,12 +374,8 @@ impl InputHandle {
                         let mut message = MSG::default();
                         let _ = PeekMessageW(&mut message, None, 0, 0, PM_NOREMOVE);
                         let module = GetModuleHandleW(None)?;
-                        let keyboard = Hook(SetWindowsHookExW(
-                            WH_KEYBOARD_LL,
-                            Some(keyboard_proc),
-                            Some(module.into()),
-                            0,
-                        )?);
+                        let _raw = raw::Capture::new()?;
+                        let keyboard = KeyboardHook::new()?;
                         let mouse = Hook(SetWindowsHookExW(
                             WH_MOUSE_LL,
                             Some(mouse_proc),
@@ -426,6 +506,7 @@ impl InputHandle {
                 reason,
                 commands,
                 configuration: Mutex::new(None),
+                passthrough_link: Mutex::new(None),
                 thread: Some(thread),
             }),
             Ok(Err(e)) => {
@@ -554,6 +635,31 @@ impl Drop for InputHandle {
     }
 }
 struct Hook(HHOOK);
+struct KeyboardHook;
+impl KeyboardHook {
+    fn new() -> windows::core::Result<Self> {
+        refresh_keyboard_hook()?;
+        Ok(Self)
+    }
+}
+impl Drop for KeyboardHook {
+    fn drop(&mut self) {
+        KEYBOARD_HOOK.with(|slot| slot.borrow_mut().take());
+    }
+}
+fn refresh_keyboard_hook() -> windows::core::Result<()> {
+    let next = unsafe {
+        Hook(SetWindowsHookExW(
+            WH_KEYBOARD_LL,
+            Some(keyboard_proc),
+            Some(GetModuleHandleW(None)?.into()),
+            0,
+        )?)
+    };
+    KEYBOARD_HOOK.with(|slot| slot.borrow_mut().replace(next));
+    Ok(())
+}
+
 impl Drop for Hook {
     fn drop(&mut self) {
         unsafe {
@@ -607,6 +713,136 @@ fn wake_consumer() {
             t.unpark();
         }
     });
+}
+
+fn passthrough_active() -> bool {
+    POLICY.with(|policy| {
+        policy
+            .borrow()
+            .as_ref()
+            .is_some_and(|p| p.router.passthrough())
+    })
+}
+
+fn end_passthrough() {
+    if passthrough_active() {
+        tracing::info!("Passthrough ended; input returned to this computer");
+    }
+    let mut result = POLICY.with(|policy| {
+        policy
+            .borrow_mut()
+            .as_mut()
+            .map(|p| p.router.set_passthrough(false))
+            .unwrap_or_default()
+    });
+    prepare_hook_result(&mut result);
+    if !result.outputs.is_empty() {
+        dispatch(RoutedInput::Control(result));
+    }
+}
+
+fn sync_passthrough() {
+    if passthrough_active()
+        && !PASSTHROUGH.with(|link| link.borrow().as_ref().is_some_and(|link| link.epoch() != 0))
+    {
+        end_passthrough();
+    }
+}
+
+fn toggle_passthrough() {
+    if passthrough_active() {
+        end_passthrough();
+        return;
+    }
+    let link = PASSTHROUGH.with(|link| link.borrow().clone());
+    let Some(link) = link else {
+        return;
+    };
+    if !link.ready() {
+        link.fail(
+            "Passthrough requires keyboard and mouse HID subscriptions from the selected receiver",
+        );
+        return;
+    }
+    // Windows can silently remove a timed-out low-level hook. Start every
+    // capture with a fresh registration rather than trusting its old handle.
+    if let Err(error) = refresh_keyboard_hook() {
+        link.fail(format!("Keyboard capture: {error}"));
+        return;
+    }
+    if let Err(error) = raw::enable() {
+        link.fail(format!("Raw input capture: {error}"));
+        return;
+    }
+    if !link.begin() {
+        raw::disable();
+        return;
+    }
+    KEYBOARD_SEEN.with(|seen| seen.borrow_mut().clear());
+    let mut result = POLICY.with(|policy| {
+        policy
+            .borrow_mut()
+            .as_mut()
+            .map(|p| p.router.set_passthrough(true))
+            .unwrap_or_default()
+    });
+    prepare_hook_result(&mut result);
+    if !result.outputs.is_empty() {
+        dispatch(RoutedInput::Control(result));
+    }
+    tracing::info!("Passthrough enabled");
+}
+
+fn send_remote(input: PhysicalInput, captured: Instant) {
+    let event = match input {
+        PhysicalInput::Edge {
+            code: InputCode::Key(key),
+            down,
+        } => {
+            let usage = KEY_USAGES.with(|usages| usages.borrow()[key as usize]);
+            let Some(usage) = usage else {
+                PASSTHROUGH.with(|link| {
+                    if let Some(link) = link.borrow().as_ref() {
+                        link.fail(format!(
+                            "Key {key:#x} has no HID mapping; passthrough stopped"
+                        ));
+                    }
+                });
+                return;
+            };
+            PassthroughEvent::Key { usage, down }
+        }
+        PhysicalInput::Edge {
+            code: InputCode::Mouse(button),
+            down,
+        } => PassthroughEvent::Button { button, down },
+        PhysicalInput::Motion { dx, dy } => PassthroughEvent::Motion { dx, dy },
+        PhysicalInput::Wheel {
+            vertical,
+            horizontal,
+        } => PassthroughEvent::Wheel {
+            vertical,
+            horizontal,
+        },
+    };
+    PASSTHROUGH.with(|link| {
+        if let Some(link) = link.borrow().as_ref() {
+            link.submit(event, captured);
+        }
+    });
+}
+
+fn raw_mouse_edge(button: MouseButton, down: bool, captured: Instant) {
+    let event = InputEvent {
+        code: InputCode::Mouse(button),
+        down,
+        captured,
+    };
+    let mut result = policy_edge(event);
+    arm_policy_timer();
+    if prepare_hook_result_at(&mut result, captured) && !result.outputs.is_empty() {
+        emit(event, result);
+    }
 }
 
 fn taprelay_foreground() -> bool {
@@ -676,10 +912,43 @@ fn policy_motion(motion: PhysicalInput) -> RouteResult {
 /// performed before the original unconsumed event is allowed to continue, so
 /// a pending modifier cannot arrive after the key or pointer event it prefixes.
 fn prepare_hook_result(result: &mut RouteResult) -> bool {
+    prepare_hook_result_at(result, Instant::now())
+}
+
+fn prepare_hook_result_at(result: &mut RouteResult, captured: Instant) -> bool {
     let outputs = std::mem::take(&mut result.outputs);
     let mut kept = Vec::with_capacity(outputs.len());
     for output in outputs {
         match output {
+            RoutedOutput::EndPassthrough => {
+                PASSTHROUGH.with(|link| {
+                    if let Some(link) = link.borrow().as_ref() {
+                        link.end();
+                    }
+                });
+                raw::disable();
+            }
+            RoutedOutput::Remote(input) => {
+                send_remote(input, captured);
+            }
+            RoutedOutput::Function {
+                action: FunctionAction::App(AppCommand::TogglePassthrough),
+                down: true,
+                ..
+            } => {
+                toggle_passthrough();
+            }
+            RoutedOutput::Function {
+                action: FunctionAction::Media(action),
+                down,
+                ..
+            } if passthrough_active() => {
+                PASSTHROUGH.with(|link| {
+                    if let Some(link) = link.borrow().as_ref() {
+                        link.submit(PassthroughEvent::Media { action, down }, Instant::now());
+                    }
+                });
+            }
             RoutedOutput::Replay(input) => {
                 if let Err(error) = InputHandle::send_replay(input) {
                     tracing::error!(?error, "Local input replay failed");
@@ -785,10 +1054,75 @@ pub fn keyboard_layout() -> usize {
     unsafe { GetKeyboardLayout(0).0 as usize }
 }
 
+fn raw_keyboard(keyboard: windows::Win32::UI::Input::RAWKEYBOARD, time: u32) {
+    if !passthrough_active()
+        || keyboard.ExtraInformation == REPLAY_TAG as u32
+        || keyboard.VKey == 255
+    {
+        return;
+    }
+    let event = KBDLLHOOKSTRUCT {
+        vkCode: u32::from(keyboard.VKey),
+        scanCode: u32::from(keyboard.MakeCode),
+        time,
+        flags: if keyboard.Flags & RI_KEY_E0 as u16 != 0 {
+            LLKHF_EXTENDED
+        } else {
+            KBDLLHOOKSTRUCT_FLAGS(0)
+        },
+        ..Default::default()
+    };
+    if !duplicate_keyboard(&event, keyboard.Message, true) {
+        route_keyboard(&event, keyboard.Message);
+    }
+}
+
+fn route_keyboard(event: &KBDLLHOOKSTRUCT, message: u32) -> bool {
+    let edge = match message {
+        WM_KEYDOWN | WM_SYSKEYDOWN => keyboard_code(event).map(|code| (code, true)),
+        WM_KEYUP | WM_SYSKEYUP => keyboard_code(event).map(|code| (code, false)),
+        _ => None,
+    };
+    if let Some((code, down)) = edge {
+        if let InputCode::Key(key) = code {
+            KEY_USAGES.with(|usages| {
+                usages.borrow_mut()[key as usize] = taprelay_core::hid::keyboard_usage(
+                    event.vkCode as u8,
+                    event.scanCode,
+                    event.flags.contains(LLKHF_EXTENDED),
+                )
+            });
+        }
+        let input = InputEvent {
+            code,
+            down,
+            captured: raw::captured_at(event.time),
+        };
+        let mut result = if taprelay_foreground() {
+            policy_local_edge(input)
+        } else {
+            policy_edge(input)
+        };
+        // A merged shortcut starts a hold window on its press edge
+        // and ends one on its release edge.
+        arm_policy_timer();
+
+        if prepare_hook_result_at(&mut result, input.captured) {
+            let consume = result.consume;
+            if !passthrough_active() || !result.outputs.is_empty() {
+                emit(input, result);
+            }
+            return consume;
+        }
+    }
+    false
+}
+
 unsafe extern "system" fn keyboard_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     if code == HC_ACTION as i32 {
         let mut consume = false;
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            sync_passthrough();
             // Windows owns this structure for the duration of the hook callback.
             let event = unsafe { &*(lp.0 as *const KBDLLHOOKSTRUCT) };
             #[cfg(test)]
@@ -799,31 +1133,11 @@ unsafe extern "system" fn keyboard_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LR
                 );
             }
             if !event.flags.contains(LLKHF_INJECTED) {
-                let edge = match wp.0 as u32 {
-                    WM_KEYDOWN | WM_SYSKEYDOWN => keyboard_code(event).map(|code| (code, true)),
-                    WM_KEYUP | WM_SYSKEYUP => keyboard_code(event).map(|code| (code, false)),
-                    _ => None,
+                consume = if passthrough_active() && duplicate_keyboard(event, wp.0 as u32, false) {
+                    true
+                } else {
+                    route_keyboard(event, wp.0 as u32)
                 };
-                if let Some((code, down)) = edge {
-                    let input = InputEvent {
-                        code,
-                        down,
-                        captured: Instant::now(),
-                    };
-                    let mut result = if taprelay_foreground() {
-                        policy_local_edge(input)
-                    } else {
-                        policy_edge(input)
-                    };
-                    // A merged shortcut starts a hold window on its press edge
-                    // and ends one on its release edge.
-                    arm_policy_timer();
-
-                    if prepare_hook_result(&mut result) {
-                        consume = result.consume;
-                        emit(input, result);
-                    }
-                }
             }
         }));
         if outcome.is_err() {
@@ -851,13 +1165,36 @@ fn mouse_edge(message: u32, data: u32) -> Option<(MouseButton, bool)> {
         _ => None,
     }
 }
+
+fn mouse_wheel(message: u32, data: u32) -> Option<PhysicalInput> {
+    let delta = (data >> 16) as u16 as i16 as i32;
+    match message {
+        WM_MOUSEWHEEL => Some(PhysicalInput::Wheel {
+            vertical: delta,
+            horizontal: 0,
+        }),
+        WM_MOUSEHWHEEL => Some(PhysicalInput::Wheel {
+            vertical: 0,
+            horizontal: delta,
+        }),
+        _ => None,
+    }
+}
 unsafe extern "system" fn mouse_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     if code == HC_ACTION as i32 {
         let mut consume = false;
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            sync_passthrough();
             let event = unsafe { &*(lp.0 as *const MSLLHOOKSTRUCT) };
 
             if event.flags & LLMHF_INJECTED == 0 {
+                if passthrough_active() {
+                    if let Some(wheel) = mouse_wheel(wp.0 as u32, event.mouseData) {
+                        send_remote(wheel, raw::captured_at(event.time));
+                    }
+                    consume = true;
+                    return;
+                }
                 let local_window = taprelay_window_at(event.pt);
                 if let Some((b, down)) = mouse_edge(wp.0 as u32, event.mouseData) {
                     let code = InputCode::Mouse(b);

@@ -38,6 +38,10 @@ pub struct Wizard {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Options {
+    #[serde(default = "default_mouse_percent")]
+    pub passthrough_mouse_percent: u16,
+    #[serde(default)]
+    pub passthrough_reverse_scroll: bool,
     pub always_admin: bool,
     pub auto_listen: bool,
     pub autostart: bool,
@@ -52,6 +56,8 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         Self {
+            passthrough_mouse_percent: default_mouse_percent(),
+            passthrough_reverse_scroll: false,
             always_admin: true,
             auto_listen: true,
             autostart: false,
@@ -64,6 +70,9 @@ impl Default for Options {
             language: Language::System,
         }
     }
+}
+fn default_mouse_percent() -> u16 {
+    50
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -166,6 +175,10 @@ impl Device {
 impl Config {
     pub fn validate(&self) -> Result<()> {
         ensure!(
+            (1..=100).contains(&self.options.passthrough_mouse_percent),
+            "Passthrough mouse percentage must be between 1 and 100"
+        );
+        ensure!(
             self.schema == 3,
             "Unsupported configuration format (expected schema 3)"
         );
@@ -187,6 +200,9 @@ impl Config {
                     .context("Invalid configuration; move config.json aside to start fresh")?;
                 c.functions
                     .entry(taprelay_core::function::FunctionId::AppToggleListening)
+                    .or_default();
+                c.functions
+                    .entry(taprelay_core::function::FunctionId::AppTogglePassthrough)
                     .or_default();
                 c.validate()?;
                 Ok(c)

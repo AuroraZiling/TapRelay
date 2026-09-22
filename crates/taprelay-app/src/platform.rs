@@ -7,6 +7,10 @@ use taprelay_core::{
 };
 use tokio::sync::{mpsc, oneshot};
 pub trait InputSource {
+    fn attach_passthrough(&self, _link: Option<taprelay_core::passthrough::InputLink>) {}
+    fn passthrough_error(&self) -> Option<String> {
+        None
+    }
     fn is_finished(&self) -> bool;
     fn configure(
         &self,
@@ -31,6 +35,9 @@ pub trait InputSource {
     }
 }
 pub trait Transport {
+    fn input_link(&self) -> Option<taprelay_core::passthrough::InputLink> {
+        None
+    }
     fn snapshot(&mut self) -> Option<Snapshot>;
     fn is_finished(&self) -> bool {
         false
@@ -52,6 +59,12 @@ pub trait Transport {
 }
 #[cfg(windows)]
 impl InputSource for taprelay_windows::input::InputHandle {
+    fn attach_passthrough(&self, link: Option<taprelay_core::passthrough::InputLink>) {
+        self.attach_passthrough(link);
+    }
+    fn passthrough_error(&self) -> Option<String> {
+        self.passthrough_error()
+    }
     fn is_finished(&self) -> bool {
         self.is_finished()
     }
@@ -76,6 +89,9 @@ impl InputSource for taprelay_windows::input::InputHandle {
 }
 #[cfg(windows)]
 impl Transport for taprelay_windows::bluetooth::BleHandle {
+    fn input_link(&self) -> Option<taprelay_core::passthrough::InputLink> {
+        Some(self.input_link())
+    }
     fn pair(&self, id: String) -> Result<()> {
         self.request(taprelay_windows::bluetooth::Request::Pair(id))?;
         Ok(())

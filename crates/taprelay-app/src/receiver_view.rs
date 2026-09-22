@@ -83,7 +83,9 @@ pub fn row(target: &Target, state: &Snapshot, tr: impl Fn(&'static str) -> Strin
         .is_some_and(|id| target.matches_id(id));
     let (action, label) = if selected {
         ("disconnect-device", keys::RECEIVER_DISCONNECT)
-    } else if target.subscribed == Knowledge::Yes {
+    } else if target.subscribed == Knowledge::Yes
+        || (state.service_paused && target.pairing == Knowledge::Yes)
+    {
         ("device", keys::RECEIVER_CONNECT)
     } else if target.pairing == Knowledge::No {
         ("pair-device", keys::RECEIVER_PAIR)

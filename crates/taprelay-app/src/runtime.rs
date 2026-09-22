@@ -15,6 +15,7 @@ use taprelay_core::{
     function::{AppCommand, FunctionAction, FunctionConfigs, FunctionId, Shortcut},
     input::{InputCode, InputEvent, InputState, Recorder},
     input_router::{RouteResult, RoutedInput, RoutedOutput, RouterReason},
+    ports::BackendError,
     state::Snapshot,
 };
 use tokio::sync::{mpsc, oneshot};
@@ -30,7 +31,7 @@ struct Receipt {
     created: Instant,
     test: Option<u64>,
     action: MediaCommand,
-    result: oneshot::Receiver<Result<(), String>>,
+    result: oneshot::Receiver<Result<(), BackendError>>,
 }
 
 pub struct Runtime {
@@ -636,7 +637,7 @@ impl Runtime {
         self.retry_startup_with(Instant::now(), platform::transport);
 
         let transport_ready = self.state.ready;
-        if self.last_transport_ready && !transport_ready {
+        if self.last_transport_ready && !transport_ready && !self.state.profile_switching {
             self.invalidate(RouterReason::TransportLost);
         }
         self.last_transport_ready = transport_ready;
@@ -720,9 +721,9 @@ impl Runtime {
         while index < self.receipts.len() {
             let result = match self.receipts[index].result.try_recv() {
                 Ok(result) => Some(result),
-                Err(oneshot::error::TryRecvError::Closed) => {
-                    Some(Err("Transport stopped before delivery".into()))
-                }
+                Err(oneshot::error::TryRecvError::Closed) => Some(Err(BackendError::Unavailable(
+                    "Transport stopped before delivery".into(),
+                ))),
                 Err(oneshot::error::TryRecvError::Empty) => None,
             };
             if let Some(result) = result {
@@ -732,7 +733,7 @@ impl Runtime {
                 {
                     self.test = match &result {
                         Ok(()) => TestStatus::Succeeded,
-                        Err(error) => TestStatus::Failed(error.clone()),
+                        Err(error) => TestStatus::Failed(error.to_string()),
                     };
                 }
                 if receipt.created < self.epoch {
@@ -746,7 +747,8 @@ impl Runtime {
                             "Windows accepted HID notification; receiver execution is not acknowledged"
                         );
                     }
-                    Err(error) => self.error = Some(error),
+                    Err(BackendError::Stale) => {}
+                    Err(error) => self.error = Some(error.to_string()),
                 }
             } else {
                 index += 1;
@@ -867,7 +869,7 @@ mod tests {
             Ok(1)
         }
         fn invalidate(&self) {}
-        fn send(&self, _: QueuedCommand) -> Result<oneshot::Receiver<Result<(), String>>> {
+        fn send(&self, _: QueuedCommand) -> Result<oneshot::Receiver<Result<(), BackendError>>> {
             let (tx, rx) = oneshot::channel();
             tx.send(Ok(())).unwrap();
             Ok(rx)
@@ -889,7 +891,7 @@ mod tests {
             Ok(1)
         }
         fn invalidate(&self) {}
-        fn send(&self, _: QueuedCommand) -> Result<oneshot::Receiver<Result<(), String>>> {
+        fn send(&self, _: QueuedCommand) -> Result<oneshot::Receiver<Result<(), BackendError>>> {
             unreachable!()
         }
     }
@@ -912,7 +914,7 @@ mod tests {
             unreachable!()
         }
         fn invalidate(&self) {}
-        fn send(&self, _: QueuedCommand) -> Result<oneshot::Receiver<Result<(), String>>> {
+        fn send(&self, _: QueuedCommand) -> Result<oneshot::Receiver<Result<(), BackendError>>> {
             unreachable!()
         }
     }

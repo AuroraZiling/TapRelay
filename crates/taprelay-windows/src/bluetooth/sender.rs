@@ -26,6 +26,7 @@ pub(super) struct Endpoint {
 }
 
 enum Command {
+    Detach(mpsc::SyncSender<()>),
     Configure {
         generation: u64,
         endpoints: [Option<Endpoint>; 3],
@@ -53,6 +54,7 @@ pub(super) struct Sender {
     commands: mpsc::SyncSender<Command>,
     pub link: InputLink,
     stopping: Arc<AtomicBool>,
+    detaching: Arc<AtomicBool>,
     worker: Option<thread::JoinHandle<()>>,
 }
 
@@ -62,6 +64,8 @@ impl Sender {
         let (commands, control) = mpsc::sync_channel(16);
         let stopping = Arc::new(AtomicBool::new(false));
         let worker_stop = stopping.clone();
+        let detaching = Arc::new(AtomicBool::new(false));
+        let worker_detaching = detaching.clone();
         let worker_link = link.clone();
         let worker = thread::Builder::new()
             .name("taprelay-hid".into())
@@ -72,6 +76,7 @@ impl Sender {
                         link: worker_link.clone(),
                         revision,
                         stopping: worker_stop,
+                        detaching: worker_detaching,
                         endpoints: std::array::from_fn(|_| None),
                         generation: 0,
                         authorized: false,
@@ -98,6 +103,7 @@ impl Sender {
             commands,
             link,
             stopping,
+            detaching,
             worker: Some(worker),
         })
     }
@@ -108,6 +114,16 @@ impl Sender {
             .map_err(|_| BackendError::Unavailable("HID control queue unavailable".into()))?;
         self.link.wake();
         Ok(())
+    }
+
+    pub fn detach(&self) -> Result<(), BackendError> {
+        self.detaching.store(true, Ordering::Release);
+        self.link.end();
+        let (reply, result) = mpsc::sync_channel(1);
+        self.submit(Command::Detach(reply))?;
+        result.recv_timeout(Duration::from_secs(1)).map_err(|_| {
+            BackendError::Unavailable("HID sender did not release its endpoints".into())
+        })
     }
 
     pub fn configure(
@@ -189,6 +205,7 @@ struct Worker {
     link: InputLink,
     revision: Arc<AtomicU64>,
     stopping: Arc<AtomicBool>,
+    detaching: Arc<AtomicBool>,
     endpoints: [Option<Endpoint>; 3],
     generation: u64,
     authorized: bool,
@@ -225,6 +242,11 @@ impl Worker {
     }
 
     fn reconcile(&mut self) {
+        if self.detaching.load(Ordering::Acquire) {
+            self.authorized = false;
+            self.link.end();
+            return;
+        }
         let active = self.link.epoch();
         if self.epoch != active || self.generation != self.link.generation() {
             let changed = self.generation != self.link.generation();
@@ -318,13 +340,25 @@ impl Worker {
 
     fn command(&mut self, command: Command) {
         match command {
+            Command::Detach(reply) => {
+                self.link.end();
+                self.authorized = false;
+                self.epoch = 0;
+                self.endpoints = std::array::from_fn(|_| None);
+                self.reports = InputReports::default();
+                self.consumer.clear();
+                self.pulses.clear();
+                self.schedule.clear_input();
+                self.detaching.store(false, Ordering::Release);
+                let _ = reply.send(());
+            }
             Command::Configure {
                 generation,
                 endpoints,
                 ready,
                 interval,
             } => {
-                if generation != self.link.generation() {
+                if self.detaching.load(Ordering::Acquire) || generation != self.link.generation() {
                     return;
                 }
                 if generation != self.generation {
@@ -517,10 +551,14 @@ impl Worker {
         bytes: &[u8],
         endpoint: &Endpoint,
     ) -> Result<(), BackendError> {
+        if self.detaching.load(Ordering::Acquire) {
+            return Err(BackendError::Stale);
+        }
         let generation = self.link.generation();
         let epoch = self.link.epoch();
         while !self.schedule.wait(Instant::now()).is_zero() {
             if self.stopping.load(Ordering::Acquire)
+                || self.detaching.load(Ordering::Acquire)
                 || generation != self.link.generation()
                 || epoch != self.link.epoch()
             {
@@ -582,7 +620,7 @@ impl Worker {
                     "HID notification stalled; input returned to this computer".into(),
                 ));
             }
-            if self.stopping.load(Ordering::Acquire) {
+            if self.stopping.load(Ordering::Acquire) || self.detaching.load(Ordering::Acquire) {
                 let _ = pending.Cancel();
                 return Err(BackendError::Stale);
             }

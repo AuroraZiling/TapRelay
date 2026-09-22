@@ -13,6 +13,10 @@ mod native;
 #[cfg(windows)]
 pub use native::{Apartment, InstanceLock};
 #[cfg(windows)]
+pub fn monotonic_millis() -> u64 {
+    unsafe { windows::Win32::System::SystemInformation::GetTickCount64() }
+}
+#[cfg(windows)]
 pub(crate) fn native_error(
     api: &'static str,
     error: windows::core::Error,

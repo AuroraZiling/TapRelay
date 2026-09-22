@@ -3,6 +3,7 @@ use taprelay_core::{
     command::QueuedCommand,
     function::FunctionConfigs,
     input_router::{PhysicalInput, RouteResult, RoutedInput, RouterReason},
+    ports::BackendError,
     state::Snapshot,
 };
 use tokio::sync::{mpsc, oneshot};
@@ -55,7 +56,7 @@ pub trait Transport {
         anyhow::bail!("Bluetooth settings unavailable")
     }
     fn invalidate(&self);
-    fn send(&self, command: QueuedCommand) -> Result<oneshot::Receiver<Result<(), String>>>;
+    fn send(&self, command: QueuedCommand) -> Result<oneshot::Receiver<Result<(), BackendError>>>;
 }
 #[cfg(windows)]
 impl InputSource for taprelay_windows::input::InputHandle {
@@ -87,53 +88,11 @@ impl InputSource for taprelay_windows::input::InputHandle {
         self.terminate(reason)
     }
 }
-#[cfg(windows)]
-impl Transport for taprelay_windows::bluetooth::BleHandle {
-    fn input_link(&self) -> Option<taprelay_core::passthrough::InputLink> {
-        Some(self.input_link())
-    }
-    fn pair(&self, id: String) -> Result<()> {
-        self.request(taprelay_windows::bluetooth::Request::Pair(id))?;
-        Ok(())
-    }
-    fn disconnect(&self) -> Result<u64> {
-        self.request(taprelay_windows::bluetooth::Request::Select(None))?;
-        Ok(self.invalidate_commands())
-    }
-    fn bluetooth_settings(&self) -> Result<()> {
-        Ok(taprelay_windows::desktop::open("ms-settings:bluetooth")?)
-    }
-    fn snapshot(&mut self) -> Option<Snapshot> {
-        poll_snapshot(&mut self.state)
-    }
-    fn is_finished(&self) -> bool {
-        self.is_finished()
-    }
-    fn restart(&self) -> Result<u64> {
-        let generation = self.invalidate_commands();
-        self.request(taprelay_windows::bluetooth::Request::Restart)?;
-        Ok(generation)
-    }
-    fn refresh(&self) -> Result<()> {
-        self.request(taprelay_windows::bluetooth::Request::Refresh)?;
-        Ok(())
-    }
-    fn select(&self, id: String) -> Result<u64> {
-        self.request(taprelay_windows::bluetooth::Request::Select(Some(id)))?;
-        Ok(self.invalidate_commands())
-    }
-    fn invalidate(&self) {
-        self.invalidate_commands();
-    }
-    fn send(&self, c: QueuedCommand) -> Result<oneshot::Receiver<Result<(), String>>> {
-        let (tx, rx) = oneshot::channel();
-        self.request(taprelay_windows::bluetooth::Request::Send(c, tx))?;
-        Ok(rx)
-    }
-}
 /// A closed watch can still contain an unread terminal error. Always read it,
 /// and never let a dead worker leave an old ready state visible.
-fn poll_snapshot(state: &mut tokio::sync::watch::Receiver<Snapshot>) -> Option<Snapshot> {
+pub(crate) fn poll_snapshot(
+    state: &mut tokio::sync::watch::Receiver<Snapshot>,
+) -> Option<Snapshot> {
     match state.has_changed() {
         Ok(false) => None,
         Ok(true) => Some(state.borrow_and_update().clone()),
@@ -185,7 +144,7 @@ pub fn keyboard_layout() -> usize {
 pub fn transport(remembered: Option<taprelay_core::state::Target>) -> Result<Box<dyn Transport>> {
     #[cfg(windows)]
     {
-        Ok(Box::new(taprelay_windows::bluetooth::BleHandle::start(
+        Ok(Box::new(crate::bluetooth_worker::Handle::start(
             remembered,
         )?))
     }

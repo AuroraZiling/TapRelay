@@ -14,13 +14,13 @@ use std::{
 pub const QUEUE_CAPACITY: usize = 1024;
 pub const MAX_INPUT_AGE: Duration = Duration::from_millis(250);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum KeyUsage {
     Keyboard(u8),
     Consumer(u16),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Event {
     Key {
         usage: KeyUsage,
@@ -71,6 +71,10 @@ struct Shared {
     media_boundary: AtomicU64,
     worker: OnceLock<thread::Thread>,
     failure: Mutex<Option<String>>,
+    profile_available: AtomicBool,
+    // Distinct request tokens reject replies from a cancelled capture even
+    // when the user has already requested another capture.
+    requested: AtomicU64,
 }
 
 #[derive(Clone)]
@@ -99,6 +103,8 @@ impl InputLink {
                     media_boundary: AtomicU64::new(0),
                     worker: OnceLock::new(),
                     failure: Mutex::new(None),
+                    profile_available: AtomicBool::new(false),
+                    requested: AtomicU64::new(0),
                 }),
             },
             receiver,
@@ -180,6 +186,50 @@ impl InputLink {
     }
 
     pub fn end(&self) {
+        self.update_profile_request(false);
+        self.suspend();
+    }
+
+    pub fn set_profile_available(&self, available: bool) {
+        self.shared
+            .profile_available
+            .store(available, Ordering::Release);
+    }
+
+    pub fn request_profile(&self) -> bool {
+        if !self.shared.profile_available.load(Ordering::Acquire) {
+            return false;
+        }
+        self.update_profile_request(true);
+        self.wake();
+        true
+    }
+
+    pub fn profile_requested(&self) -> bool {
+        self.profile_request() != 0
+    }
+
+    fn update_profile_request(&self, requested: bool) {
+        let mut token = self.shared.requested.load(Ordering::Acquire);
+        while !token.is_multiple_of(2) != requested {
+            match self.shared.requested.compare_exchange(
+                token,
+                token.wrapping_add(1),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(current) => token = current,
+            }
+        }
+    }
+
+    pub fn profile_request(&self) -> u64 {
+        let token = self.shared.requested.load(Ordering::Acquire);
+        if token.is_multiple_of(2) { 0 } else { token }
+    }
+
+    pub fn suspend(&self) {
         let mode = self.shared.mode.load(Ordering::Acquire);
         if mode != 0 && mode.is_multiple_of(2) {
             self.retire_media();

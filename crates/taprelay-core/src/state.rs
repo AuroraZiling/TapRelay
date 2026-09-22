@@ -1,5 +1,5 @@
-use serde::Serialize;
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+use serde::{Deserialize, Serialize};
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TransportActivity {
     #[default]
     Idle,
@@ -9,14 +9,14 @@ pub enum TransportActivity {
     Synchronizing,
     Sending,
 }
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Knowledge {
     Yes,
     No,
     #[default]
     Unknown,
 }
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Target {
     pub id: String,
     pub name: String,
@@ -30,7 +30,7 @@ pub struct Target {
     pub availability: crate::devices::Availability,
     pub connection: crate::devices::Connection,
 }
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DeviceKind {
     #[default]
     Unknown,
@@ -162,7 +162,7 @@ mod tests {
         assert_eq!(rows[0].pairing, Knowledge::Yes);
     }
 }
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Snapshot {
     pub adapter_state: crate::devices::AdapterState,
     pub discovery: crate::devices::DiscoveryState,
@@ -172,6 +172,9 @@ pub struct Snapshot {
     pub adapter: bool,
     pub peripheral: bool,
     pub service: bool,
+    pub service_paused: bool,
+    pub profile_switching: bool,
+    pub hid_profile: crate::hid::Profile,
     pub broadcasting: bool,
     pub targets: Vec<Target>,
     pub selected: Option<String>,

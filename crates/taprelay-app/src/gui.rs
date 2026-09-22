@@ -865,7 +865,11 @@ impl Controller {
         {
             let e = e.clone();
             self.last_error = e.clone();
-            if self.passed && (!self.runtime.state.adapter || !self.runtime.state.service) {
+            if self.passed
+                && !self.runtime.state.profile_switching
+                && (!self.runtime.state.adapter
+                    || (!self.runtime.state.service && !self.runtime.state.service_paused))
+            {
                 self.error(&e);
             }
         }
@@ -984,8 +988,12 @@ impl Controller {
             .clone()
             .or_else(|| s.last_error.clone())
             .or_else(|| {
-                (self.passed && !self.recovering && flags.iter().any(|v| !*v))
-                    .then(|| self.tr(keys::RECEIVER_UNAVAILABLE).to_owned())
+                (self.passed
+                    && !self.recovering
+                    && !s.profile_switching
+                    && (flags[..2].iter().any(|v| !*v)
+                        || (!s.service_paused && flags[2..].iter().any(|v| !*v))))
+                .then(|| self.tr(keys::RECEIVER_UNAVAILABLE).to_owned())
             })
             .or_else(|| timeout.then(|| self.tr(keys::STARTUP_TIMEOUT)));
         if self.fatal.is_some() {
@@ -1004,10 +1012,16 @@ impl Controller {
             ))));
         }
         let target = s.selected_target();
-        let (key, stage) = if self.recovering && failure.is_none() {
+        let (key, stage) = if s.profile_switching && failure.is_none() {
+            ("switching", self.tr(keys::RECEIVER_SWITCHING))
+        } else if self.recovering && failure.is_none() {
             ("prepare", self.tr(keys::RECEIVER_PREPARING))
         } else if self.fatal.is_some()
-            || (self.passed && (!s.adapter || !s.service || !s.broadcasting))
+            || (self.passed
+                && (!s.adapter
+                    || (!s.service_paused
+                        && !s.profile_switching
+                        && (!s.service || !s.broadcasting))))
         {
             ("fault", self.tr(keys::RECEIVER_FAULT))
         } else if s.activity == TransportActivity::ResolvingDevice {
@@ -1025,7 +1039,7 @@ impl Controller {
             self.stage_since = Instant::now();
         }
         ui.set_stage(stage.into());
-        ui.set_ready(s.ready);
+        ui.set_ready(s.ready && !s.profile_switching);
         ui.set_listening(self.runtime.listening);
         ui.set_state_color(if (!self.passed && failure.is_some()) || key == "fault" {
             3
@@ -1050,7 +1064,20 @@ impl Controller {
                 .unwrap_or(&receiver_none)
                 .into(),
         );
-        ui.set_diagnostics(format!("Adapter={} · Peripheral={} · Service={} · Advertising={}\nLink={:?} · Subscription={:?} · Input={}\n{}: {}",s.adapter,s.peripheral,s.service,s.broadcasting,target.map(|t|t.link),target.map(|t|t.subscribed),s.input,self.tr(keys::DIAGNOSTICS_INPUTS),self.runtime.matched).into());
+        let diagnostics = format!(
+            "Adapter={} · Peripheral={} · Service={} · Advertising={}\nLink={:?} · Subscription={:?} · Input={} · HID={:?}\n{}: {}",
+            s.adapter,
+            s.peripheral,
+            s.service,
+            s.broadcasting,
+            target.map(|t| t.link),
+            target.map(|t| t.subscribed),
+            s.input,
+            s.hid_profile,
+            self.tr(keys::DIAGNOSTICS_INPUTS),
+            self.runtime.matched
+        );
+        ui.set_diagnostics(diagnostics.into());
         let keyboard_layout = crate::platform::keyboard_layout();
         if self.previous_bindings != Some((self.runtime.bindings_revision, locale, keyboard_layout))
         {

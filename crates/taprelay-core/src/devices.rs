@@ -1,10 +1,10 @@
 use crate::state::{Knowledge, Snapshot, Target, upsert_target};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
 macro_rules! states {
     ($name:ident { $first:ident $(, $rest:ident)* }) => {
-        #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+        #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
         pub enum $name { #[default] $first, $($rest),* }
     };
 }
@@ -204,6 +204,7 @@ impl Coordinator {
 
 pub fn receiver_next_allowed(state: &Snapshot) -> bool {
     state.ready
+        && !state.profile_switching
         && state
             .selected_target()
             .is_some_and(|t| t.connection == Connection::Connected)

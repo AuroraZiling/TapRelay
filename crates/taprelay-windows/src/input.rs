@@ -317,12 +317,40 @@ impl InputHandle {
         *previous = Some(next);
         let configs = configs.clone();
         self.request(
-            Box::new(move |policy| policy.configure(&configs, listening, recording, revision)),
+            Box::new(move |policy| {
+                PASSTHROUGH.with(|link| {
+                    if let Some(link) = link.borrow().as_ref()
+                        && link.profile_requested()
+                        && link.epoch() == 0
+                    {
+                        link.end();
+                    }
+                });
+                policy.configure(&configs, listening, recording, revision)
+            }),
             true,
         )
     }
     pub fn terminate(&self, reason: taprelay_core::input_router::RouterReason) -> RouteResult {
-        self.request(Box::new(move |policy| policy.terminate(reason)), false)
+        if let Some(link) = self
+            .passthrough_link
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            link.end();
+        }
+        self.request(
+            Box::new(move |policy| {
+                PASSTHROUGH.with(|link| {
+                    if let Some(link) = link.borrow().as_ref() {
+                        link.end();
+                    }
+                });
+                policy.terminate(reason)
+            }),
+            false,
+        )
     }
     fn request(&self, command: PolicyCommand, ordered: bool) -> RouteResult {
         if self.is_finished() {
@@ -725,6 +753,11 @@ fn passthrough_active() -> bool {
 }
 
 fn end_passthrough() {
+    PASSTHROUGH.with(|link| {
+        if let Some(link) = link.borrow().as_ref() {
+            link.end();
+        }
+    });
     if passthrough_active() {
         tracing::info!("Passthrough ended; input returned to this computer");
     }
@@ -747,6 +780,15 @@ fn sync_passthrough() {
     {
         end_passthrough();
     }
+    if !passthrough_active()
+        && PASSTHROUGH.with(|link| {
+            link.borrow()
+                .as_ref()
+                .is_some_and(|link| link.profile_requested() && link.ready())
+        })
+    {
+        start_passthrough();
+    }
 }
 
 fn toggle_passthrough() {
@@ -756,6 +798,20 @@ fn toggle_passthrough() {
     }
     let link = PASSTHROUGH.with(|link| link.borrow().clone());
     let Some(link) = link else {
+        return;
+    };
+    if link.profile_requested() {
+        link.end();
+        return;
+    }
+    if link.request_profile() {
+        return;
+    }
+    start_passthrough();
+}
+
+fn start_passthrough() {
+    let Some(link) = PASSTHROUGH.with(|link| link.borrow().clone()) else {
         return;
     };
     if !link.ready() {

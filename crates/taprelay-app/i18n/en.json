@@ -1,4 +1,5 @@
 {
+  "receiver.switching": "Switching input mode; reconnecting to the receiver…",
   "bluetooth.enabled": "Enabled",
   "bluetooth.disabled": "Disabled",
   "bindings.column.shortcut": "Shortcut",

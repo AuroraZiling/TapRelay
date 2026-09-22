@@ -1,5 +1,6 @@
 mod discovery;
 mod maintenance;
+mod publication;
 mod restore;
 mod sender;
 use std::{
@@ -160,13 +161,12 @@ fn extended_identity(info: &DeviceInformation) -> windows::core::Result<Vec<Stri
 }
 
 pub enum Request {
-    Select(Option<String>),
+    Select(String),
     Send(
         QueuedCommand,
-        tokio::sync::oneshot::Sender<Result<(), String>>,
+        tokio::sync::oneshot::Sender<Result<(), BackendError>>,
     ),
     Refresh,
-    Restart,
     Pair(String),
 }
 pub struct BleHandle {
@@ -199,10 +199,16 @@ impl BleHandle {
         // share one monotonic generation; queued input may not cross it.
         self.revision.fetch_add(1, Ordering::AcqRel) + 1
     }
-    pub fn start(remembered: Option<Target>) -> Result<Self, BackendError> {
+    pub fn start(
+        remembered: Option<Target>,
+        profile: hid::Profile,
+        publish: bool,
+    ) -> Result<Self, BackendError> {
         let (commands, rx) = mpsc::sync_channel(8);
         let (tx, state) = watch::channel(Snapshot {
             service: false,
+            service_paused: !publish,
+            hid_profile: profile,
             ..Default::default()
         });
         let stop = Arc::new(AtomicBool::new(false));
@@ -223,9 +229,9 @@ impl BleHandle {
                         let _apartment = super::Apartment::new()?;
                         let mut discovery = discovery::Discovery::new();
                         let manager = Rc::new(RefCell::new(Coordinator::default()));
-                        let mut service_retry_at = Instant::now();
+                        let mut publication =
+                            publication::Publication::new(publish, Instant::now());
                         let mut server = None;
-                        let mut restart = true;
                         let mut refresh_at = Instant::now();
                         while !stopping.load(Ordering::Acquire) {
                             let previous_adapter = discovery.adapter;
@@ -239,18 +245,20 @@ impl BleHandle {
                                     || previous_adapter_id != discovery.adapter_id)
                             {
                                 worker_revision.fetch_add(1, Ordering::AcqRel);
-                                restart = true;
+                                publication.adapter_changed();
                             }
-                            if server.is_none() && Instant::now() >= service_retry_at {
-                                restart = true;
-                            }
-                            if restart && discovery.adapter == AdapterState::Available {
+                            if publication.due(
+                                server.is_some(),
+                                discovery.adapter == AdapterState::Available,
+                                Instant::now(),
+                            ) {
                                 // Drop the old server on its own worker before publishing another.
                                 server.take();
                                 manager.borrow_mut().disconnect();
                                 tx.send_replace(Snapshot {
                                     generation: worker_revision.load(Ordering::Acquire),
                                     activity: TransportActivity::CheckingEnvironment,
+                                    selected: publication.selection.clone(),
                                     ..Default::default()
                                 });
                                 match Server::create(
@@ -259,15 +267,28 @@ impl BleHandle {
                                     worker_revision.clone(),
                                     manager.clone(),
                                     startup_restore.clone(),
+                                    publication.selection.clone(),
+                                    profile,
                                 ) {
-                                    Ok(s) => server = Some(s),
+                                    Ok(mut s) => {
+                                        if let Some(id) = publication.selection.take() {
+                                            manager.borrow_mut().connect(
+                                                &s.state,
+                                                id.clone(),
+                                                Instant::now(),
+                                            );
+                                            if let Err(e) = s.select(Some(id)) {
+                                                s.fail(&e);
+                                            }
+                                        }
+                                        server = Some(s);
+                                    }
                                     Err(e) => {
                                         tracing::error!("{e}");
                                         tx.send_modify(|s| s.last_error = Some(e.to_string()));
                                     }
                                 }
-                                restart = false;
-                                service_retry_at = Instant::now() + Duration::from_secs(5);
+                                publication.attempted(Instant::now());
                                 refresh_at = Instant::now();
                             }
                             if Instant::now() >= refresh_at {
@@ -305,7 +326,7 @@ impl BleHandle {
                                         state.adapter =
                                             discovery.adapter == AdapterState::Available;
                                         state.discovery = discovery.state;
-                                        state.selected = None;
+                                        state.selected = publication.selection.clone();
                                         manager.borrow_mut().reconcile(state, Instant::now());
                                     });
                                 }
@@ -324,9 +345,6 @@ impl BleHandle {
                                 }
                             };
                             match request {
-                                Ok(Request::Restart) => {
-                                    restart = true;
-                                }
                                 Ok(Request::Refresh) => {
                                     discovery.restart();
                                     refresh_at = Instant::now();
@@ -359,40 +377,24 @@ impl BleHandle {
                                     }
                                 }
                                 Ok(Request::Select(id)) => {
-                                    startup_restore.borrow_mut().cancel(if id.is_some() {
-                                        "select"
-                                    } else {
-                                        "disconnect"
-                                    });
-                                    if let Some(id) = &id {
-                                        let accepted = if let Some(server) = &server {
-                                            manager.borrow_mut().connect(
-                                                &server.state,
-                                                id.clone(),
-                                                Instant::now(),
-                                            )
-                                        } else {
-                                            let state = tx.borrow();
-                                            manager.borrow_mut().connect(
-                                                &state,
-                                                id.clone(),
-                                                Instant::now(),
-                                            )
-                                        };
-                                        if !accepted {
-                                            continue;
-                                        }
-                                    } else {
-                                        manager.borrow_mut().disconnect();
+                                    startup_restore.borrow_mut().cancel("select");
+                                    if server.is_none() {
+                                        publication.select(id);
+                                        continue;
                                     }
                                     if let Some(s) = &mut server {
+                                        if !manager.borrow_mut().connect(
+                                            &s.state,
+                                            id.clone(),
+                                            Instant::now(),
+                                        ) {
+                                            continue;
+                                        }
                                         s.state.device_error = None;
                                         s.state.pairing_handoff = PairingHandoff::Idle;
-                                        if let Err(e) = s.select(id) {
+                                        if let Err(e) = s.select(Some(id)) {
                                             s.fail(&e);
                                         }
-                                    } else {
-                                        manager.borrow_mut().disconnect();
                                     }
                                 }
                                 Ok(Request::Send(c, reply)) => {
@@ -403,36 +405,20 @@ impl BleHandle {
                                             "Bluetooth service is not running".into(),
                                         ))
                                     };
-                                    let _ = reply.send(
-                                        result.as_ref().map(|_| ()).map_err(ToString::to_string),
-                                    );
-                                    if let Err(e) = result
+                                    if let Err(e) = &result
                                         && !matches!(e, BackendError::Stale)
                                         && let Some(s) = &mut server
                                     {
-                                        s.fail(&e);
+                                        s.fail(e);
                                     }
+                                    let _ = reply.send(result);
                                 }
 
                                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
                                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                             }
                         }
-                        // The input hook is already released. Clear every HID
-                        // collection before dropping the service; never enqueue
-                        // a shutdown release behind stale pointer movement.
-                        if let Some(s) = &mut server {
-                            s.sender.link.end();
-                            for (index, kind) in hid::ReportKind::ALL.into_iter().enumerate() {
-                                if let Some(client) = s.selected_clients[index].clone()
-                                    && let Err(error) =
-                                        s.sender.notify(kind, false, s.endpoint(kind, &client))
-                                {
-                                    tracing::warn!(?error, "Shutdown HID release failed");
-                                    break;
-                                }
-                            }
-                        }
+                        server.take();
                         Ok(())
                     },
                 ))
@@ -514,6 +500,20 @@ fn active_subscriber(target: Option<&Target>) -> bool {
     target.is_some_and(|t| t.link == Knowledge::Yes && t.subscribed == Knowledge::Yes)
 }
 
+fn record_hid_suspend(
+    suspended: &Mutex<std::collections::BTreeMap<String, bool>>,
+    id: String,
+    value: bool,
+) {
+    tracing::info!(device_id = %id, suspended = value, "HID power state changed");
+    // Control Point power state belongs to its writer, not every HID session.
+    // refresh() applies it to the selected receiver before configuring input.
+    suspended
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(id, value);
+}
+
 fn startup_restore_candidate(
     remembered: &Target,
     targets: &[Target],
@@ -563,6 +563,7 @@ struct ReportCharacteristic {
 }
 
 struct Server {
+    profile: hid::Profile,
     sender: Arc<sender::Sender>,
     manager: Rc<RefCell<Coordinator>>,
     providers: Vec<GattServiceProvider>,
@@ -599,6 +600,8 @@ impl Server {
         revision: Arc<AtomicU64>,
         manager: Rc<RefCell<Coordinator>>,
         startup_restore: Rc<RefCell<restore::Restore>>,
+        selected: Option<String>,
+        profile: hid::Profile,
     ) -> Result<Self, BackendError> {
         let d = super::diagnostics::doctor()?;
         tracing::info!(adapter = ?d.adapter_id, radio = ?d.radio_name, peripheral = ?d.peripheral_role, low_energy = ?d.low_energy, "Bluetooth capabilities inspected");
@@ -620,6 +623,7 @@ impl Server {
         )?;
         let initial_generation = revision.load(Ordering::Acquire);
         let mut s = Self {
+            profile,
             sender,
             manager,
             providers: vec![],
@@ -640,6 +644,8 @@ impl Server {
             selected_clients: std::array::from_fn(|_| None),
             state: Snapshot {
                 generation: initial_generation,
+                hid_profile: profile,
+                selected,
                 activity: TransportActivity::Publishing,
                 adapter: true,
                 peripheral: true,
@@ -713,7 +719,7 @@ impl Server {
                     &p,
                     REPORT_MAP_CHARACTERISTIC,
                     GattCharacteristicProperties::Read,
-                    Some(hid::REPORT_MAP),
+                    Some(self.profile.report_map()),
                 )?;
                 let protocol = characteristic(
                     &p,
@@ -750,7 +756,7 @@ impl Server {
                     },
                 ))?);
                 self.protocol = Some(protocol);
-                for kind in hid::ReportKind::ALL {
+                for &kind in self.profile.reports() {
                     let report = self.create_report_characteristic(&p, kind)?;
                     self.reports.push(report);
                 }
@@ -762,7 +768,6 @@ impl Server {
                 )?;
                 self.control = Some(control.clone());
                 let suspended = self.suspended.clone();
-                let rev = self.revision.clone();
                 self.write_token =
                     Some(control.WriteRequested(&TypedEventHandler::<
                         GattLocalCharacteristic,
@@ -778,12 +783,7 @@ impl Server {
                                     let v = reader.ReadByte()?;
                                     if v <= 1 {
                                         let id = args.Session()?.DeviceId()?.Id()?.to_string();
-                                        suspended
-                                            .lock()
-                                            .unwrap_or_else(|e| e.into_inner())
-                                            .insert(id, v == 0);
-                                        rev.fetch_add(1, Ordering::AcqRel);
-                                        tracing::info!("HID suspend={}", v == 0);
+                                        record_hid_suspend(&suspended, id, v == 0);
                                     }
                                 }
                                 Ok(())
@@ -796,7 +796,7 @@ impl Server {
                 characteristic(&p, 0x2a19, GattCharacteristicProperties::Read, Some(&[100]))?;
             }
             advertise(&p)?;
-            tracing::info!("GATT service {service:04x} created; advertising requested");
+            tracing::info!(profile = ?self.profile, "GATT service {service:04x} created; advertising requested");
         }
         Ok(())
     }
@@ -873,7 +873,7 @@ impl Server {
         self.reports
             .iter()
             .find(|report| report.kind == kind)
-            .expect("all HID report characteristics are constructed together")
+            .expect("requested HID report must belong to the published profile")
     }
 
     fn reset_report_state(&mut self) {
@@ -1052,7 +1052,12 @@ impl Server {
         let mut next_selected_clients = [selected_client.clone(), None, None];
         if let Some(selected) = &selected_client {
             let id = selected.Session()?.DeviceId()?.Id()?;
-            for kind in [hid::ReportKind::Keyboard, hid::ReportKind::Mouse] {
+            for &kind in self
+                .profile
+                .reports()
+                .iter()
+                .filter(|kind| **kind != hid::ReportKind::Consumer)
+            {
                 for client in self.report(kind).characteristic.SubscribedClients()? {
                     if client.Session()?.DeviceId()?.Id()? == id {
                         next_selected_clients[kind.index()] = Some(client);
@@ -1299,7 +1304,10 @@ impl Server {
                     }
                     Err(e) => tracing::warn!("Native GATT connection maintenance failed: {e}"),
                 },
-                Ok(true) => tracing::info!("Native GATT connection maintenance already enabled"),
+                Ok(true) => {
+                    self.maintained_session = Some(session);
+                    tracing::info!("Native GATT connection maintenance already enabled");
+                }
                 Err(e) => tracing::warn!("Read native connection maintenance: {e}"),
             },
             Ok(false) => {
@@ -1335,6 +1343,7 @@ impl Server {
         }
     }
     fn select(&mut self, target: Option<String>) -> Result<(), BackendError> {
+        tracing::info!(device_id = ?target, "Selected HID receiver changed");
         self.state.selected = target;
         self.state.ready = false;
         self.release_maintenance();
@@ -1384,11 +1393,24 @@ impl Server {
 impl Drop for Server {
     fn drop(&mut self) {
         self.sender.link.end();
+        for (index, kind) in hid::ReportKind::ALL.into_iter().enumerate() {
+            if let Some(client) = self.selected_clients[index].as_ref()
+                && let Err(error) = self.sender.notify(kind, false, self.endpoint(kind, client))
+            {
+                tracing::warn!(?kind, ?error, "HID release before service teardown failed");
+            }
+        }
+        if let Err(error) = self.sender.detach() {
+            tracing::error!(?error, "HID endpoint teardown failed");
+        }
         self.release_maintenance();
-        if let Some((s, t)) = self.session.take()
-            && let Err(e) = s.RemoveSessionStatusChanged(t)
-        {
-            tracing::warn!("Remove GATT callback: {e}");
+        if let Some((s, t)) = self.session.take() {
+            if let Err(e) = s.RemoveSessionStatusChanged(t) {
+                tracing::warn!("Remove GATT callback: {e}");
+            }
+            if let Err(e) = s.Close() {
+                tracing::warn!("Close GATT session: {e}");
+            }
         }
         if let Some(t) = self.radio_token.take()
             && let Err(e) = self.radio.RemoveStateChanged(t)

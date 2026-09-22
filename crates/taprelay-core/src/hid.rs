@@ -170,6 +170,57 @@ pub const REPORT_MAP: &[u8] = &[
 pub const HID_INFORMATION: [u8; 4] = [0x11, 0x01, 0, 2];
 pub const PROTOCOL_MODE: [u8; 1] = [1];
 
+pub const MEDIA_REPORT_MAP: &[u8] = &[
+    0x05,
+    0x0c,
+    0x09,
+    0x01,
+    0xa1,
+    0x01,
+    0x85,
+    CONSUMER_REPORT_ID,
+    0x15,
+    0x00,
+    0x26,
+    0xff,
+    0x03,
+    0x75,
+    0x10,
+    0x95,
+    0x06,
+    0x19,
+    0x00,
+    0x2a,
+    0xff,
+    0x03,
+    0x81,
+    0x00,
+    0xc0,
+];
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Profile {
+    Full,
+    #[default]
+    MediaOnly,
+}
+
+impl Profile {
+    pub fn report_map(self) -> &'static [u8] {
+        match self {
+            Self::Full => REPORT_MAP,
+            Self::MediaOnly => MEDIA_REPORT_MAP,
+        }
+    }
+
+    pub fn reports(self) -> &'static [ReportKind] {
+        match self {
+            Self::Full => &ReportKind::ALL,
+            Self::MediaOnly => &[ReportKind::Consumer],
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ReportKind {
     Consumer,
@@ -302,6 +353,54 @@ pub fn click(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn applications(map: &[u8]) -> Vec<(u32, u32)> {
+        let mut page = 0;
+        let mut usage = 0;
+        let mut depth = 0;
+        let mut offset = 0;
+        let mut collections = Vec::new();
+        while offset < map.len() {
+            let prefix = map[offset];
+            let size = match prefix & 3 {
+                3 => 4,
+                size => size as usize,
+            };
+            let value = map[offset + 1..offset + 1 + size]
+                .iter()
+                .enumerate()
+                .fold(0u32, |value, (index, byte)| {
+                    value | (u32::from(*byte) << (8 * index))
+                });
+            match prefix & 0xfc {
+                0x04 => page = value,
+                0x08 => usage = value,
+                0xa0 => {
+                    if depth == 0 && value == 1 {
+                        collections.push((page, usage));
+                    }
+                    depth += 1;
+                }
+                0xc0 => depth -= 1,
+                _ => {}
+            }
+            offset += size + 1;
+        }
+        assert_eq!(depth, 0);
+        collections
+    }
+
+    #[test]
+    fn media_only_publication_has_no_keyboard_or_mouse_application() {
+        assert_eq!(
+            applications(Profile::MediaOnly.report_map()),
+            vec![(0x0c, 1)]
+        );
+        assert_eq!(Profile::MediaOnly.reports(), &[ReportKind::Consumer]);
+        assert_eq!(
+            applications(Profile::Full.report_map()),
+            vec![(1, 6), (0x0c, 1), (1, 2)]
+        );
+    }
     #[test]
     fn descriptor_exposes_keyboard_media_and_mouse_reports() {
         let ids: Vec<_> = REPORT_MAP
@@ -322,19 +421,19 @@ mod tests {
 
     // Interpret the Consumer Array's selector table independently of the encoder.
     // Array values index the declared usages; they are not implicitly usage IDs.
-    fn consumer_array_usages() -> (u32, Vec<u16>) {
+    fn consumer_array_usages(map: &[u8]) -> (u32, Vec<u16>) {
         let mut report_id = 0;
         let mut logical_min = 0;
         let mut usage_min = 0;
         let mut usages = Vec::new();
         let mut offset = 0;
-        while offset < REPORT_MAP.len() {
-            let prefix = REPORT_MAP[offset];
+        while offset < map.len() {
+            let prefix = map[offset];
             let size = match prefix & 3 {
                 3 => 4,
                 n => n as usize,
             };
-            let value = REPORT_MAP[offset + 1..offset + 1 + size]
+            let value = map[offset + 1..offset + 1 + size]
                 .iter()
                 .enumerate()
                 .fold(0u32, |v, (i, b)| v | (u32::from(*b) << (8 * i)));
@@ -360,7 +459,11 @@ mod tests {
 
     #[test]
     fn consumer_reports_decode_to_their_declared_media_usages() {
-        let (minimum, usages) = consumer_array_usages();
+        let (minimum, usages) = consumer_array_usages(REPORT_MAP);
+        assert_eq!(
+            consumer_array_usages(MEDIA_REPORT_MAP),
+            (minimum, usages.clone())
+        );
         for command in [
             MediaCommand::PlayPause,
             MediaCommand::Previous,

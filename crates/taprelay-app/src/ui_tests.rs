@@ -65,11 +65,51 @@ fn render_all_views_without_hardware() {
     .unwrap();
     let ui = AppWindow::new().unwrap();
     render_pages(&ui);
+    check_environment_failure(&ui);
     check_binding_capture(&ui);
     check_navigation_and_settings(&ui);
     check_surface_redraw(&ui, &render_window);
     check_binding_layouts_and_actions(&ui);
     check_about_links(&ui);
+}
+
+fn check_environment_failure(ui: &AppWindow) {
+    ui.set_mode(3);
+    ui.set_busy(false);
+    ui.set_problem("Invalid configuration; move config.json aside to start fresh: unknown field `passthrough_reverse_scroll`, expected one of `schema`, `functions`, `remembered_device`, `wizard`, `options`, `window` at line 103 column 30".into());
+    for locale in ["en", "zh-cn"] {
+        i18n::apply(ui, locale);
+        ui.set_checks(ModelRc::new(VecModel::from(crate::startup_checks::rows(
+            locale, true, [false; 4], true,
+        ))));
+        for dark in [false, true] {
+            ui.global::<Theme>().set_mode(if dark {
+                ThemeMode::Dark
+            } else {
+                ThemeMode::Light
+            });
+            for (width, height) in [(900., 500.), (1120., 700.)] {
+                ui.window().set_size(slint::LogicalSize::new(width, height));
+                let snapshot = ui.window().take_snapshot().unwrap();
+                let quit = binding_element(ui, "environment-quit");
+                assert!(quit.absolute_position().y + quit.size().height <= height);
+                if let Some(dir) = std::env::var_os("TAPRELAY_UI_SNAPSHOT_DIR") {
+                    let dir = std::path::PathBuf::from(dir);
+                    std::fs::create_dir_all(&dir).unwrap();
+                    std::fs::write(
+                        dir.join(format!(
+                            "environment-{locale}-{dark}-{}x{}.rgba",
+                            snapshot.width(),
+                            snapshot.height()
+                        )),
+                        snapshot.as_bytes(),
+                    )
+                    .unwrap();
+                }
+            }
+        }
+    }
+    ui.set_problem("".into());
 }
 
 fn check_about_links(ui: &AppWindow) {
@@ -196,6 +236,10 @@ fn render_pages(ui: &AppWindow) {
         ..Default::default()
     }])));
     ui.set_checks(ModelRc::new(VecModel::from(vec![
+        CheckRow {
+            title: "Environment".into(),
+            state: 2,
+        },
         CheckRow {
             title: "Bluetooth available".into(),
             state: 2,

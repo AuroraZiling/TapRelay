@@ -11,6 +11,7 @@ mod platform;
 mod receiver_view;
 mod runtime;
 mod runtime_worker;
+mod startup_checks;
 mod version;
 #[cfg(windows)]
 mod window_rendering;

@@ -1,6 +1,6 @@
 use crate::{
-    AppWindow, BindingCaptureState, BindingRow, BindingUi, CheckRow, FunctionBindingRow,
-    GestureAction, ShortcutItem, Theme, ThemeMode,
+    AppWindow, BindingCaptureState, BindingRow, BindingUi, FunctionBindingRow, GestureAction,
+    ShortcutItem, Theme, ThemeMode,
     action::{self, Action, BindingCommand, CaptureTarget},
     administrator,
     config::{self, Config, Device, Language, SaveQueue, Theme as ThemeSetting},
@@ -399,7 +399,7 @@ struct Controller {
         taprelay_core::devices::AdapterState,
     )>,
     previous_bindings: Option<(u64, &'static str, usize)>,
-    previous_checks: Option<([bool; 4], bool, &'static str)>,
+    previous_checks: Option<([bool; 4], bool, bool, &'static str)>,
     system_theme: bool,
     system_language: Option<String>,
     last_system_poll: Instant,
@@ -978,7 +978,6 @@ impl Controller {
         ui.set_receiver_next_allowed(taprelay_core::devices::receiver_next_allowed(s));
         ui.set_device_selected(s.selected.is_some());
         ui.set_discovery_status(self.tr(crate::receiver_view::page_status_key(s)).into());
-        let first = flags.iter().position(|p| !*p).unwrap_or(4);
         let timeout = !self.passed && self.started.elapsed() > Duration::from_secs(30);
         let failure = self
             .fatal
@@ -994,30 +993,15 @@ impl Controller {
         }
         ui.set_problem(failure.clone().unwrap_or_default().into());
         ui.set_busy((!self.passed || self.recovering) && failure.is_none());
-        let names = [
-            keys::CHECK_BLUETOOTH,
-            keys::CHECK_PERIPHERAL,
-            keys::CHECK_SERVICE,
-            keys::CHECK_ADVERTISING,
-        ]
-        .map(|key| self.tr(key));
-        let checks_key = (flags, failure.is_some(), locale);
+        let checks_key = (flags, self.fatal.is_some(), failure.is_some(), locale);
         if self.previous_checks != Some(checks_key) {
             self.previous_checks = Some(checks_key);
-            ui.set_checks(ModelRc::new(VecModel::from(
-                (0..4)
-                    .map(|i| CheckRow {
-                        title: names[i].clone().into(),
-                        state: if flags[i] {
-                            2
-                        } else if i == first {
-                            if failure.is_some() { 3 } else { 1 }
-                        } else {
-                            0
-                        },
-                    })
-                    .collect::<Vec<_>>(),
-            )));
+            ui.set_checks(ModelRc::new(VecModel::from(crate::startup_checks::rows(
+                locale,
+                self.fatal.is_some(),
+                flags,
+                failure.is_some(),
+            ))));
         }
         let target = s.selected_target();
         let (key, stage) = if self.recovering && failure.is_none() {

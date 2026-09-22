@@ -56,7 +56,7 @@ pub fn page(value: &str) -> anyhow::Result<i32> {
         .parse()
         .map_err(|_| anyhow::anyhow!("Invalid page number: {value}"))
 }
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CaptureTarget {
     pub id: taprelay_core::function::FunctionId,
     pub slot: usize,

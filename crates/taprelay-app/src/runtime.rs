@@ -3,7 +3,7 @@
 //! module only applies its parsed outputs to transport and UI state.
 
 use crate::{
-    action::BindingCommand,
+    action::{BindingCommand, CaptureTarget},
     config::{Config, Device},
     feedback::TestStatus,
     platform::{self, InputSource, Transport},
@@ -20,11 +20,25 @@ use taprelay_core::{
 };
 use tokio::sync::{mpsc, oneshot};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum CapturePhase {
-    Idle,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CapturePhase {
     WaitingForRelease,
     Recording,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CaptureError {
+    Invalid,
+    Duplicate(FunctionId),
+    Commit(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CaptureSession {
+    pub target: CaptureTarget,
+    pub phase: CapturePhase,
+    pub preview: String,
+    pub error: Option<CaptureError>,
 }
 
 struct Receipt {
@@ -38,15 +52,11 @@ pub struct Runtime {
     pub functions: FunctionConfigs,
     pub remembered_device: Option<Device>,
     pub state: Snapshot,
-    pub learned: Option<Shortcut>,
     pub matched: u64,
     pub delivered: u64,
     pub error: Option<String>,
     pub listening: bool,
-    capture: CapturePhase,
-    pub capture_preview: String,
-    pub capture_cancelled: bool,
-    pub capture_invalid: bool,
+    capture: Option<CaptureSession>,
     input: Option<Box<dyn InputSource>>,
     input_initialized: bool,
     transport: Option<Box<dyn Transport>>,
@@ -88,15 +98,11 @@ impl Runtime {
             functions: config.functions,
             remembered_device: config.remembered_device,
             state: Snapshot::default(),
-            learned: None,
             matched: 0,
             delivered: 0,
             error: None,
             listening: false,
-            capture: CapturePhase::Idle,
-            capture_preview: String::new(),
-            capture_cancelled: false,
-            capture_invalid: false,
+            capture: None,
             input: None,
             input_initialized: false,
             transport: None,
@@ -377,29 +383,28 @@ impl Runtime {
     pub fn shutdown(&mut self) {
         self.invalidate(RouterReason::ApplicationExit);
         self.listening = false;
-        self.capture = CapturePhase::Idle;
+        self.capture = None;
         self.input.take();
         self.transport.take();
         self.state.ready = false;
     }
 
-    fn record(&mut self) -> Result<()> {
+    fn record(&mut self, target: CaptureTarget) -> Result<()> {
         self.ensure_input()?;
-        self.capture = CapturePhase::WaitingForRelease;
+        self.capture = Some(CaptureSession {
+            target,
+            phase: CapturePhase::WaitingForRelease,
+            preview: String::new(),
+            error: None,
+        });
         self.configure_input();
-        self.learned = None;
-        self.capture_cancelled = false;
-        self.capture_invalid = false;
-        self.capture_preview.clear();
+        self.epoch = Instant::now();
         self.recorder.reset();
         self.capture_state = InputState::default();
         self.window_keys.clear();
         Ok(())
     }
 
-    /// Apply one binding edit as a single worker command. This keeps input
-    /// suppression, capture transitions and configuration mutation ordered on
-    /// the runtime thread instead of exposing that sequence to the UI.
     pub fn apply_binding_command(&mut self, command: BindingCommand) -> Result<()> {
         self.consume_ui_input();
         match command {
@@ -414,7 +419,7 @@ impl Runtime {
                     "Shortcut slot unavailable"
                 );
                 self.finish_recording();
-                self.record()
+                self.record(target)
             }
             BindingCommand::CancelCapture => {
                 self.finish_recording();
@@ -431,16 +436,13 @@ impl Runtime {
         }
     }
 
-    pub fn finish_recording(&mut self) {
+    fn finish_recording(&mut self) {
         if !self.recording() {
             return;
         }
-        self.capture = CapturePhase::Idle;
+        self.capture = None;
         self.configure_input();
         self.window_keys.clear();
-        self.learned = None;
-        self.capture_preview.clear();
-        self.capture_invalid = false;
         self.epoch = Instant::now();
         self.capture_state = InputState::default();
         self.recorder.reset();
@@ -475,11 +477,46 @@ impl Runtime {
     }
 
     pub fn recording(&self) -> bool {
-        self.capture != CapturePhase::Idle
+        self.capture.is_some()
     }
 
-    pub fn capture_waiting(&self) -> bool {
-        self.capture == CapturePhase::WaitingForRelease
+    pub fn capture(&self) -> Option<&CaptureSession> {
+        self.capture.as_ref()
+    }
+
+    fn capture_waiting(&self) -> bool {
+        self.capture
+            .as_ref()
+            .is_some_and(|capture| capture.phase == CapturePhase::WaitingForRelease)
+    }
+
+    fn submit_capture(&mut self, shortcut: Shortcut) {
+        let Some(capture) = &self.capture else { return };
+        let CaptureTarget { id, slot } = capture.target;
+        let error = if !shortcut.valid() {
+            Some(CaptureError::Invalid)
+        } else if let Some(conflict) = self.functions.iter().find_map(|(&other, config)| {
+            config
+                .shortcuts
+                .iter()
+                .enumerate()
+                .any(|(other_slot, candidate)| {
+                    (other, other_slot) != (id, slot) && candidate == &shortcut
+                })
+                .then_some(other)
+        }) {
+            Some(CaptureError::Duplicate(conflict))
+        } else {
+            self.replace_shortcut(id, slot, shortcut)
+                .err()
+                .map(|error| CaptureError::Commit(error.to_string()))
+        };
+        if let Some(error) = error {
+            self.capture.as_mut().unwrap().error = Some(error);
+        } else {
+            tracing::info!(function_id = id.stable_id(), slot, "Binding shortcut saved");
+            self.finish_recording();
+        }
     }
 
     pub fn bindings_changed(&mut self) {
@@ -499,12 +536,7 @@ impl Runtime {
         Ok(())
     }
 
-    pub fn replace_shortcut(
-        &mut self,
-        id: FunctionId,
-        slot: usize,
-        shortcut: Shortcut,
-    ) -> Result<()> {
+    fn replace_shortcut(&mut self, id: FunctionId, slot: usize, shortcut: Shortcut) -> Result<()> {
         anyhow::ensure!(slot < 2, "Shortcut slot out of range");
         anyhow::ensure!(shortcut.valid(), "Invalid shortcut");
         let mut candidate = self.functions.clone();
@@ -589,6 +621,13 @@ impl Runtime {
     }
 
     pub fn tick(&mut self) {
+        self.tick_with_capture_context(
+            !self.recording() || platform::desktop::foreground_is_ours(),
+            self.capture_waiting() && platform::desktop::any_input_held(),
+        );
+    }
+
+    fn tick_with_capture_context(&mut self, foreground: bool, input_held: bool) {
         if !self.input_initialized
             && let Err(error) = self.sync_input()
         {
@@ -655,16 +694,18 @@ impl Runtime {
                     .unwrap_or_else(|| "Input listener stopped; start listening to retry".into()),
             );
             self.listening = false;
-            self.capture_cancelled = true;
             self.invalidate(RouterReason::ListenerStopped);
             self.finish_recording();
             self.input.take();
         }
 
-        if self.recording() && self.capture_waiting() && !platform::desktop::any_input_held() {
+        if self.recording() && !foreground {
+            self.finish_recording();
+        }
+        if self.capture_waiting() && !input_held {
             self.discard_events();
             self.capture_state = InputState::default();
-            self.capture = CapturePhase::Recording;
+            self.capture.as_mut().unwrap().phase = CapturePhase::Recording;
             self.epoch = Instant::now();
         }
 
@@ -694,19 +735,18 @@ impl Runtime {
                             continue;
                         }
                         if event.code == InputCode::Key(0x1b) && event.down {
-                            self.capture_cancelled = true;
+                            self.finish_recording();
                             continue;
                         }
                         if !self.capture_state.update(event) {
                             continue;
                         }
-                        self.capture_preview =
+                        self.capture.as_mut().unwrap().preview =
                             self.capture_state.description_with(platform::key_name);
-                        if self.learned.is_none() {
-                            self.learned = self.recorder.observe(&self.capture_state, event);
-                            if self.recorder.take_invalid() {
-                                self.capture_invalid = true;
-                            }
+                        if let Some(shortcut) = self.recorder.observe(&self.capture_state, event) {
+                            self.submit_capture(shortcut);
+                        } else if self.recorder.take_invalid() {
+                            self.capture.as_mut().unwrap().error = Some(CaptureError::Invalid);
                         }
                         continue;
                     }
@@ -1173,55 +1213,6 @@ mod tests {
     }
 
     #[test]
-    fn binding_command_keeps_capture_and_config_changes_atomic() {
-        let id = FunctionId::MediaPlayPause;
-        let shortcut = Shortcut::mouse(ModifierSet::empty(), MouseButton::Side1);
-        let mut config = Config::default();
-        config.functions.insert(
-            id,
-            FunctionConfig {
-                enabled: true,
-                shortcuts: vec![shortcut.clone()],
-            },
-        );
-        let mut runtime = Runtime::new(config);
-        runtime.input = Some(Box::new(FakeInput));
-
-        runtime
-            .apply_binding_command(BindingCommand::BeginCapture(crate::action::CaptureTarget {
-                id,
-                slot: 1,
-            }))
-            .unwrap();
-        assert!(runtime.recording());
-
-        let error = runtime
-            .apply_binding_command(BindingCommand::BeginCapture(crate::action::CaptureTarget {
-                id,
-                slot: 2,
-            }))
-            .unwrap_err();
-        assert_eq!(error.to_string(), "Shortcut slot unavailable");
-        assert!(
-            runtime.recording(),
-            "validation must happen before replacing the active capture"
-        );
-
-        runtime
-            .apply_binding_command(BindingCommand::DeleteShortcut(
-                crate::action::CaptureTarget { id, slot: 0 },
-            ))
-            .unwrap();
-        assert!(!runtime.recording());
-        assert!(runtime.functions[&id].shortcuts.is_empty());
-
-        runtime
-            .apply_binding_command(BindingCommand::SetFunctionEnabled { id, enabled: false })
-            .unwrap();
-        assert!(!runtime.functions[&id].enabled);
-    }
-
-    #[test]
     fn disabled_function_shortcut_can_be_saved_but_is_not_recognized() {
         let mut runtime = Runtime::new(Config::default());
         runtime.functions.insert(
@@ -1334,7 +1325,12 @@ mod tests {
             .unwrap();
         assert!(runtime.input.is_none());
         let mut runtime = app_runtime();
-        runtime.capture = CapturePhase::Recording;
+        runtime
+            .apply_binding_command(BindingCommand::BeginCapture(CaptureTarget {
+                id: FunctionId::AppToggleListening,
+                slot: 0,
+            }))
+            .unwrap();
         runtime.finish_recording();
         assert!(runtime.input.is_some());
     }
@@ -1377,5 +1373,276 @@ mod tests {
         runtime.tick();
         assert!(runtime.input.is_none());
         assert!(!runtime.listening);
+    }
+    fn capture_runtime() -> Runtime {
+        let mut runtime = Runtime::new(Config::default());
+        runtime.input = Some(Box::new(FakeInput));
+        runtime.input_initialized = true;
+        runtime.listening = true;
+        for (id, key) in [
+            (FunctionId::MediaPlayPause, 0x77),
+            (FunctionId::MediaNext, 0x78),
+        ] {
+            runtime.functions.insert(
+                id,
+                FunctionConfig {
+                    enabled: true,
+                    shortcuts: vec![Shortcut::keyboard(ModifierSet::empty(), key)],
+                },
+            );
+        }
+        runtime
+    }
+
+    fn begin_capture(runtime: &mut Runtime, id: FunctionId, slot: usize) {
+        runtime
+            .apply_binding_command(BindingCommand::BeginCapture(CaptureTarget { id, slot }))
+            .unwrap();
+    }
+
+    fn queue_capture_keys(runtime: &mut Runtime, keys: &[(u8, bool)], native: bool) {
+        for &(key, down) in keys {
+            let event = InputEvent {
+                code: InputCode::Key(key),
+                down,
+                captured: Instant::now(),
+            };
+            if native {
+                runtime
+                    .sender
+                    .try_send(RoutedInput::Edge {
+                        event,
+                        result: function_output(
+                            FunctionAction::App(AppCommand::ToggleListening),
+                            down,
+                            event.captured,
+                        ),
+                    })
+                    .unwrap();
+            } else {
+                runtime.window_keys.push(event);
+            }
+        }
+    }
+
+    #[test]
+    fn capture_waits_for_old_input_then_commits_the_target_for_both_sources() {
+        for (native, listening) in [(false, false), (false, true), (true, false), (true, true)] {
+            let mut runtime = capture_runtime();
+            runtime.listening = listening;
+            let id = FunctionId::MediaPlayPause;
+            begin_capture(&mut runtime, id, 1);
+            let original = runtime.functions.clone();
+            queue_capture_keys(&mut runtime, &[(0x11, true), (0x77, true)], native);
+            runtime.tick_with_capture_context(true, true);
+            assert_eq!(
+                runtime.capture().unwrap().phase,
+                CapturePhase::WaitingForRelease
+            );
+            assert_eq!(runtime.functions, original);
+            queue_capture_keys(&mut runtime, &[(0x77, false), (0x11, false)], native);
+            runtime.tick_with_capture_context(true, false);
+            assert_eq!(runtime.capture().unwrap().phase, CapturePhase::Recording);
+            queue_capture_keys(&mut runtime, &[(0x79, true), (0x79, false)], native);
+            runtime.tick_with_capture_context(true, false);
+            assert!(runtime.capture().is_none());
+            assert_eq!(
+                runtime.functions[&id].shortcuts,
+                vec![
+                    original[&id].shortcuts[0].clone(),
+                    Shortcut::keyboard(ModifierSet::empty(), 0x79)
+                ]
+            );
+            assert_eq!(runtime.bindings_revision, 1);
+            assert_eq!(runtime.listening, listening);
+            assert_eq!(runtime.matched, 0);
+            let saved = Config {
+                functions: runtime.functions.clone(),
+                ..Default::default()
+            };
+            let restored: Config =
+                serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+            assert_eq!(restored.functions, runtime.functions);
+        }
+    }
+
+    #[test]
+    fn capture_invalid_and_duplicate_attempts_preserve_bindings_and_allow_retry() {
+        let mut runtime = capture_runtime();
+        let id = FunctionId::MediaPlayPause;
+        begin_capture(&mut runtime, id, 0);
+        runtime.tick_with_capture_context(true, false);
+        let original = runtime.functions.clone();
+        for (keys, expected) in [
+            (vec![(0x11, true), (0x11, false)], CaptureError::Invalid),
+            (
+                vec![(0x41, true), (0x42, true), (0x42, false), (0x41, false)],
+                CaptureError::Invalid,
+            ),
+            (
+                vec![(0x78, true), (0x78, false)],
+                CaptureError::Duplicate(FunctionId::MediaNext),
+            ),
+        ] {
+            queue_capture_keys(&mut runtime, &keys, false);
+            runtime.tick_with_capture_context(true, false);
+            assert_eq!(runtime.capture().unwrap().error, Some(expected));
+            assert_eq!(runtime.functions, original);
+            assert_eq!(runtime.bindings_revision, 0);
+        }
+        queue_capture_keys(&mut runtime, &[(0x79, true), (0x79, false)], false);
+        runtime.tick_with_capture_context(true, false);
+        assert!(runtime.capture().is_none());
+        assert_eq!(
+            runtime.functions[&id].shortcuts,
+            vec![Shortcut::keyboard(ModifierSet::empty(), 0x79)]
+        );
+        assert_eq!(runtime.bindings_revision, 1);
+    }
+
+    #[test]
+    fn capture_cancellation_rejects_pending_and_late_input_without_polluting_next_session() {
+        for cancel in [0, 1, 2] {
+            let mut runtime = capture_runtime();
+            let id = FunctionId::MediaPlayPause;
+            begin_capture(&mut runtime, id, 0);
+            runtime.tick_with_capture_context(true, false);
+            let original = runtime.functions.clone();
+            if cancel == 0 {
+                queue_capture_keys(&mut runtime, &[(0x1b, true)], true);
+            }
+            queue_capture_keys(&mut runtime, &[(0x79, true), (0x79, false)], true);
+            if cancel == 1 {
+                runtime
+                    .apply_binding_command(BindingCommand::CancelCapture)
+                    .unwrap();
+            }
+            runtime.tick_with_capture_context(cancel != 2, false);
+            assert!(runtime.capture().is_none());
+            assert_eq!(runtime.functions, original);
+            let stale = InputEvent {
+                code: InputCode::Key(0x7a),
+                down: true,
+                captured: Instant::now(),
+            };
+            begin_capture(&mut runtime, id, 0);
+            runtime.tick_with_capture_context(true, false);
+            runtime.window_keys.push(stale);
+            queue_capture_keys(&mut runtime, &[(0x79, true), (0x79, false)], false);
+            runtime.tick_with_capture_context(true, false);
+            assert_eq!(
+                runtime.functions[&id].shortcuts,
+                vec![Shortcut::keyboard(ModifierSet::empty(), 0x79)]
+            );
+            assert_eq!(runtime.bindings_revision, 1);
+            assert_eq!(runtime.matched, 0);
+        }
+    }
+
+    #[test]
+    fn capture_target_changes_and_failed_edits_have_one_authoritative_state() {
+        let mut runtime = capture_runtime();
+        let id = FunctionId::MediaPlayPause;
+        begin_capture(&mut runtime, id, 0);
+        runtime.tick_with_capture_context(true, false);
+        queue_capture_keys(&mut runtime, &[(0x79, true)], false);
+        runtime.tick_with_capture_context(true, false);
+        begin_capture(&mut runtime, FunctionId::MediaNext, 0);
+        let target = CaptureTarget {
+            id: FunctionId::MediaNext,
+            slot: 0,
+        };
+        assert_eq!(runtime.capture().unwrap().target, target);
+        assert!(
+            runtime
+                .apply_binding_command(BindingCommand::BeginCapture(CaptureTarget { id, slot: 2 }))
+                .is_err()
+        );
+        assert_eq!(runtime.capture().unwrap().target, target);
+        queue_capture_keys(&mut runtime, &[(0x79, false)], false);
+        runtime.tick_with_capture_context(true, false);
+        queue_capture_keys(&mut runtime, &[(0x7a, true), (0x7a, false)], false);
+        runtime.tick_with_capture_context(true, false);
+        assert_eq!(
+            runtime.functions[&id].shortcuts,
+            vec![Shortcut::keyboard(ModifierSet::empty(), 0x77)]
+        );
+        assert_eq!(
+            runtime.functions[&target.id].shortcuts,
+            vec![Shortcut::keyboard(ModifierSet::empty(), 0x7a)]
+        );
+        begin_capture(&mut runtime, id, 0);
+        assert!(
+            runtime
+                .apply_binding_command(BindingCommand::DeleteShortcut(CaptureTarget {
+                    id,
+                    slot: 2
+                }))
+                .is_err()
+        );
+        assert!(runtime.capture().is_none());
+        begin_capture(&mut runtime, id, 0);
+        runtime
+            .apply_binding_command(BindingCommand::SetFunctionEnabled { id, enabled: false })
+            .unwrap();
+        assert!(runtime.capture().is_none());
+        assert!(
+            runtime
+                .apply_binding_command(BindingCommand::BeginCapture(CaptureTarget { id, slot: 0 }))
+                .is_err()
+        );
+        assert!(runtime.capture().is_none());
+        begin_capture(&mut runtime, target.id, 0);
+        runtime
+            .apply_binding_command(BindingCommand::DeleteShortcut(target))
+            .unwrap();
+        assert!(runtime.capture().is_none());
+        assert!(runtime.functions[&target.id].shortcuts.is_empty());
+    }
+
+    #[test]
+    fn capture_listener_failure_discards_candidate_and_ends_session() {
+        struct FailedInput;
+        impl InputSource for FailedInput {
+            fn is_finished(&self) -> bool {
+                true
+            }
+            fn failure(&self) -> Option<String> {
+                Some("capture hook failed".into())
+            }
+        }
+        let mut runtime = capture_runtime();
+        begin_capture(&mut runtime, FunctionId::MediaPlayPause, 0);
+        runtime.tick_with_capture_context(true, false);
+        let original = runtime.functions.clone();
+        queue_capture_keys(&mut runtime, &[(0x79, true), (0x79, false)], false);
+        runtime.input = Some(Box::new(FailedInput));
+        runtime.tick_with_capture_context(true, false);
+        assert!(runtime.capture().is_none());
+        assert_eq!(runtime.error.as_deref(), Some("capture hook failed"));
+        assert_eq!(runtime.functions, original);
+        assert!(runtime.input.is_none());
+        assert!(!runtime.listening);
+    }
+
+    #[test]
+    fn capture_deduplicates_window_and_hook_edges_and_does_not_trigger_old_binding() {
+        let mut runtime = capture_runtime();
+        let id = FunctionId::MediaPlayPause;
+        begin_capture(&mut runtime, id, 0);
+        runtime.tick_with_capture_context(true, false);
+        for down in [true, true, false] {
+            queue_capture_keys(&mut runtime, &[(0x77, down)], true);
+            queue_capture_keys(&mut runtime, &[(0x77, down)], false);
+            runtime.tick_with_capture_context(true, false);
+        }
+        assert!(runtime.capture().is_none());
+        assert_eq!(runtime.bindings_revision, 1);
+        assert_eq!(runtime.matched, 0);
+        assert!(runtime.listening);
+        assert_eq!(
+            runtime.functions[&id].shortcuts,
+            vec![Shortcut::keyboard(ModifierSet::empty(), 0x77)]
+        );
     }
 }

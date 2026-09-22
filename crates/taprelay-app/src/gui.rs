@@ -8,6 +8,7 @@ use crate::{
     i18n::{self, keys},
     logging,
     platform::desktop::{self, Desktop, DesktopEvent},
+    runtime::{CaptureError, CapturePhase},
     runtime_worker::RuntimeHandle,
 };
 use anyhow::{Context, Result, bail};
@@ -386,8 +387,6 @@ struct Controller {
     toast: String,
     toast_until: Instant,
     previous_test: TestStatus,
-    capture: Option<CaptureTarget>,
-    capture_error: String,
     last_error: String,
     last_notification: Instant,
     shutdown: bool,
@@ -437,8 +436,6 @@ impl Controller {
             toast: String::new(),
             toast_until: now,
             previous_test: TestStatus::Idle,
-            capture: None,
-            capture_error: String::new(),
             last_error: String::new(),
             last_notification: now - Duration::from_secs(120),
             shutdown: false,
@@ -486,6 +483,9 @@ impl Controller {
             return;
         }
         self.track_remembered_device();
+        if self.runtime.take_bindings_changed() {
+            self.saves.changed();
+        }
         if let Err(e) = self.saves.flush(&self.runtime.config, &self.path, force) {
             self.error(&format!("{}: {e:#}", self.tr(keys::ERROR_SAVE)));
         }
@@ -497,70 +497,16 @@ impl Controller {
         }
     }
     fn recording(&self) -> bool {
-        self.capture.is_some()
-    }
-    fn apply_binding_command(&mut self, command: BindingCommand) -> Result<()> {
-        if command == BindingCommand::CancelCapture
-            && self.capture.is_none()
-            && !self.runtime.recording
-        {
-            self.capture_error.clear();
-            return Ok(());
-        }
-
-        let result = self.runtime.apply_binding_command(command);
-        if result.is_ok() {
-            match command {
-                BindingCommand::BeginCapture(target) => {
-                    self.capture = Some(target);
-                    self.capture_error.clear();
-                    tracing::debug!(
-                        function_id = target.id.stable_id(),
-                        slot = target.slot,
-                        "Binding capture started"
-                    );
-                }
-                BindingCommand::CancelCapture => {
-                    self.capture = None;
-                    self.capture_error.clear();
-                    tracing::debug!("Binding capture cancelled");
-                }
-                BindingCommand::DeleteShortcut(target) => {
-                    self.capture = None;
-                    self.capture_error.clear();
-                    self.saves.changed();
-                    tracing::info!(
-                        function_id = target.id.stable_id(),
-                        slot = target.slot,
-                        "Binding shortcut deleted"
-                    );
-                }
-                BindingCommand::SetFunctionEnabled { id, enabled } => {
-                    self.capture = None;
-                    self.capture_error.clear();
-                    self.saves.changed();
-                    tracing::info!(
-                        function_id = id.stable_id(),
-                        enabled,
-                        "Binding function state changed"
-                    );
-                }
-            }
-        } else if !self.runtime.recording {
-            // The worker may have completed a capture transition before a later
-            // validation step failed. Mirror the confirmed worker state.
-            self.capture = None;
-            self.capture_error.clear();
-        }
-        result
+        self.runtime.capture().is_some()
     }
     fn cancel_capture(&mut self) -> Result<()> {
-        self.apply_binding_command(BindingCommand::CancelCapture)
+        self.runtime
+            .apply_binding_command(BindingCommand::CancelCapture)
     }
     fn binding_action(&mut self, ui: &AppWindow, command: BindingCommand) -> Result<()> {
-        self.apply_binding_command(command)?;
+        let result = self.runtime.apply_binding_command(command);
         self.sync(ui);
-        Ok(())
+        result
     }
     fn action(&mut self, ui: &AppWindow, name: Action, value: &str) -> Result<()> {
         if !matches!(name, Action::Show | Action::Resume | Action::TrayReset) {
@@ -775,60 +721,6 @@ impl Controller {
             self.runtime.tick();
         }
         self.track_remembered_device();
-        if self.recording() {
-            if !desktop::foreground_is_ours() || self.runtime.capture_cancelled {
-                if let Err(error) = self.cancel_capture() {
-                    self.error(&format!("{error:#}"));
-                }
-            } else if let Some(t) = self.runtime.learned.take() {
-                if !t.valid() {
-                    self.capture_error = self.tr(keys::CAPTURE_INVALID);
-                    tracing::debug!("Rejected invalid binding capture");
-                } else if let Some(CaptureTarget { id, slot }) = self.capture {
-                    if let Some(conflict) = self.runtime.shortcut_conflict(id, slot, &t) {
-                        self.capture_error = format!(
-                            "{}: {}",
-                            self.tr(keys::CAPTURE_DUPLICATE),
-                            self.tr(function::function_definition(conflict).name_key)
-                        );
-                        tracing::debug!(
-                            function_id = id.stable_id(),
-                            slot,
-                            conflict = conflict.stable_id(),
-                            "Rejected duplicate binding capture"
-                        );
-                    } else {
-                        match self.runtime.replace_shortcut(id, slot, t) {
-                            Ok(()) => {
-                                self.saves.changed();
-                                tracing::info!(
-                                    function_id = id.stable_id(),
-                                    slot,
-                                    "Binding shortcut saved"
-                                );
-                                if let Err(error) = self.cancel_capture() {
-                                    self.error(&format!("{error:#}"));
-                                }
-                            }
-                            Err(error) => {
-                                tracing::warn!(
-                                    function_id = id.stable_id(),
-                                    slot,
-                                    error = %error,
-                                    "Failed to save binding shortcut"
-                                );
-                                self.capture_error = error.to_string();
-                            }
-                        }
-                    }
-                } else {
-                    self.capture_error = self.tr(keys::CAPTURE_INVALID);
-                }
-            } else if self.runtime.capture_invalid {
-                self.runtime.capture_invalid = false;
-                self.capture_error = self.tr(keys::CAPTURE_INVALID);
-            }
-        }
         if let Some(e) = self.runtime.error.take() {
             if !self.runtime.state.input {
                 self.error(&e);
@@ -1176,21 +1068,34 @@ impl Controller {
                     .collect::<Vec<_>>(),
             )));
         }
+        let capture = self.runtime.capture();
         ui.global::<BindingUi>().set_capture(BindingCaptureState {
-            function_id: self
-                .capture
-                .map(|target| target.id.stable_id())
+            function_id: capture
+                .map(|session| session.target.id.stable_id())
                 .unwrap_or("")
                 .into(),
-            slot: self.capture.map(|target| target.slot as i32).unwrap_or(-1),
-            text: if self.runtime.capture_waiting() {
-                self.tr(keys::CAPTURE_RELEASE).into()
-            } else if self.runtime.capture_preview.is_empty() {
-                self.tr(keys::CAPTURE_RECORDING).into()
-            } else {
-                self.runtime.capture_preview.clone().into()
-            },
-            error: self.capture_error.clone().into(),
+            slot: capture
+                .map(|session| session.target.slot as i32)
+                .unwrap_or(-1),
+            text: match capture {
+                Some(session) if session.phase == CapturePhase::WaitingForRelease => {
+                    self.tr(keys::CAPTURE_RELEASE)
+                }
+                Some(session) if !session.preview.is_empty() => session.preview.clone(),
+                _ => self.tr(keys::CAPTURE_RECORDING),
+            }
+            .into(),
+            error: match capture.and_then(|session| session.error.as_ref()) {
+                Some(CaptureError::Invalid) => self.tr(keys::CAPTURE_INVALID),
+                Some(CaptureError::Duplicate(id)) => format!(
+                    "{}: {}",
+                    self.tr(keys::CAPTURE_DUPLICATE),
+                    self.tr(function::function_definition(*id).name_key)
+                ),
+                Some(CaptureError::Commit(error)) => error.clone(),
+                None => String::new(),
+            }
+            .into(),
         });
         if self.previous_test != self.runtime.test {
             self.previous_test = self.runtime.test.clone();

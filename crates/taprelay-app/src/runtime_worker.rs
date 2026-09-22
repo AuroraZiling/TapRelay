@@ -4,7 +4,7 @@ use crate::{
     action::BindingCommand,
     config::{Config, Device},
     feedback::TestStatus,
-    runtime::Runtime,
+    runtime::{CaptureSession, Runtime},
 };
 use anyhow::{Context, Result};
 use std::{
@@ -13,11 +13,7 @@ use std::{
     thread,
     time::Duration,
 };
-use taprelay_core::{
-    function::{FunctionConfigs, FunctionId, Shortcut},
-    input::InputEvent,
-    state::Snapshot,
-};
+use taprelay_core::{function::FunctionConfigs, input::InputEvent, state::Snapshot};
 
 type Command = Box<dyn FnOnce(&mut Runtime) + Send>;
 
@@ -25,41 +21,35 @@ pub struct View {
     functions: FunctionConfigs,
     remembered_device: Option<Device>,
     pub state: Snapshot,
-    pub learned: Option<Shortcut>,
     pub matched: u64,
     pub error: Option<String>,
     pub listening: bool,
-    pub capture_preview: String,
-    pub capture_cancelled: bool,
-    pub capture_invalid: bool,
-    pub recording: bool,
+    capture: Option<CaptureSession>,
     pub test: TestStatus,
     pub bindings_revision: u64,
-    waiting: bool,
 }
 impl View {
+    pub fn capture(&self) -> Option<&CaptureSession> {
+        self.capture.as_ref()
+    }
     fn take(runtime: &mut Runtime) -> Self {
         Self {
             functions: runtime.functions.clone(),
             remembered_device: runtime.remembered_device.clone(),
             state: runtime.state.clone(),
-            learned: runtime.learned.take(),
             matched: runtime.matched,
             error: runtime.error.take(),
             listening: runtime.listening,
-            capture_preview: runtime.capture_preview.clone(),
-            capture_cancelled: runtime.capture_cancelled,
-            capture_invalid: std::mem::take(&mut runtime.capture_invalid),
-            recording: runtime.recording(),
+            capture: runtime.capture().cloned(),
             test: runtime.test.clone(),
             bindings_revision: runtime.bindings_revision,
-            waiting: runtime.capture_waiting(),
         }
     }
 }
 pub struct RuntimeHandle {
     pub config: Config,
     view: View,
+    bindings_changed: bool,
     pub window_keys: Vec<InputEvent>,
     commands: Option<mpsc::SyncSender<Command>>,
     worker: Option<thread::JoinHandle<()>>,
@@ -105,6 +95,7 @@ impl RuntimeHandle {
         Ok(Self {
             config,
             view,
+            bindings_changed: false,
             window_keys: vec![],
             commands: Some(tx),
             worker: Some(worker),
@@ -136,15 +127,12 @@ impl RuntimeHandle {
         result
     }
     fn apply(&mut self, mut view: View) {
+        self.bindings_changed |= view.bindings_revision != self.view.bindings_revision;
         self.config.functions = std::mem::take(&mut view.functions);
         self.config.remembered_device = view.remembered_device.take();
-        if view.learned.is_none() {
-            view.learned = self.view.learned.take();
-        }
         if view.error.is_none() {
             view.error = self.view.error.take();
         }
-        view.capture_invalid |= self.view.capture_invalid;
         self.view = view;
     }
     pub fn tick(&mut self) {
@@ -156,25 +144,8 @@ impl RuntimeHandle {
             self.view.error = Some(error.to_string());
         }
     }
-    pub fn capture_waiting(&self) -> bool {
-        self.view.waiting
-    }
-    pub fn shortcut_conflict(
-        &self,
-        id: FunctionId,
-        slot: usize,
-        shortcut: &Shortcut,
-    ) -> Option<FunctionId> {
-        self.config.functions.iter().find_map(|(&other, config)| {
-            config
-                .shortcuts
-                .iter()
-                .enumerate()
-                .any(|(other_slot, candidate)| {
-                    (other, other_slot) != (id, slot) && candidate == shortcut
-                })
-                .then_some(other)
-        })
+    pub fn take_bindings_changed(&mut self) -> bool {
+        std::mem::take(&mut self.bindings_changed)
     }
     pub fn consume_ui_input(&mut self) {
         if let Err(e) = self.update(|r| {
@@ -228,14 +199,6 @@ impl RuntimeHandle {
     pub fn send(&mut self) -> Result<()> {
         self.update(move |r| r.send())
     }
-    pub fn replace_shortcut(
-        &mut self,
-        id: FunctionId,
-        slot: usize,
-        shortcut: Shortcut,
-    ) -> Result<()> {
-        self.update(move |r| r.replace_shortcut(id, slot, shortcut))
-    }
 }
 impl Drop for RuntimeHandle {
     fn drop(&mut self) {
@@ -246,6 +209,7 @@ impl Drop for RuntimeHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use taprelay_core::function::FunctionId;
 
     #[test]
     fn worker_updates_preserve_ui_preferences_and_unread_results() {
@@ -262,7 +226,7 @@ mod tests {
                 .enabled = true;
             runtime.remembered_device = Some(Device::from_target(&Default::default()));
             runtime.error = Some("pending notification".into());
-            runtime.capture_invalid = true;
+            runtime.bindings_changed();
             anyhow::bail!("command failed")
         });
         assert_eq!(result.unwrap_err().to_string(), "command failed");
@@ -274,6 +238,9 @@ mod tests {
         assert!(handle.config.functions[&FunctionId::MediaMute].enabled);
         assert!(handle.config.remembered_device.is_some());
         assert_eq!(handle.error.as_deref(), Some("pending notification"));
-        assert!(handle.capture_invalid);
+        assert!(handle.take_bindings_changed());
+        assert!(!handle.take_bindings_changed());
+        handle.tick();
+        assert!(!handle.take_bindings_changed());
     }
 }

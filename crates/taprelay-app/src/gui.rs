@@ -85,9 +85,11 @@ pub fn run() -> Result<()> {
             return Err(e.into());
         }
     };
+    slint::BackendSelector::new()
+        .backend_name("winit".into())
+        .renderer_name("vello".into())
+        .select()?;
     let ui = AppWindow::new()?;
-    #[cfg(windows)]
-    crate::window_rendering::install(ui.window());
     let mut startup_error = loaded.as_ref().err().map(|e| format!("{e:#}"));
     if let Err(e) = config::check_writable(&path) {
         startup_error = Some(format!("{e:#}"));

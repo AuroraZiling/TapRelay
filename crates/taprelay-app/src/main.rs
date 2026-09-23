@@ -15,8 +15,6 @@ mod runtime;
 mod runtime_worker;
 mod startup_checks;
 mod version;
-#[cfg(windows)]
-mod window_rendering;
 slint::include_modules!();
 #[cfg(test)]
 mod ui_tests;

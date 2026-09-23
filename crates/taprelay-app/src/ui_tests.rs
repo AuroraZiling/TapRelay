@@ -1,7 +1,7 @@
 //! Headless view validation only: no native window, permissions, input hooks or Bluetooth.
 use crate::*;
 use i_slint_backend_testing::{ElementHandle, ElementRoot};
-use slint::{ComponentHandle, Model, ModelRc, VecModel, platform::WindowAdapter};
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 fn set_function_bindings(ui: &AppWindow, rows: Vec<FunctionBindingRow>) {
     ui.global::<BindingUi>()
@@ -60,7 +60,7 @@ fn render_all_views_without_hardware() {
         slint::platform::software_renderer::RepaintBufferType::ReusedBuffer,
     );
     slint::platform::set_platform(Box::new(SoftwareTestPlatform {
-        window: render_window.clone(),
+        window: render_window,
     }))
     .unwrap();
     let ui = AppWindow::new().unwrap();
@@ -68,7 +68,6 @@ fn render_all_views_without_hardware() {
     check_environment_failure(&ui);
     check_binding_capture(&ui);
     check_navigation_and_settings(&ui);
-    check_surface_redraw(&ui, &render_window);
     check_binding_layouts_and_actions(&ui);
     check_about_links(&ui);
     check_runtime_feedback(&ui);
@@ -510,68 +509,6 @@ fn check_navigation_and_settings(ui: &AppWindow) {
     }
     ui.window().set_size(slint::LogicalSize::new(1000., 700.));
     let _ = ui.window().take_snapshot().unwrap();
-}
-
-fn check_surface_redraw(
-    ui: &AppWindow,
-    render_window: &slint::platform::software_renderer::MinimalSoftwareWindow,
-) {
-    // Seed the retained renderer cache and confirm unchanged UI has no damage.
-    use slint::platform::software_renderer::PremultipliedRgbaColor;
-    let mut frame = vec![PremultipliedRgbaColor::default(); 1000 * 700];
-    render_window.window().request_redraw();
-    let mut first_region = None;
-    assert!(render_window.draw_if_needed(|renderer| {
-        first_region = Some(renderer.render(frame.as_mut_slice(), 1000));
-    }));
-    assert_eq!(
-        first_region.unwrap().bounding_box_size(),
-        slint::PhysicalSize::new(1000, 700)
-    );
-
-    render_window.window().request_redraw();
-    let mut unchanged_region = None;
-    assert!(render_window.draw_if_needed(|renderer| {
-        unchanged_region = Some(renderer.render(frame.as_mut_slice(), 1000));
-    }));
-    assert_eq!(
-        unchanged_region.unwrap().bounding_box_size(),
-        slint::PhysicalSize::default()
-    );
-
-    #[cfg(windows)]
-    {
-        let expected = frame.clone();
-        // Model a lost surface, without minimizing or changing any UI property.
-        // Exercise the same invalidation used before native RedrawRequested.
-        for _ in 0..3 {
-            frame.fill(PremultipliedRgbaColor::default());
-            crate::window_rendering::invalidate_surface(ui.window());
-            render_window.window().request_redraw();
-            assert!(render_window.draw_if_needed(|renderer| {
-                let region = renderer.render(frame.as_mut_slice(), 1000);
-                assert_eq!(
-                    region.bounding_box_origin(),
-                    slint::PhysicalPosition::default()
-                );
-                assert_eq!(
-                    region.bounding_box_size(),
-                    slint::PhysicalSize::new(1000, 700)
-                );
-            }));
-            assert!(
-                frame
-                    .iter()
-                    .zip(&expected)
-                    .all(|(a, b)| (a.red, a.green, a.blue, a.alpha)
-                        == (b.red, b.green, b.blue, b.alpha)),
-                "expose must recover every pixel without UI changes"
-            );
-            assert!(
-                !render_window.draw_if_needed(|_| panic!("expose must not create a redraw loop"))
-            );
-        }
-    }
 }
 
 fn check_binding_layouts_and_actions(ui: &AppWindow) {

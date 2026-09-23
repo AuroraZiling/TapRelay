@@ -279,7 +279,17 @@ impl Shortcut {
     }
 
     pub fn valid(&self) -> bool {
-        self.primary.valid()
+        self.primary.valid() && !self.is_standalone_primary_mouse_button()
+    }
+
+    pub fn is_standalone_primary_mouse_button(&self) -> bool {
+        self.modifiers == ModifierSet::empty()
+            && matches!(
+                self.primary,
+                PrimaryInput::Mouse {
+                    button: MouseButton::Left | MouseButton::Right
+                }
+            )
     }
 
     pub fn primary_code(&self) -> InputCode {
@@ -334,6 +344,20 @@ pub fn valid_configs(configs: &FunctionConfigs) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn standalone_primary_mouse_buttons_are_rejected() {
+        for button in [MouseButton::Left, MouseButton::Right] {
+            assert!(!Shortcut::mouse(ModifierSet::empty(), button).valid());
+            assert!(Shortcut::from_physical(&[], InputCode::Mouse(button)).is_none());
+            for key in [0x11, 0x10, 0x12, 0x5b] {
+                assert!(Shortcut::from_physical(&[key], InputCode::Mouse(button)).is_some());
+            }
+        }
+        for button in [MouseButton::Middle, MouseButton::Side1, MouseButton::Side2] {
+            assert!(Shortcut::mouse(ModifierSet::empty(), button).valid());
+        }
+    }
 
     #[test]
     fn skip_functions_pair_a_tap_with_a_held_seek() {

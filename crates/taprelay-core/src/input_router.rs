@@ -898,6 +898,21 @@ mod tests {
     }
 
     #[test]
+    fn standalone_primary_mouse_bindings_do_not_consume_clicks() {
+        for button in [MouseButton::Left, MouseButton::Right] {
+            for function in crate::function::function_ids() {
+                let mut router =
+                    router_with(Shortcut::mouse(ModifierSet::empty(), button), function);
+                for down in [true, false] {
+                    let result = router.route_event(event(InputCode::Mouse(button), down));
+                    assert!(!result.consume);
+                    assert!(outputs(&result).is_empty());
+                }
+            }
+        }
+    }
+
+    #[test]
     fn a_tap_only_function_still_fires_on_the_press_edge() {
         let mut router = router_with(
             Shortcut::keyboard(ModifierSet::empty(), 0x58),

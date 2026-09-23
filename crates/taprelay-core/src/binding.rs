@@ -54,6 +54,9 @@ impl BindingIndex {
                 continue;
             }
             for (slot, shortcut) in config.shortcuts.iter().cloned().enumerate() {
+                if !shortcut.valid() {
+                    continue;
+                }
                 let binding_index = index.bindings.len();
                 index.candidates[shortcut.primary_code().index()].push(binding_index);
                 index.bindings.push(IndexedBinding {
@@ -177,7 +180,7 @@ mod tests {
     #[test]
     fn disabled_shortcuts_are_not_indexed_but_still_occupy_the_config() {
         let mut configs = default_configs();
-        let shortcut = Shortcut::mouse(ModifierSet::empty(), MouseButton::Left);
+        let shortcut = Shortcut::mouse(ModifierSet::empty(), MouseButton::Side1);
         configs
             .get_mut(&FunctionId::MediaNext)
             .unwrap()

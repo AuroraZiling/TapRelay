@@ -204,6 +204,11 @@ impl Config {
                 c.functions
                     .entry(taprelay_core::function::FunctionId::AppTogglePassthrough)
                     .or_default();
+                for config in c.functions.values_mut() {
+                    config
+                        .shortcuts
+                        .retain(|shortcut| !shortcut.is_standalone_primary_mouse_button());
+                }
                 c.validate()?;
                 Ok(c)
             }
@@ -258,6 +263,41 @@ impl SaveQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn loading_removes_only_standalone_primary_mouse_bindings() {
+        use taprelay_core::{
+            function::{FunctionConfig, FunctionId, ModifierSet, Shortcut},
+            input::MouseButton,
+        };
+
+        for button in [MouseButton::Left, MouseButton::Right] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("config.json");
+            let mut config = Config::default();
+            let retained = Shortcut::mouse(ModifierSet::from_keys([0x11]), button);
+            config.functions.insert(
+                FunctionId::MediaNext,
+                FunctionConfig {
+                    enabled: true,
+                    shortcuts: vec![
+                        Shortcut::mouse(ModifierSet::empty(), button),
+                        retained.clone(),
+                    ],
+                },
+            );
+            assert!(config.save(&path).is_err());
+            let bytes = serde_json::to_vec(&config).unwrap();
+            std::fs::write(&path, &bytes).unwrap();
+            let loaded = Config::load(&path).unwrap();
+            let function = &loaded.functions[&FunctionId::MediaNext];
+            assert!(function.enabled);
+            assert_eq!(function.shortcuts, vec![retained]);
+            assert_eq!(std::fs::read(&path).unwrap(), bytes);
+            loaded.save(&path).unwrap();
+            assert_eq!(Config::load(&path).unwrap().functions, loaded.functions);
+        }
+    }
     #[test]
     fn remembered_device_defaults_empty_and_round_trips() {
         let mut json = serde_json::to_value(Config::default()).unwrap();

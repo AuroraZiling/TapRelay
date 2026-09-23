@@ -1478,6 +1478,46 @@ mod tests {
     }
 
     #[test]
+    fn capture_rejects_standalone_primary_mouse_buttons_and_allows_modified_retry() {
+        for button in [MouseButton::Left, MouseButton::Right] {
+            let mut runtime = capture_runtime();
+            let id = FunctionId::MediaPlayPause;
+            begin_capture(&mut runtime, id, 0);
+            runtime.tick_with_capture_context(true, false);
+            let original = runtime.functions.clone();
+            for modified in [false, true] {
+                if modified {
+                    queue_capture_keys(&mut runtime, &[(0x11, true)], false);
+                }
+                for down in [true, false] {
+                    runtime.window_keys.push(InputEvent {
+                        code: InputCode::Mouse(button),
+                        down,
+                        captured: Instant::now(),
+                    });
+                }
+                if modified {
+                    queue_capture_keys(&mut runtime, &[(0x11, false)], false);
+                }
+                runtime.tick_with_capture_context(true, false);
+                if !modified {
+                    assert_eq!(
+                        runtime.capture().unwrap().error,
+                        Some(CaptureError::Invalid)
+                    );
+                    assert_eq!(runtime.functions, original);
+                    assert_eq!(runtime.bindings_revision, 0);
+                }
+            }
+            assert!(runtime.capture().is_none());
+            assert_eq!(
+                runtime.functions[&id].shortcuts,
+                vec![Shortcut::mouse(ModifierSet::from_keys([0x11]), button)]
+            );
+        }
+    }
+
+    #[test]
     fn capture_invalid_and_duplicate_attempts_preserve_bindings_and_allow_retry() {
         let mut runtime = capture_runtime();
         let id = FunctionId::MediaPlayPause;

@@ -100,24 +100,6 @@ impl BindingIndex {
     pub fn find(&self, key: BindingKey) -> Option<usize> {
         self.bindings.iter().position(|binding| binding.key == key)
     }
-
-    pub fn uses_modifier(&self, code: InputCode) -> bool {
-        self.uses_modifier_where(code, |_| true)
-    }
-
-    pub fn uses_modifier_where(
-        &self,
-        code: InputCode,
-        allowed: impl Fn(FunctionId) -> bool,
-    ) -> bool {
-        let InputCode::Key(key) = code else {
-            return false;
-        };
-        let logical = crate::function::ModifierSet::from_keys([key]);
-        self.bindings.iter().any(|binding| {
-            allowed(binding.key.function) && logical.is_subset_of(binding.shortcut.modifiers)
-        })
-    }
 }
 
 #[cfg(test)]

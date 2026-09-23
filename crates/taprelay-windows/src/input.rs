@@ -545,8 +545,7 @@ impl InputHandle {
         }
     }
 
-    /// Replay only the local events that the synchronous hook consumed. The
-    /// tag is recognized by this process so the replay cannot recurse into
+    /// The tag prevents ownership-transition releases from recursing into
     /// shortcut matching; other injected input keeps the existing policy.
     pub fn replay(&self, input: PhysicalInput) -> Result<(), BackendError> {
         Self::send_replay(input)
@@ -964,9 +963,7 @@ fn policy_motion(motion: PhysicalInput) -> RouteResult {
         policy.motion(motion)
     })
 }
-/// Replays are the one native operation permitted on the hook path. They are
-/// performed before the original unconsumed event is allowed to continue, so
-/// a pending modifier cannot arrive after the key or pointer event it prefixes.
+/// Ownership-transition releases run on the input thread before routing resumes.
 fn prepare_hook_result(result: &mut RouteResult) -> bool {
     prepare_hook_result_at(result, Instant::now())
 }

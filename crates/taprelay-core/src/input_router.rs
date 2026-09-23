@@ -8,7 +8,7 @@
 use crate::{
     binding::{BindingIndex, BindingKey},
     function::{FunctionAction, FunctionConfigs, FunctionId, function_definition},
-    input::{InputCode, InputEvent, InputState, modifier},
+    input::{InputCode, InputEvent, InputState},
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
@@ -54,8 +54,6 @@ pub enum RoutedOutput {
     Local(PhysicalInput),
     Remote(PhysicalInput),
     EndPassthrough,
-    /// Re-deliver an earlier physical input that the hook consumed while it
-    /// waited to decide a later event (currently pending modifiers).
     Replay(PhysicalInput),
     Function {
         binding: BindingKey,
@@ -114,12 +112,6 @@ pub struct InputRouter {
     physical: InputState,
     active: BTreeMap<InputCode, ActiveToken>,
     held_functions: BTreeMap<FunctionId, usize>,
-    // A prefix is a short ordered sequence, not a set. The order matters when
-    // an unmatched Ctrl+Shift chord is replayed to the host.
-    pending_modifiers: Vec<InputCode>,
-    captured_modifiers: BTreeSet<InputCode>,
-    // A prefix replayed to the host keeps local ownership until its physical
-    // up edge, across configuration changes.
     local_held: BTreeSet<InputCode>,
     suppressed_until_up: BTreeSet<InputCode>,
     next_token: u64,
@@ -136,8 +128,6 @@ impl InputRouter {
             physical: InputState::default(),
             active: BTreeMap::new(),
             held_functions: BTreeMap::new(),
-            pending_modifiers: Vec::new(),
-            captured_modifiers: BTreeSet::new(),
             local_held: BTreeSet::new(),
             suppressed_until_up: BTreeSet::new(),
             next_token: 0,
@@ -218,11 +208,6 @@ impl InputRouter {
             consume: true,
             outputs: Vec::new(),
         };
-        // An unmatched modifier prefix must be delivered before the new index
-        // becomes authoritative. A prefix already captured by a function is
-        // instead suppressed through its physical up edge and must not leak
-        // while the old binding is being edited or disabled.
-        self.flush_pending_unmatched(&mut cleanup);
         let next_index = BindingIndex::new(configs);
         let active_codes: Vec<_> = self
             .active
@@ -269,25 +254,6 @@ impl InputRouter {
             self.isolate_held();
             result.outputs.push(RoutedOutput::EndPassthrough);
         }
-        // A modifier that was held back by the hook has not reached the host
-        // yet. Replay only the non-captured prefixes before dropping the
-        // router state; a captured shortcut must not leak a lone modifier.
-        let pending = self.pending_modifiers.to_vec();
-        for code in pending {
-            if self.captured_modifiers.contains(&code) {
-                // The modifier never reached either endpoint. Do not produce
-                // an orphaned up after recording/session cleanup.
-                self.suppressed_until_up.insert(code);
-            } else {
-                self.local_held.insert(code);
-                result
-                    .outputs
-                    .push(RoutedOutput::Replay(PhysicalInput::Edge {
-                        code,
-                        down: true,
-                    }));
-            }
-        }
         for active in self.active.values() {
             // The corresponding down was consumed by the hook. Keep its
             // trailing physical up consumed even if the session ends before
@@ -309,8 +275,6 @@ impl InputRouter {
         }
         self.active.clear();
         self.held_functions.clear();
-        self.pending_modifiers.clear();
-        self.captured_modifiers.clear();
         self.stamp(result)
     }
 
@@ -386,45 +350,7 @@ impl InputRouter {
                 outputs: Vec::new(),
             });
         }
-        if self.recording {
-            if event.down {
-                self.local_held.insert(event.code);
-            }
-            if !event.down {
-                self.local_held.remove(&event.code);
-            }
-            return self.stamp(RouteResult::pass(PhysicalInput::Edge {
-                code: event.code,
-                down: event.down,
-            }));
-        }
-
-        if !event.down && self.local_held.remove(&event.code) {
-            return self.stamp(RouteResult {
-                revision: self.revision,
-                consume: false,
-                outputs: vec![RoutedOutput::Local(PhysicalInput::Edge {
-                    code: event.code,
-                    down: false,
-                })],
-            });
-        }
-
-        let mut result = RouteResult {
-            revision: self.revision,
-            consume: false,
-            outputs: Vec::new(),
-        };
-        self.flush_pending_local(&mut result);
-        if event.down {
-            self.local_held.insert(event.code);
-        }
-        result
-            .outputs
-            .push(RoutedOutput::Local(PhysicalInput::Edge {
-                code: event.code,
-                down: event.down,
-            }));
+        let result = self.normal_input(event);
         self.stamp(result)
     }
 
@@ -454,19 +380,7 @@ impl InputRouter {
                 revision: self.revision,
             };
         }
-        if self.recording {
-            return RouteResult::pass(input);
-        }
-        let mut result = RouteResult {
-            revision: self.revision,
-            consume: false,
-            outputs: Vec::new(),
-        };
-        self.flush_pending(&mut result);
-
-        result.outputs.push(RoutedOutput::Local(input));
-
-        result
+        RouteResult::pass(input)
     }
 
     fn route_edge(&mut self, event: InputEvent) -> RouteResult {
@@ -487,15 +401,6 @@ impl InputRouter {
                     outputs: Vec::new(),
                 };
             }
-            if self.pending_modifiers.contains(&event.code) {
-                // Modifier repeats do not create another prefix edge.
-                return RouteResult {
-                    revision: self.revision,
-                    consume: true,
-                    outputs: Vec::new(),
-                };
-            }
-
             return self.normal_input(event);
         }
 
@@ -511,16 +416,7 @@ impl InputRouter {
         }
 
         if self.recording {
-            if event.down {
-                self.local_held.insert(event.code);
-            }
-            if !event.down {
-                self.local_held.remove(&event.code);
-            }
-            return RouteResult::pass(PhysicalInput::Edge {
-                code: event.code,
-                down: event.down,
-            });
+            return self.normal_input(event);
         }
 
         if let Some(active) = self.active.get(&event.code).cloned() {
@@ -563,53 +459,6 @@ impl InputRouter {
             return self.activate(binding, event.captured);
         }
 
-        if !event.down && self.pending_modifiers.contains(&event.code) {
-            let captured = self.captured_modifiers.remove(&event.code);
-            if captured {
-                self.pending_modifiers.retain(|code| *code != event.code);
-                return RouteResult {
-                    revision: self.revision,
-                    consume: true,
-                    outputs: Vec::new(),
-                };
-            }
-            let mut result = RouteResult {
-                revision: self.revision,
-                consume: false,
-                outputs: Vec::new(),
-            };
-            self.flush_pending(&mut result);
-
-            result
-                .outputs
-                .push(RoutedOutput::Local(PhysicalInput::Edge {
-                    code: event.code,
-                    down: false,
-                }));
-            return result;
-        }
-
-        if event.down
-            && !self.passthrough
-            && matches!(event.code, InputCode::Key(key) if modifier(key))
-            && self.index.uses_modifier_where(event.code, |id| {
-                self.listening
-                    || matches!(
-                        id,
-                        FunctionId::AppToggleListening | FunctionId::AppTogglePassthrough
-                    )
-            })
-        {
-            if !self.pending_modifiers.contains(&event.code) {
-                self.pending_modifiers.push(event.code);
-            }
-            return RouteResult {
-                revision: self.revision,
-                consume: true,
-                outputs: Vec::new(),
-            };
-        }
-
         self.normal_input(event)
     }
 
@@ -624,32 +473,15 @@ impl InputRouter {
                 })],
             };
         }
-        if self.recording {
-            return RouteResult::pass(PhysicalInput::Edge {
-                code: event.code,
-                down: event.down,
-            });
-        }
-
-        let mut result = RouteResult {
-            revision: self.revision,
-            consume: false,
-            outputs: Vec::new(),
-        };
-        self.flush_pending(&mut result);
-
-        result.consume = false;
         if event.down {
             self.local_held.insert(event.code);
+        } else {
+            self.local_held.remove(&event.code);
         }
-        result
-            .outputs
-            .push(RoutedOutput::Local(PhysicalInput::Edge {
-                code: event.code,
-                down: event.down,
-            }));
-
-        result
+        RouteResult::pass(PhysicalInput::Edge {
+            code: event.code,
+            down: event.down,
+        })
     }
 
     fn activate(
@@ -684,13 +516,6 @@ impl InputRouter {
                 created,
             });
         }
-        // A function match consumes the modifier prefix until the associated
-        // primary is released. If another ordinary input arrives later,
-        // flush_pending will replay the still-held modifiers in order so the
-        // user can continue a normal host chord without a timer-based
-        // guess.
-        self.captured_modifiers
-            .extend(self.pending_modifiers.iter().copied());
         self.active.insert(
             binding.shortcut.primary_code(),
             ActiveToken {
@@ -811,36 +636,6 @@ impl InputRouter {
             }
         }
     }
-
-    fn flush_pending(&mut self, result: &mut RouteResult) {
-        self.flush_pending_with_capture(result, true);
-    }
-
-    fn flush_pending_unmatched(&mut self, result: &mut RouteResult) {
-        self.flush_pending_with_capture(result, false);
-    }
-
-    fn flush_pending_with_capture(&mut self, result: &mut RouteResult, replay_captured: bool) {
-        if self.pending_modifiers.is_empty() {
-            return;
-        }
-        for code in self.pending_modifiers.iter().copied() {
-            if !replay_captured && self.captured_modifiers.contains(&code) {
-                self.suppressed_until_up.insert(code);
-                continue;
-            }
-            let input = PhysicalInput::Edge { code, down: true };
-
-            self.local_held.insert(code);
-            result.outputs.push(RoutedOutput::Replay(input));
-        }
-        self.pending_modifiers.clear();
-        self.captured_modifiers.clear();
-    }
-
-    fn flush_pending_local(&mut self, result: &mut RouteResult) {
-        self.flush_pending_unmatched(result);
-    }
 }
 
 #[cfg(test)]
@@ -895,6 +690,160 @@ mod tests {
         let mut router = InputRouter::new(&configs, 1);
         router.set_listening(true);
         router
+    }
+
+    fn observe_host(host: &mut BTreeSet<InputCode>, result: RouteResult) {
+        for output in result.outputs {
+            match output {
+                RoutedOutput::Replay(PhysicalInput::Edge { code, down })
+                | RoutedOutput::Local(PhysicalInput::Edge { code, down }) => {
+                    if down {
+                        host.insert(code);
+                    } else {
+                        host.remove(&code);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn repeated_modifier_taps_never_leave_a_host_key_down() {
+        for key in [0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0x5b, 0x5c] {
+            let mut router = router_with(
+                Shortcut::mouse(ModifierSet::from_keys([key]), MouseButton::Side2),
+                FunctionId::MediaPlayPause,
+            );
+            let mut host = BTreeSet::new();
+            for _ in 0..2 {
+                for down in [true, false] {
+                    observe_host(
+                        &mut host,
+                        router.route_event(event(InputCode::Key(key), down)),
+                    );
+                }
+            }
+            observe_host(&mut host, router.route_motion(1, 0));
+            observe_host(&mut host, router.route_wheel(120, 0));
+            assert!(host.is_empty(), "released modifier {key:#x} remained down");
+        }
+    }
+
+    #[test]
+    fn sprint_modifier_reaches_host_immediately_with_movement_key_held() {
+        let mut router = router_with(
+            Shortcut::mouse(ModifierSet::from_keys([0xa0]), MouseButton::Side2),
+            FunctionId::MediaPlayPause,
+        );
+        let mut host = BTreeSet::new();
+        observe_host(
+            &mut host,
+            router.route_event(event(InputCode::Key(0x57), true)),
+        );
+        for _ in 0..2 {
+            let down = router.route_event(event(InputCode::Key(0xa0), true));
+            assert!(
+                !down.consume,
+                "Shift must not wait for mouse movement or a timer"
+            );
+            observe_host(&mut host, down);
+            assert!(host.contains(&InputCode::Key(0xa0)));
+            observe_host(
+                &mut host,
+                router.route_event(event(InputCode::Key(0xa0), false)),
+            );
+            assert!(!host.contains(&InputCode::Key(0xa0)));
+        }
+        assert_eq!(host, BTreeSet::from([InputCode::Key(0x57)]));
+    }
+
+    #[test]
+    fn stopping_after_modifier_taps_never_injects_a_new_press() {
+        for reason in [RouterReason::ApplicationExit, RouterReason::ListenerStopped] {
+            let mut router = router_with(
+                Shortcut::mouse(ModifierSet::from_keys([0xa0]), MouseButton::Side2),
+                FunctionId::MediaPlayPause,
+            );
+            let mut host = BTreeSet::new();
+            for _ in 0..2 {
+                for down in [true, false] {
+                    observe_host(
+                        &mut host,
+                        router.route_event(event(InputCode::Key(0xa0), down)),
+                    );
+                }
+            }
+            observe_host(&mut host, router.terminate(reason));
+            observe_host(&mut host, router.terminate(RouterReason::ListenerStopped));
+            assert!(host.is_empty(), "shutdown left a released key down");
+        }
+    }
+
+    #[test]
+    fn held_modifiers_keep_their_release_across_lifecycle_changes() {
+        for key in [0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0x5b, 0x5c] {
+            for reason in [
+                RouterReason::BeginRecording,
+                RouterReason::ListenerStopped,
+                RouterReason::TransportLost,
+                RouterReason::SessionChanged,
+                RouterReason::ApplicationExit,
+            ] {
+                for local_release in [false, true] {
+                    let mut router = router_with(
+                        Shortcut::mouse(ModifierSet::from_keys([key]), MouseButton::Side2),
+                        FunctionId::MediaPlayPause,
+                    );
+                    let code = InputCode::Key(key);
+                    let mut host = BTreeSet::new();
+                    observe_host(&mut host, router.route_event(event(code, true)));
+                    assert!(host.contains(&code));
+                    assert!(router.terminate(reason).outputs.is_empty());
+                    let up = if local_release {
+                        router.route_local_event(event(code, false))
+                    } else {
+                        router.route_event(event(code, false))
+                    };
+                    assert!(!up.consume);
+                    observe_host(&mut host, up);
+                    observe_host(&mut host, router.route_motion(1, 0));
+                    assert!(host.is_empty());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn passthrough_releases_host_modifiers_and_isolates_their_physical_tail() {
+        for key in [0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0x5b, 0x5c] {
+            let mut router = router_with(
+                Shortcut::mouse(ModifierSet::from_keys([key]), MouseButton::Side2),
+                FunctionId::MediaPlayPause,
+            );
+            let code = InputCode::Key(key);
+            let mut host = BTreeSet::new();
+            observe_host(&mut host, router.route_event(event(code, true)));
+            let start = router.set_passthrough(true);
+            assert_eq!(
+                start.outputs,
+                [RoutedOutput::Replay(PhysicalInput::Edge {
+                    code,
+                    down: false
+                })]
+            );
+            observe_host(&mut host, start);
+            assert!(host.is_empty());
+            router.set_passthrough(false);
+            let up = router.route_event(event(code, false));
+            assert!(up.consume && up.outputs.is_empty());
+            for down in [true, false] {
+                let result = router.route_event(event(code, down));
+                assert!(!result.consume);
+                observe_host(&mut host, result);
+            }
+            assert!(host.is_empty());
+        }
     }
 
     #[test]
@@ -1020,7 +969,7 @@ mod tests {
             FunctionId::MediaPlayPause,
         );
         assert!(
-            router
+            !router
                 .route_event(event(InputCode::Key(0xa2), true))
                 .consume
         );
@@ -1074,7 +1023,7 @@ mod tests {
     }
 
     #[test]
-    fn unmatched_modifier_prefix_is_replayed_in_physical_order() {
+    fn modifier_edges_pass_in_physical_order_without_replay() {
         let mut router = router_with(
             Shortcut::keyboard(
                 ModifierSet {
@@ -1086,30 +1035,19 @@ mod tests {
             ),
             FunctionId::MediaNext,
         );
-        router.route_event(event(InputCode::Key(0xa2), true));
-        router.route_event(event(InputCode::Key(0xa0), true));
-        let release = router.route_event(event(InputCode::Key(0xa2), false));
-        assert!(matches!(
-            release.outputs.as_slice(),
-            [
-                RoutedOutput::Replay(PhysicalInput::Edge {
-                    code: InputCode::Key(0xa2),
-                    down: true
-                }),
-                RoutedOutput::Replay(PhysicalInput::Edge {
-                    code: InputCode::Key(0xa0),
-                    down: true
-                }),
-                RoutedOutput::Local(PhysicalInput::Edge {
-                    code: InputCode::Key(0xa2),
-                    down: false
-                }),
-            ]
-        ));
+        for (key, down) in [(0xa2, true), (0xa0, true), (0xa2, false), (0xa0, false)] {
+            let code = InputCode::Key(key);
+            let result = router.route_event(event(code, down));
+            assert!(!result.consume);
+            assert_eq!(
+                result.outputs,
+                [RoutedOutput::Local(PhysicalInput::Edge { code, down })]
+            );
+        }
     }
 
     #[test]
-    fn termination_suppresses_consumed_modifier_tail_up() {
+    fn termination_releases_local_modifier_but_suppresses_captured_primary() {
         let mut router = router_with(
             Shortcut::keyboard(
                 ModifierSet {
@@ -1121,11 +1059,24 @@ mod tests {
             FunctionId::MediaNext,
         );
         router.set_listening(true);
-        router.route_event(event(InputCode::Key(0xa2), true));
+        assert!(
+            !router
+                .route_event(event(InputCode::Key(0xa2), true))
+                .consume
+        );
         router.route_event(event(InputCode::Key(0x58), true));
         router.terminate(RouterReason::BeginRecording);
         let ctrl_up = router.route_event(event(InputCode::Key(0xa2), false));
-        assert!(ctrl_up.consume && ctrl_up.outputs.is_empty());
+        assert!(!ctrl_up.consume);
+        assert_eq!(
+            ctrl_up.outputs,
+            [RoutedOutput::Local(PhysicalInput::Edge {
+                code: InputCode::Key(0xa2),
+                down: false
+            })]
+        );
+        let primary_up = router.route_event(event(InputCode::Key(0x58), false));
+        assert!(primary_up.consume && primary_up.outputs.is_empty());
     }
 
     #[test]
@@ -1171,7 +1122,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unmatched_modifier_is_replayed_before_its_local_release() {
+    fn an_unmatched_modifier_passes_without_synthetic_input() {
         let mut router = router_with(
             Shortcut::keyboard(
                 ModifierSet {
@@ -1183,26 +1134,27 @@ mod tests {
             FunctionId::MediaNext,
         );
         let down = router.route_event(event(InputCode::Key(0xa2), true));
-        assert!(down.consume && down.outputs.is_empty());
+        assert!(!down.consume);
+        assert_eq!(
+            down.outputs,
+            [RoutedOutput::Local(PhysicalInput::Edge {
+                code: InputCode::Key(0xa2),
+                down: true
+            })]
+        );
         let up = router.route_event(event(InputCode::Key(0xa2), false));
         assert!(!up.consume);
         assert!(matches!(
             up.outputs.as_slice(),
-            [
-                RoutedOutput::Replay(PhysicalInput::Edge {
-                    code: InputCode::Key(0xa2),
-                    down: true
-                }),
-                RoutedOutput::Local(PhysicalInput::Edge {
-                    code: InputCode::Key(0xa2),
-                    down: false
-                }),
-            ]
+            [RoutedOutput::Local(PhysicalInput::Edge {
+                code: InputCode::Key(0xa2),
+                down: false
+            }),]
         ));
     }
 
     #[test]
-    fn a_consumed_modifier_stays_hidden_until_a_normal_input_needs_it() {
+    fn matching_a_shortcut_preserves_the_local_modifier_release() {
         let mut router = router_with(
             Shortcut::keyboard(
                 ModifierSet {
@@ -1213,15 +1165,34 @@ mod tests {
             ),
             FunctionId::MediaNext,
         );
-        router.route_event(event(InputCode::Key(0xa2), true));
-        router.route_event(event(InputCode::Key(0x58), true));
-        router.route_event(event(InputCode::Key(0x58), false));
+        assert!(
+            !router
+                .route_event(event(InputCode::Key(0xa2), true))
+                .consume
+        );
+        assert!(
+            router
+                .route_event(event(InputCode::Key(0x58), true))
+                .consume
+        );
+        assert!(
+            router
+                .route_event(event(InputCode::Key(0x58), false))
+                .consume
+        );
         let ctrl_up = router.route_event(event(InputCode::Key(0xa2), false));
-        assert!(ctrl_up.consume && ctrl_up.outputs.is_empty());
+        assert!(!ctrl_up.consume);
+        assert_eq!(
+            ctrl_up.outputs,
+            [RoutedOutput::Local(PhysicalInput::Edge {
+                code: InputCode::Key(0xa2),
+                down: false
+            })]
+        );
     }
 
     #[test]
-    fn ordinary_input_after_a_function_replays_the_still_held_modifier() {
+    fn ordinary_input_after_a_function_does_not_replay_the_modifier() {
         let mut router = router_with(
             Shortcut::keyboard(
                 ModifierSet {
@@ -1236,7 +1207,7 @@ mod tests {
         router.route_event(event(InputCode::Key(0x58), true));
         router.route_event(event(InputCode::Key(0x58), false));
         let ordinary = router.route_event(event(InputCode::Key(0x43), true));
-        assert!(ordinary.outputs.iter().any(|output| matches!(
+        assert!(!ordinary.outputs.iter().any(|output| matches!(
             output,
             RoutedOutput::Replay(PhysicalInput::Edge {
                 code: InputCode::Key(0xa2),
@@ -1312,7 +1283,7 @@ mod tests {
     }
 
     #[test]
-    fn editing_a_captured_prefix_does_not_replay_its_modifier() {
+    fn editing_a_shortcut_preserves_modifier_release_without_replay() {
         let shortcut = Shortcut::keyboard(
             ModifierSet {
                 ctrl: true,
@@ -1335,11 +1306,18 @@ mod tests {
             })
         )));
         let ctrl_up = router.route_event(event(InputCode::Key(0xa2), false));
-        assert!(ctrl_up.consume && ctrl_up.outputs.is_empty());
+        assert!(!ctrl_up.consume);
+        assert_eq!(
+            ctrl_up.outputs,
+            [RoutedOutput::Local(PhysicalInput::Edge {
+                code: InputCode::Key(0xa2),
+                down: false
+            })]
+        );
     }
 
     #[test]
-    fn local_window_event_bypasses_function_matching_and_keeps_prefix_order() {
+    fn local_window_event_bypasses_matching_and_preserves_modifier_release() {
         let mut router = router_with(
             Shortcut::keyboard(
                 ModifierSet {
@@ -1355,16 +1333,10 @@ mod tests {
         assert!(!down.consume);
         assert!(matches!(
             down.outputs.as_slice(),
-            [
-                RoutedOutput::Replay(PhysicalInput::Edge {
-                    code: InputCode::Key(0xa2),
-                    down: true
-                }),
-                RoutedOutput::Local(PhysicalInput::Edge {
-                    code: InputCode::Key(0x58),
-                    down: true
-                }),
-            ]
+            [RoutedOutput::Local(PhysicalInput::Edge {
+                code: InputCode::Key(0x58),
+                down: true
+            }),]
         ));
         let up = router.route_local_event(event(InputCode::Key(0x58), false));
         assert!(matches!(
@@ -1402,7 +1374,7 @@ mod tests {
                 router.set_listening(listening);
                 if shortcut.modifiers.ctrl {
                     assert!(
-                        router
+                        !router
                             .route_event(event(InputCode::Key(0x11), true))
                             .consume
                     );
@@ -1422,7 +1394,7 @@ mod tests {
                 assert!(outputs(&release).is_empty());
                 if shortcut.modifiers.ctrl {
                     assert!(
-                        router
+                        !router
                             .route_event(event(InputCode::Key(0x11), false))
                             .consume
                     );

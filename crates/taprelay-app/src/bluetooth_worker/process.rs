@@ -46,7 +46,9 @@ pub(super) struct Worker {
 impl Worker {
     pub fn start(initial: Command) -> Result<Self> {
         Self::start_command(
-            std::process::Command::new(std::env::current_exe()?).arg("--bluetooth-worker"),
+            std::process::Command::new(std::env::current_exe()?)
+                .arg("--bluetooth-worker")
+                .args(crate::logging::arguments()),
             initial,
         )
     }
@@ -144,7 +146,7 @@ impl Worker {
                 .spawn(move || {
                     use std::io::BufRead;
                     for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                        tracing::info!(worker = %line, "Bluetooth worker");
+                        crate::logging::forward_worker_line(&line);
                     }
                 })?,
         );

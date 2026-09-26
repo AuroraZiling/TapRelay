@@ -51,6 +51,7 @@ fn capture_target(function_id: &str, slot: i32) -> Result<CaptureTarget> {
 pub fn run() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     let startup = parse_startup_options(&args)?;
+    logging::configure_level(startup.log_level)?;
     let handoff = startup.handoff;
     if let Some(pid) = handoff {
         administrator::wait_for_parent(pid)?;
@@ -87,7 +88,7 @@ pub fn run() -> Result<()> {
     };
     slint::BackendSelector::new()
         .backend_name("winit".into())
-        .renderer_name("vello".into())
+        .renderer_name("software".into())
         .select()?;
     let ui = AppWindow::new()?;
     let mut startup_error = loaded.as_ref().err().map(|e| format!("{e:#}"));
@@ -254,12 +255,14 @@ enum PrivilegeMode {
 struct StartupOptions {
     handoff: Option<u32>,
     privilege: PrivilegeMode,
+    log_level: logging::LogLevel,
 }
 
 fn parse_startup_options(args: &[String]) -> Result<StartupOptions> {
     let mut options = StartupOptions {
         handoff: None,
         privilege: PrivilegeMode::Config,
+        log_level: logging::LogLevel::INFO,
     };
     let mut index = 0;
     while index < args.len() {
@@ -287,8 +290,20 @@ fn parse_startup_options(args: &[String]) -> Result<StartupOptions> {
                 );
                 index += 1;
             }
+            "--log-level" => {
+                let value = args
+                    .get(index + 1)
+                    .context("--log-level requires a level")?;
+                options.log_level = logging::parse_level(value)?;
+                index += 1;
+            }
+            argument if argument.starts_with("--log-level=") => {
+                options.log_level = logging::parse_level(&argument["--log-level=".len()..])?;
+            }
             argument => {
-                bail!("Unknown argument `{argument}`. Supported arguments: --user, --admin.")
+                bail!(
+                    "Unknown argument `{argument}`. Supported arguments: --user, --admin, --log-level <level>."
+                )
             }
         }
         index += 1;
@@ -320,6 +335,7 @@ mod startup_option_tests {
             StartupOptions {
                 handoff: None,
                 privilege: PrivilegeMode::Config,
+                log_level: logging::LogLevel::INFO,
             }
         );
     }
@@ -349,6 +365,7 @@ mod startup_option_tests {
             StartupOptions {
                 handoff: Some(1234),
                 privilege: PrivilegeMode::Config,
+                log_level: logging::LogLevel::INFO,
             }
         );
     }
@@ -358,6 +375,41 @@ mod startup_option_tests {
         assert!(parse_startup_options(&args(&["--user", "--admin"])).is_err());
         assert!(parse_startup_options(&args(&["--unexpected"])).is_err());
         assert!(parse_startup_options(&args(&["--handoff"])).is_err());
+    }
+
+    #[test]
+    fn log_level_accepts_both_forms_and_survives_handoff_arguments() {
+        for (name, level) in [
+            ("off", logging::LogLevel::OFF),
+            ("error", logging::LogLevel::ERROR),
+            ("warn", logging::LogLevel::WARN),
+            ("info", logging::LogLevel::INFO),
+            ("debug", logging::LogLevel::DEBUG),
+            ("trace", logging::LogLevel::TRACE),
+        ] {
+            let options = parse_startup_options(&args(&["--user", "--log-level", name])).unwrap();
+            assert_eq!(options.log_level, level);
+            let options = parse_startup_options(&args(&[
+                "--handoff",
+                "1234",
+                &format!("--log-level={}", name.to_ascii_uppercase()),
+            ]))
+            .unwrap();
+            assert_eq!(options.log_level, level);
+            assert_eq!(options.handoff, Some(1234));
+        }
+    }
+
+    #[test]
+    fn invalid_or_missing_log_level_is_rejected() {
+        for values in [
+            vec!["--log-level"],
+            vec!["--log-level="],
+            vec!["--log-level", "verbose"],
+            vec!["--log-level", "--user"],
+        ] {
+            assert!(parse_startup_options(&args(&values)).is_err());
+        }
     }
 }
 

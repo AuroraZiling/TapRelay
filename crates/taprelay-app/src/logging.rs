@@ -1,5 +1,40 @@
 use std::path::Path;
+pub use tracing_subscriber::filter::LevelFilter as LogLevel;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+static LEVEL: std::sync::OnceLock<LogLevel> = std::sync::OnceLock::new();
+
+pub fn parse_level(value: &str) -> anyhow::Result<LogLevel> {
+    match value.to_ascii_lowercase().as_str() {
+        "off" => Ok(LogLevel::OFF),
+        "error" => Ok(LogLevel::ERROR),
+        "warn" => Ok(LogLevel::WARN),
+        "info" => Ok(LogLevel::INFO),
+        "debug" => Ok(LogLevel::DEBUG),
+        "trace" => Ok(LogLevel::TRACE),
+        _ => anyhow::bail!(
+            "Invalid --log-level `{value}`. Expected off, error, warn, info, debug or trace."
+        ),
+    }
+}
+
+pub fn configure_level(level: LogLevel) -> anyhow::Result<()> {
+    LEVEL
+        .set(level)
+        .map_err(|_| anyhow::anyhow!("Logging level already configured"))
+}
+
+fn level() -> LogLevel {
+    LEVEL.get().copied().unwrap_or(LogLevel::INFO)
+}
+
+#[cfg(windows)]
+pub fn arguments() -> [String; 2] {
+    [
+        "--log-level".into(),
+        level().to_string().to_ascii_lowercase(),
+    ]
+}
 
 pub fn init(
     path: &Path,
@@ -20,6 +55,7 @@ pub fn init(
         .finish(file);
     let counter = writer.error_counter();
     tracing_subscriber::registry()
+        .with(level())
         .with(
             tracing_subscriber::fmt::layer()
                 .json()
@@ -62,6 +98,42 @@ pub fn cleanup(dir: &Path, today: time::Date) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(windows)]
+pub fn init_worker(args: &[String]) -> anyhow::Result<()> {
+    let requested = match args {
+        [] => LogLevel::INFO,
+        [flag, value] if flag == "--log-level" => parse_level(value)?,
+        _ => anyhow::bail!("Invalid Bluetooth worker arguments; expected --log-level <level>"),
+    };
+    configure_level(requested)?;
+    tracing_subscriber::registry()
+        .with(level())
+        .with(
+            tracing_subscriber::fmt::layer()
+                .json()
+                .with_writer(std::io::stderr),
+        )
+        .try_init()?;
+    Ok(())
+}
+
+#[cfg(windows)]
+pub fn forward_worker_line(line: &str) {
+    let level = serde_json::from_str::<serde_json::Value>(line)
+        .ok()
+        .and_then(|record| parse_level(record.get("level")?.as_str()?).ok())
+        // Unstructured stderr may be a panic or startup failure.
+        .unwrap_or(LogLevel::ERROR);
+    match level {
+        LogLevel::ERROR => tracing::error!(worker = line, "Bluetooth worker"),
+        LogLevel::WARN => tracing::warn!(worker = line, "Bluetooth worker"),
+        LogLevel::INFO => tracing::info!(worker = line, "Bluetooth worker"),
+        LogLevel::DEBUG => tracing::debug!(worker = line, "Bluetooth worker"),
+        LogLevel::TRACE => tracing::trace!(worker = line, "Bluetooth worker"),
+        _ => {}
+    }
 }
 
 pub fn install_panic_handler() {
@@ -122,6 +194,75 @@ pub fn cleanup_due(data: &Path) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn selected_level_filters_app_and_worker_logs_without_changing_severity() {
+        const CHILD: &str = "TAPRELAY_LEVEL_TEST_DIR";
+        const LEVEL: &str = "TAPRELAY_LEVEL_TEST_VALUE";
+        if let Some(dir) = std::env::var_os(CHILD) {
+            let requested = std::env::var(LEVEL).unwrap();
+            configure_level(parse_level(&requested).unwrap()).unwrap();
+            assert_eq!(arguments(), ["--log-level".to_owned(), requested]);
+            let (_, guard) = init(&Path::new(&dir).join("config.json")).unwrap();
+            tracing::error!("app error");
+            tracing::warn!("app warn");
+            tracing::info!("app info");
+            tracing::debug!("app debug");
+            tracing::trace!("app trace");
+            for level in ["ERROR", "WARN", "INFO", "DEBUG", "TRACE"] {
+                forward_worker_line(
+                    &serde_json::json!({"level": level, "fields": {"message": "worker"}})
+                        .to_string(),
+                );
+            }
+            forward_worker_line("unstructured worker failure");
+            drop(guard);
+            return;
+        }
+        for (count, requested) in ["off", "error", "warn", "info", "debug", "trace"]
+            .into_iter()
+            .enumerate()
+        {
+            let dir = tempfile::tempdir().unwrap();
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "logging::tests::selected_level_filters_app_and_worker_logs_without_changing_severity", "--nocapture"])
+                .env(CHILD, dir.path()).env(LEVEL, requested).output().unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            let file = std::fs::read_dir(dir.path().join("logs"))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+                .path();
+            let text = std::fs::read_to_string(file).unwrap();
+            let records: Vec<serde_json::Value> = text
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            assert_eq!(
+                records.len(),
+                count * 2 + usize::from(count > 0),
+                "{requested}"
+            );
+            for record in records {
+                let actual = record["level"].as_str().unwrap();
+                assert!(parse_level(actual).unwrap() <= parse_level(requested).unwrap());
+                if let Some(worker) = record["fields"]["worker"].as_str() {
+                    if let Ok(worker) = serde_json::from_str::<serde_json::Value>(worker) {
+                        assert_eq!(record["level"], worker["level"]);
+                    } else {
+                        assert_eq!(actual, "ERROR");
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn panic_is_written_without_a_tracing_subscriber() {
         const CHILD: &str = "TAPRELAY_PANIC_TEST_DIR";
@@ -209,6 +350,11 @@ mod tests {
                 tracing::info!(count = 42_u64, enabled = true, "{MESSAGE}");
                 tracing::warn!("warning");
                 tracing::error!("failure");
+                tracing::debug!("application debug detail");
+                tracing::trace!(target: "wgpu_core::device::queue", "render submission");
+                tracing::debug!(target: "naga", "shader detail");
+                tracing::info!(target: "wgpu_hal", "adapter detail");
+                tracing::warn!(target: "wgpu_hal", "driver warning");
             }
             assert_eq!(counter.dropped_lines(), 0);
             drop(guard);
@@ -248,7 +394,7 @@ mod tests {
                     .collect::<Vec<_>>()
             })
             .collect();
-        assert_eq!(records.len(), 3);
+        assert_eq!(records.len(), 5);
         let info = records
             .iter()
             .find(|record| record["level"] == "INFO")
@@ -262,5 +408,10 @@ mod tests {
         assert_eq!(info["spans"][0]["name"], "operation");
         assert!(records.iter().any(|record| record["level"] == "WARN"));
         assert!(records.iter().any(|record| record["level"] == "ERROR"));
+        assert!(
+            records
+                .iter()
+                .any(|record| record["fields"]["message"] == "driver warning")
+        );
     }
 }

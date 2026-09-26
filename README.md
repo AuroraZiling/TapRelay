@@ -31,6 +31,7 @@ This is a personal project, so device compatibility is at the *works on my machi
 ## Settings and limitations
 
 - TapRelay stores `config.json` and the `logs/` folder beside the executable.
+- Use `TapRelay.exe --log-level debug` to choose the startup log level: `off`, `error`, `warn`, `info` (default), `debug`, or `trace`.
 - When passthrough is off, Shift, Ctrl, Alt and Win go directly to this computer. Matching shortcuts consume only their primary key or mouse button; modifier keys retain their normal behavior, including Alt/Win system actions.
 - A Bluetooth connection and a usable HID session are separate states. If the receiver is paired but the session is not ready, check its connection to the PC and the status shown in TapRelay.
 - Input hooks and Bluetooth behavior need testing on real hardware. Automated tests do not establish compatibility with a particular receiver, driver or game.

@@ -20,7 +20,7 @@ time = { version = "0.3.55", features = ["formatting"] }
 slint = { version = "1.18.1", default-features = false, features = [
     "std",
     "backend-winit",
-    "renderer-vello",
+    "renderer-software",
     "compat-1-2",
     "accessibility",
 ] }
@@ -42,7 +42,6 @@ lucide-slint = "1.47.0"
 embed-resource = "3.0.11"
 
 [dev-dependencies]
-slint = { version = "1.18.1", default-features = false, features = ["renderer-software"] }
 time = { version = "0.3.55", features = ["macros"] }
 i-slint-backend-testing = { version = "1.18.1", features = [
     "renderer-software",

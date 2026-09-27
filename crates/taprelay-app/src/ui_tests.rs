@@ -60,7 +60,7 @@ fn render_all_views_without_hardware() {
         slint::platform::software_renderer::RepaintBufferType::ReusedBuffer,
     );
     slint::platform::set_platform(Box::new(SoftwareTestPlatform {
-        window: render_window,
+        window: render_window.clone(),
     }))
     .unwrap();
     let ui = AppWindow::new().unwrap();
@@ -68,6 +68,7 @@ fn render_all_views_without_hardware() {
     check_environment_failure(&ui);
     check_binding_capture(&ui);
     check_navigation_and_settings(&ui);
+    check_surface_redraw(&ui, &render_window);
     check_binding_layouts_and_actions(&ui);
     check_about_links(&ui);
     check_runtime_feedback(&ui);
@@ -440,6 +441,35 @@ fn check_navigation_and_settings(ui: &AppWindow) {
     ui.set_page(3);
     let _ = ui.window().take_snapshot().unwrap();
 
+    for locale in ["en", "zh-cn"] {
+        i18n::apply(ui, locale);
+        for hz in taprelay_core::passthrough::MOUSE_REPORT_RATES {
+            ui.set_passthrough_mouse_report_rate(i32::from(hz));
+            let snapshot = ui.window().take_snapshot().unwrap();
+            actions.borrow_mut().clear();
+            let button = binding_element(ui, &format!("setting-mouse-report-rate-{hz}"));
+            assert!(button.absolute_position().x + button.size().width <= 1000.);
+            button.invoke_accessible_default_action();
+            assert_eq!(
+                *actions.borrow(),
+                vec![("set-passthrough-mouse-report-rate".into(), hz.to_string())]
+            );
+            if hz == 125
+                && let Some(dir) = std::env::var_os("TAPRELAY_UI_RENDER_DIR")
+            {
+                let dir = std::path::PathBuf::from(dir);
+                std::fs::create_dir_all(&dir).unwrap();
+                let mut ppm =
+                    format!("P6\n{} {}\n255\n", snapshot.width(), snapshot.height()).into_bytes();
+                for pixel in snapshot.as_slice() {
+                    ppm.extend_from_slice(&[pixel.r, pixel.g, pixel.b]);
+                }
+                std::fs::write(dir.join(format!("mouse-report-rate-{locale}.ppm")), ppm).unwrap();
+            }
+        }
+    }
+    i18n::apply(ui, "en");
+
     // The remaining log UI opens the on-disk directory from Settings.
     ui.window().dispatch_event(WindowEvent::PointerScrolled {
         position: slint::LogicalPosition::new(500., 500.),
@@ -509,6 +539,68 @@ fn check_navigation_and_settings(ui: &AppWindow) {
     }
     ui.window().set_size(slint::LogicalSize::new(1000., 700.));
     let _ = ui.window().take_snapshot().unwrap();
+}
+
+fn check_surface_redraw(
+    ui: &AppWindow,
+    render_window: &slint::platform::software_renderer::MinimalSoftwareWindow,
+) {
+    // Seed the retained renderer cache and confirm unchanged UI has no damage.
+    use slint::platform::software_renderer::PremultipliedRgbaColor;
+    let mut frame = vec![PremultipliedRgbaColor::default(); 1000 * 700];
+    ui.window().request_redraw();
+    let mut first_region = None;
+    assert!(render_window.draw_if_needed(|renderer| {
+        first_region = Some(renderer.render(frame.as_mut_slice(), 1000));
+    }));
+    assert_eq!(
+        first_region.unwrap().bounding_box_size(),
+        slint::PhysicalSize::new(1000, 700)
+    );
+
+    ui.window().request_redraw();
+    let mut unchanged_region = None;
+    assert!(render_window.draw_if_needed(|renderer| {
+        unchanged_region = Some(renderer.render(frame.as_mut_slice(), 1000));
+    }));
+    assert_eq!(
+        unchanged_region.unwrap().bounding_box_size(),
+        slint::PhysicalSize::default()
+    );
+
+    #[cfg(windows)]
+    {
+        let expected = frame.clone();
+        // Model a lost surface, without minimizing or changing any UI property.
+        // Exercise the same invalidation used before native RedrawRequested.
+        for _ in 0..3 {
+            frame.fill(PremultipliedRgbaColor::default());
+            crate::window_rendering::invalidate_surface(ui.window());
+            ui.window().request_redraw();
+            assert!(render_window.draw_if_needed(|renderer| {
+                let region = renderer.render(frame.as_mut_slice(), 1000);
+                assert_eq!(
+                    region.bounding_box_origin(),
+                    slint::PhysicalPosition::default()
+                );
+                assert_eq!(
+                    region.bounding_box_size(),
+                    slint::PhysicalSize::new(1000, 700)
+                );
+            }));
+            assert!(
+                frame
+                    .iter()
+                    .zip(&expected)
+                    .all(|(a, b)| (a.red, a.green, a.blue, a.alpha)
+                        == (b.red, b.green, b.blue, b.alpha)),
+                "expose must recover every pixel without UI changes"
+            );
+            assert!(
+                !render_window.draw_if_needed(|_| panic!("expose must not create a redraw loop"))
+            );
+        }
+    }
 }
 
 fn check_binding_layouts_and_actions(ui: &AppWindow) {

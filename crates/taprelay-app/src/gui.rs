@@ -91,6 +91,8 @@ pub fn run() -> Result<()> {
         .renderer_name("software".into())
         .select()?;
     let ui = AppWindow::new()?;
+    #[cfg(windows)]
+    crate::window_rendering::install(ui.window());
     let mut startup_error = loaded.as_ref().err().map(|e| format!("{e:#}"));
     if let Err(e) = config::check_writable(&path) {
         startup_error = Some(format!("{e:#}"));

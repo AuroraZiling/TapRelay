@@ -337,6 +337,7 @@ fn only_matching_arm_authorizes_capture_and_losing_input_returns_to_media() {
     assert!(!h.handle.link.begin());
     h.arm();
     h.handle.link.set_mouse_percent(50);
+    h.handle.link.set_mouse_report_rate(500);
     h.handle.link.set_reverse_scroll(true);
     assert!(
         h.handle
@@ -352,6 +353,7 @@ fn only_matching_arm_authorizes_capture_and_losing_input_returns_to_media() {
                 generation: 3,
                 event: Event::Motion { dx: 5, dy: -2 },
                 mouse_percent: 50,
+                mouse_report_rate: 500,
                 reverse_scroll: true,
                 ..
             }

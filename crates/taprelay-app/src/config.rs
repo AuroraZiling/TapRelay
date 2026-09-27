@@ -41,6 +41,8 @@ pub struct Options {
     #[serde(default = "default_mouse_percent")]
     pub passthrough_mouse_percent: u16,
     #[serde(default)]
+    pub passthrough_mouse_report_rate: u16,
+    #[serde(default)]
     pub passthrough_reverse_scroll: bool,
     pub always_admin: bool,
     pub auto_listen: bool,
@@ -57,6 +59,7 @@ impl Default for Options {
     fn default() -> Self {
         Self {
             passthrough_mouse_percent: default_mouse_percent(),
+            passthrough_mouse_report_rate: 0,
             passthrough_reverse_scroll: false,
             always_admin: true,
             auto_listen: true,
@@ -175,6 +178,11 @@ impl Device {
 impl Config {
     pub fn validate(&self) -> Result<()> {
         ensure!(
+            taprelay_core::passthrough::MOUSE_REPORT_RATES
+                .contains(&self.options.passthrough_mouse_report_rate),
+            "Invalid passthrough mouse report rate"
+        );
+        ensure!(
             (1..=100).contains(&self.options.passthrough_mouse_percent),
             "Passthrough mouse percentage must be between 1 and 100"
         );
@@ -263,6 +271,37 @@ impl SaveQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mouse_report_rate_defaults_for_old_configs_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut json = serde_json::to_value(Config::default()).unwrap();
+        json["options"]
+            .as_object_mut()
+            .unwrap()
+            .remove("passthrough_mouse_report_rate");
+        let bytes = serde_json::to_vec(&json).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        let mut config = Config::load(&path).unwrap();
+        assert_eq!(config.options.passthrough_mouse_report_rate, 0);
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        for hz in taprelay_core::passthrough::MOUSE_REPORT_RATES {
+            config.options.passthrough_mouse_report_rate = hz;
+            config.save(&path).unwrap();
+            assert_eq!(
+                Config::load(&path)
+                    .unwrap()
+                    .options
+                    .passthrough_mouse_report_rate,
+                hz
+            );
+        }
+        for hz in [1, 124, 1001, u16::MAX] {
+            config.options.passthrough_mouse_report_rate = hz;
+            assert!(config.validate().is_err());
+        }
+    }
 
     #[test]
     fn loading_removes_only_standalone_primary_mouse_bindings() {

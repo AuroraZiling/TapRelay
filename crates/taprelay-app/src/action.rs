@@ -33,6 +33,8 @@ actions! {
     SetStartHidden => "set-start-hidden",
     SetAutoListen => "set-auto-listen",
     SetPassthroughReverseScroll => "set-passthrough-reverse-scroll",
+    // Payload: target Hz, or "0" to follow the Bluetooth connection interval.
+    SetPassthroughMouseReportRate => "set-passthrough-mouse-report-rate",
     SetCloseToTray => "set-close-to-tray",
     SetAlwaysAdmin => "set-always-admin",
     SetNotifications => "set-notifications",

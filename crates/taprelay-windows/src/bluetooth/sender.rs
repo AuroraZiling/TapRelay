@@ -284,6 +284,15 @@ impl Worker {
     fn run(&mut self, commands: mpsc::Receiver<Command>, input: mpsc::Receiver<Packet>) {
         while !self.stopping.load(Ordering::Acquire) {
             self.reconcile();
+            let requested_hz = self.link.mouse_report_rate();
+            if self.schedule.set_mouse_report_rate(requested_hz) {
+                tracing::info!(
+                    requested_hz,
+                    scheduled_interval_us = self.schedule.mouse_interval().as_micros() as u64,
+                    connection_cadence_us = self.schedule.interval().as_micros() as u64,
+                    "Mouse report cadence updated"
+                );
+            }
             let command = match commands.try_recv() {
                 Ok(command) => Some(command),
                 Err(mpsc::TryRecvError::Disconnected) => break,
@@ -306,32 +315,34 @@ impl Worker {
                 }
                 continue;
             }
-            if self.schedule.wait(Instant::now()).is_zero() {
-                match self.schedule.take(&input, &self.link, Instant::now()) {
-                    Ok(Some(packet)) => {
-                        if !self.link.accepts(&packet) {
-                            continue;
-                        }
-                        self.epoch = packet.epoch;
-                        if let Err(e) = self.event(packet.event) {
-                            self.fail(&e);
-                        }
+            match self.schedule.take(&input, &self.link, Instant::now()) {
+                Ok(Some(packet)) => {
+                    if !self.link.accepts(&packet) {
                         continue;
                     }
-                    Err(error) => {
-                        self.fail(&BackendError::Unavailable(error.into()));
-                        continue;
+                    self.epoch = packet.epoch;
+                    if let Err(e) = self.event(packet.event) {
+                        self.fail(&e);
                     }
-                    Ok(None) => {}
+                    continue;
                 }
+                Err(error) => {
+                    self.fail(&BackendError::Unavailable(error.into()));
+                    continue;
+                }
+                Ok(None) => {}
             }
+            let input_wait = self.schedule.input_wait(Instant::now());
             let wait = self
                 .pulses
                 .iter()
-                .map(|(due, _, _)| due.saturating_duration_since(Instant::now()))
+                .map(|(due, _, _)| {
+                    due.saturating_duration_since(Instant::now())
+                        .max(self.schedule.wait(Instant::now()))
+                })
                 .min()
                 .unwrap_or(Duration::from_millis(10))
-                .max(self.schedule.wait(Instant::now()))
+                .min(input_wait.unwrap_or(Duration::from_millis(10)))
                 .min(Duration::from_millis(10));
             thread::park_timeout(wait);
         }
@@ -374,6 +385,7 @@ impl Worker {
                 if previous != self.schedule.interval() {
                     tracing::info!(
                         interval_us = self.schedule.interval().as_micros() as u64,
+                        mouse_interval_us = self.schedule.mouse_interval().as_micros() as u64,
                         "HID report cadence changed"
                     );
                 }
@@ -545,6 +557,14 @@ impl Worker {
         self.notify(kind, bytes, &endpoint)
     }
 
+    fn report_wait(&self, kind: ReportKind) -> Duration {
+        if kind == ReportKind::Mouse {
+            self.schedule.mouse_wait(Instant::now())
+        } else {
+            self.schedule.wait(Instant::now())
+        }
+    }
+
     fn notify(
         &mut self,
         kind: ReportKind,
@@ -556,7 +576,7 @@ impl Worker {
         }
         let generation = self.link.generation();
         let epoch = self.link.epoch();
-        while !self.schedule.wait(Instant::now()).is_zero() {
+        while !self.report_wait(kind).is_zero() {
             if self.stopping.load(Ordering::Acquire)
                 || self.detaching.load(Ordering::Acquire)
                 || generation != self.link.generation()
@@ -564,11 +584,7 @@ impl Worker {
             {
                 return Err(BackendError::Stale);
             }
-            thread::park_timeout(
-                self.schedule
-                    .wait(Instant::now())
-                    .min(Duration::from_millis(5)),
-            );
+            thread::park_timeout(self.report_wait(kind).min(Duration::from_millis(5)));
         }
         self.schedule.sent(Instant::now());
         let mut current = bytes.to_vec();

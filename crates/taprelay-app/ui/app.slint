@@ -56,6 +56,7 @@ export component AppWindow inherits Window {
     in property <string> app-version;
     in-out property <bool> auto-listen;
     in-out property <bool> passthrough-reverse-scroll;
+    in property <int> passthrough-mouse-report-rate;
     in-out property <bool> auto-start;
     in-out property <bool> start-hidden;
     in-out property <bool> close-to-tray;
@@ -163,6 +164,7 @@ export component AppWindow inherits Window {
                     app-version: root.app-version;
                     auto-listen <=> root.auto-listen;
                     passthrough-reverse-scroll <=> root.passthrough-reverse-scroll;
+                    passthrough-mouse-report-rate: root.passthrough-mouse-report-rate;
                     auto-start <=> root.auto-start;
                     close-to-tray <=> root.close-to-tray;
                     data-directory: root.data-directory;

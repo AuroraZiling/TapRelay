@@ -77,6 +77,7 @@ pub struct Runtime {
     startup_restore: Option<taprelay_core::state::Target>,
     startup_retry_at: Option<Instant>,
     passthrough_mouse_percent: u16,
+    passthrough_mouse_report_rate: u16,
     passthrough_reverse_scroll: bool,
 }
 
@@ -123,6 +124,7 @@ impl Runtime {
             startup_restore,
             startup_retry_at: None,
             passthrough_mouse_percent: config.options.passthrough_mouse_percent,
+            passthrough_mouse_report_rate: config.options.passthrough_mouse_report_rate,
             passthrough_reverse_scroll: config.options.passthrough_reverse_scroll,
         }
     }
@@ -303,6 +305,7 @@ impl Runtime {
                     .and_then(|transport| transport.input_link())
                     .inspect(|link| {
                         link.set_mouse_percent(self.passthrough_mouse_percent);
+                        link.set_mouse_report_rate(self.passthrough_mouse_report_rate);
                         link.set_reverse_scroll(self.passthrough_reverse_scroll);
                     }),
             );
@@ -322,6 +325,17 @@ impl Runtime {
                 )
             });
         self.apply_router_outputs(result);
+    }
+
+    pub fn set_passthrough_mouse_report_rate(&mut self, hz: u16) {
+        self.passthrough_mouse_report_rate = hz;
+        if let Some(link) = self
+            .transport
+            .as_ref()
+            .and_then(|transport| transport.input_link())
+        {
+            link.set_mouse_report_rate(hz);
+        }
     }
 
     pub fn set_passthrough_reverse_scroll(&mut self, reverse: bool) {

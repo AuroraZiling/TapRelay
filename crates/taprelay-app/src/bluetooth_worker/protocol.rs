@@ -29,6 +29,7 @@ pub enum Command {
         captured_ms: u64,
         event: Event,
         mouse_percent: u16,
+        mouse_report_rate: u16,
         reverse_scroll: bool,
     },
     Media {

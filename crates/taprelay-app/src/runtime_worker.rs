@@ -427,6 +427,18 @@ impl RuntimeHandle {
     pub fn set_listening(&mut self, on: bool) -> Result<()> {
         self.update(move |r| r.set_listening(on))
     }
+    pub fn set_passthrough_mouse_report_rate(&mut self, hz: u16) -> Result<()> {
+        anyhow::ensure!(
+            taprelay_core::passthrough::MOUSE_REPORT_RATES.contains(&hz),
+            "Invalid passthrough mouse report rate"
+        );
+        self.update(move |runtime| {
+            runtime.set_passthrough_mouse_report_rate(hz);
+            Ok(())
+        })?;
+        self.config.options.passthrough_mouse_report_rate = hz;
+        Ok(())
+    }
     pub fn set_passthrough_reverse_scroll(&mut self, reverse: bool) -> Result<()> {
         self.update(move |runtime| {
             runtime.set_passthrough_reverse_scroll(reverse);

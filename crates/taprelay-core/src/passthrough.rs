@@ -13,6 +13,7 @@ use std::{
 
 pub const QUEUE_CAPACITY: usize = 1024;
 pub const MAX_INPUT_AGE: Duration = Duration::from_millis(250);
+pub const MOUSE_REPORT_RATES: [u16; 6] = [0, 60, 125, 250, 500, 1000];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum KeyUsage {
@@ -62,6 +63,7 @@ struct Shared {
     revision: Arc<AtomicU64>,
     ready: AtomicU64,
     mouse_percent: AtomicU64,
+    mouse_report_rate: AtomicU64,
     reverse_scroll: AtomicBool,
     // Zero revokes capture; odd tokens authorize one start, even tokens own
     // an active session. One CAS prevents a racing stop from being undone.
@@ -96,6 +98,7 @@ impl InputLink {
                     revision,
                     ready: AtomicU64::new(0),
                     mouse_percent: AtomicU64::new(100),
+                    mouse_report_rate: AtomicU64::new(0),
                     reverse_scroll: AtomicBool::new(false),
                     mode: AtomicU64::new(0),
                     next_epoch: AtomicU64::new(1),
@@ -123,6 +126,18 @@ impl InputLink {
 
     pub fn mouse_percent(&self) -> u16 {
         self.shared.mouse_percent.load(Ordering::Acquire) as u16
+    }
+
+    /// Zero follows the connection interval; other values are target reports per second.
+    pub fn set_mouse_report_rate(&self, hz: u16) {
+        self.shared
+            .mouse_report_rate
+            .store(u64::from(hz.min(1000)), Ordering::Release);
+        self.wake();
+    }
+
+    pub fn mouse_report_rate(&self) -> u16 {
+        self.shared.mouse_report_rate.load(Ordering::Acquire) as u16
     }
 
     pub fn set_reverse_scroll(&self, reverse: bool) {

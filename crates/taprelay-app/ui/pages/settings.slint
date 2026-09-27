@@ -44,6 +44,7 @@ export component SettingsPage inherits ScrollArea {
     in property <string> app-version;
     in-out property <bool> auto-listen;
     in-out property <bool> passthrough-reverse-scroll;
+    in property <int> passthrough-mouse-report-rate;
     in-out property <bool> auto-start;
     in-out property <bool> close-to-tray;
     in property <string> data-directory;
@@ -93,6 +94,21 @@ export component SettingsPage inherits ScrollArea {
         }
         Section {
             title: I18n.text.settings-passthrough;
+            VerticalLayout {
+                spacing: 8px;
+                Label { text: I18n.text.settings-passthrough-mouse-report-rate; }
+                HorizontalLayout {
+                    alignment: start;
+                    spacing: 6px;
+                    for rate in [0, 60, 125, 250, 500, 1000]: Button {
+                        text: rate == 0 ? I18n.text.settings-passthrough-mouse-report-rate-auto : rate + " Hz";
+                        accessible-id: "setting-mouse-report-rate-" + rate;
+                        variant: root.passthrough-mouse-report-rate == rate ? secondary : outline;
+                        clicked => { root.action("set-passthrough-mouse-report-rate", rate); }
+                    }
+                }
+                Caption { text: I18n.text.settings-passthrough-mouse-report-rate-hint; }
+            }
             SwitchRow {
                 label: I18n.text.settings-passthrough-reverse-scroll;
                 description: I18n.text.settings-passthrough-reverse-scroll-hint;

@@ -438,6 +438,7 @@ impl<E: Execution> Supervisor<E> {
                 captured_ms: protocol::captured_ms(packet.captured),
                 event: packet.event,
                 mouse_percent: self.link.mouse_percent(),
+                mouse_report_rate: self.link.mouse_report_rate(),
                 reverse_scroll: self.link.reverse_scroll(),
             })?;
         }

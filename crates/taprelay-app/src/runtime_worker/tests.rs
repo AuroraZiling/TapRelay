@@ -17,6 +17,19 @@ fn idle(handle: &mut RuntimeHandle) {
     until(handle, |handle| !handle.busy());
 }
 
+#[test]
+fn mouse_report_rate_updates_persist_and_invalid_values_leave_config_unchanged() {
+    let mut handle = RuntimeHandle::new(Config::default()).unwrap();
+    for hz in taprelay_core::passthrough::MOUSE_REPORT_RATES {
+        handle.set_passthrough_mouse_report_rate(hz).unwrap();
+        idle(&mut handle);
+        assert_eq!(handle.config.options.passthrough_mouse_report_rate, hz);
+        assert!(handle.take_notice().is_none());
+    }
+    assert!(handle.set_passthrough_mouse_report_rate(1001).is_err());
+    assert_eq!(handle.config.options.passthrough_mouse_report_rate, 1000);
+}
+
 fn block(handle: &mut RuntimeHandle) -> mpsc::Sender<()> {
     let (entered, started) = mpsc::channel();
     let (release, wait) = mpsc::channel();

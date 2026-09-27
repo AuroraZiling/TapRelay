@@ -70,6 +70,7 @@ pub fn run() -> Result<()> {
                 captured_ms,
                 event,
                 mouse_percent,
+                mouse_report_rate,
                 reverse_scroll,
             }) => {
                 if generation == link.generation() && link.epoch() != 0 {
@@ -77,6 +78,7 @@ pub fn run() -> Result<()> {
                         protocol::age(captured_ms).filter(|age| *age <= MAX_INPUT_AGE)
                     {
                         link.set_mouse_percent(mouse_percent);
+                        link.set_mouse_report_rate(mouse_report_rate);
                         link.set_reverse_scroll(reverse_scroll);
                         link.submit(event, Instant::now() - age);
                     } else {

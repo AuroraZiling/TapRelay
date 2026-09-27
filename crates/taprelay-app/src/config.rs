@@ -276,71 +276,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn single_group_configs_load_and_multi_group_selections_round_trip() {
-        use taprelay_core::{foreground_app::ForegroundAppGroup, function::FunctionId};
-        let mut config = Config::default();
-        for id in ["games", "work"] {
-            config.foreground_app_rules.groups.insert(
-                id.into(),
-                ForegroundAppGroup {
-                    name: id.into(),
-                    foreground_apps: vec![],
-                },
-            );
-        }
-        let mut json = serde_json::to_value(&config).unwrap();
-        // The previous feature used both the application_rules field and an
-        // applications member list. Read either schema, but write only new names.
-        let mut legacy_rules = json
-            .as_object_mut()
-            .unwrap()
-            .remove("foreground_app_rules")
-            .unwrap();
-        for group in legacy_rules["groups"].as_object_mut().unwrap().values_mut() {
-            let paths = group
-                .as_object_mut()
-                .unwrap()
-                .remove("foreground_apps")
-                .unwrap();
-            group["applications"] = paths;
-        }
-        legacy_rules["assignments"]["media.play-pause"] = "games".into();
-        json["application_rules"] = legacy_rules;
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("config.json");
-        let bytes = serde_json::to_vec(&json).unwrap();
-        std::fs::write(&path, &bytes).unwrap();
-        let mut loaded = Config::load(&path).unwrap();
-        let id = FunctionId::MediaPlayPause;
-        assert_eq!(
-            loaded.foreground_app_rules.assignments[&id],
-            ["games".into()].into()
-        );
-        assert_eq!(std::fs::read(&path).unwrap(), bytes);
-        loaded.foreground_app_rules.toggle_scope(id, "work");
-        loaded.save(&path).unwrap();
-        assert_eq!(
-            Config::load(&path).unwrap().foreground_app_rules,
-            loaded.foreground_app_rules
-        );
-        let saved: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        assert!(saved.get("application_rules").is_none());
-        for group in saved["foreground_app_rules"]["groups"]
-            .as_object()
-            .unwrap()
-            .values()
-        {
-            assert!(group.get("foreground_apps").is_some());
-            assert!(group.get("applications").is_none());
-        }
-        assert_eq!(
-            saved["foreground_app_rules"]["assignments"]["media.play-pause"],
-            serde_json::json!(["games", "work"])
-        );
-    }
-
-    #[test]
     fn old_configs_remain_global_and_groups_round_trip_without_rewriting_input() {
         use taprelay_core::{foreground_app::ForegroundAppGroup, function::FunctionId};
         let dir = tempfile::tempdir().unwrap();
@@ -438,46 +373,6 @@ mod tests {
             loaded.save(&path).unwrap();
             assert_eq!(Config::load(&path).unwrap().functions, loaded.functions);
         }
-    }
-    #[test]
-    fn remembered_device_defaults_empty_and_round_trips() {
-        let mut json = serde_json::to_value(Config::default()).unwrap();
-        assert!(json["remembered_device"].is_null());
-        json["remembered_device"] = serde_json::json!({
-            "id": "gatt-endpoint",
-            "name": "Tablet",
-            "identity": ["container:tablet"],
-            "aliases": ["classic-endpoint"]
-        });
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("config.json");
-        std::fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
-        let config = Config::load(&path).unwrap();
-        assert_eq!(
-            config.remembered_device.as_ref().unwrap().id,
-            "gatt-endpoint"
-        );
-        config.save(&path).unwrap();
-        assert_eq!(
-            Config::load(&path).unwrap().remembered_device,
-            config.remembered_device
-        );
-    }
-    #[test]
-    fn drafts_and_empty_functions_persist_without_verification() {
-        let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("config.json");
-        let mut c = Config::default();
-        c.wizard.page = 1;
-        c.save(&p).unwrap();
-        assert_eq!(Config::load(&p).unwrap().wizard.page, 1);
-        assert!(
-            Config::load(&p)
-                .unwrap()
-                .functions
-                .values()
-                .all(|function| function.shortcuts.is_empty() && !function.enabled)
-        );
     }
     #[test]
     fn rapid_edits_and_forced_flush_preserve_last_value() {

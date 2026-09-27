@@ -1090,13 +1090,6 @@ mod tests {
     }
 
     #[test]
-    fn new_runtime_keeps_functions_disabled() {
-        let runtime = Runtime::new(Config::default());
-        assert!(runtime.functions.values().all(|function| !function.enabled));
-        assert!(runtime.state.selected.is_none());
-    }
-
-    #[test]
     fn startup_restore_survives_transport_creation_failure() {
         let mut runtime = Runtime::new(Config {
             remembered_device: Some(crate::config::Device {

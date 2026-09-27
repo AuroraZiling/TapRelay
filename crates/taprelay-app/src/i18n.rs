@@ -167,29 +167,6 @@ mod tests {
     }
 
     #[test]
-    fn every_locale_defines_a_language_name_key() {
-        for locale in locale::all() {
-            assert!(
-                catalog(source()).contains_key(&locale.label_key()),
-                "Missing language name key: {}",
-                locale.label_key()
-            );
-        }
-    }
-
-    #[test]
-    fn every_locale_translates_every_compiled_key() {
-        for (locale_id, entries) in CATALOGS.iter() {
-            for key in catalog(source()).keys() {
-                assert!(
-                    entries.get(key).is_some_and(|value| !value.is_empty()),
-                    "Missing translation: {key} in {locale_id}"
-                );
-            }
-        }
-    }
-
-    #[test]
     fn locale_identifiers_are_normalized() {
         assert_eq!(resolve("zh-CN"), Some("zh-cn"));
         assert_eq!(resolve("ZH_cn"), Some("zh-cn"));

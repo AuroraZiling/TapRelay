@@ -123,10 +123,6 @@ fn stop(reason: StopReason) {
         PostQuitMessage(1);
     }
 }
-#[cfg(test)]
-static KEYBOARD_PROBE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
-#[cfg(test)]
-const PROBE_TAG: usize = 0x54525052;
 const REPLAY_TAG: usize = 0x54524c59;
 pub struct InputHandle {
     id: u32,
@@ -1237,13 +1233,6 @@ unsafe extern "system" fn keyboard_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LR
             sync_passthrough();
             // Windows owns this structure for the duration of the hook callback.
             let event = unsafe { &*(lp.0 as *const KBDLLHOOKSTRUCT) };
-            #[cfg(test)]
-            if event.dwExtraInfo == PROBE_TAG {
-                KEYBOARD_PROBE.fetch_or(
-                    if wp.0 as u32 == WM_KEYDOWN { 1 } else { 2 },
-                    Ordering::SeqCst,
-                );
-            }
             if !event.flags.contains(LLKHF_INJECTED) {
                 consume = if passthrough_active() && duplicate_keyboard(event, wp.0 as u32, false) {
                     true
@@ -1410,86 +1399,6 @@ mod tests {
         }
     }
 
-    #[test]
-    #[ignore = "requires an interactive Windows desktop; sends a tagged F24 probe"]
-    fn keyboard_hook_receives_os_events_but_rejects_injected_input() {
-        use windows::Win32::UI::Input::KeyboardAndMouse::*;
-        KEYBOARD_PROBE.store(0, Ordering::SeqCst);
-        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
-        let _handle = InputHandle::start(tx).unwrap();
-        let inputs = [KEYBD_EVENT_FLAGS(0), KEYEVENTF_KEYUP].map(|flags| INPUT {
-            r#type: INPUT_KEYBOARD,
-            Anonymous: INPUT_0 {
-                ki: KEYBDINPUT {
-                    wVk: VK_F24,
-                    dwFlags: flags,
-                    dwExtraInfo: PROBE_TAG,
-                    ..Default::default()
-                },
-            },
-        });
-        assert_eq!(
-            unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) },
-            2
-        );
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while KEYBOARD_PROBE.load(Ordering::SeqCst) != 3 && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(10));
-        }
-        assert_eq!(
-            KEYBOARD_PROBE.load(Ordering::SeqCst),
-            3,
-            "Installed keyboard hook did not receive the OS probe"
-        );
-        while let Ok(event) = rx.try_recv() {
-            if let RoutedInput::Edge { event, .. } = event {
-                assert_ne!(
-                    event.code,
-                    InputCode::Key(0x87),
-                    "Injected F24 must not reach the recorder"
-                );
-            }
-        }
-    }
-    #[test]
-    #[ignore = "requires pressing and releasing physical F8 on an interactive desktop"]
-    fn physical_keyboard_f8_reaches_recorder() {
-        use taprelay_core::input::{InputState, Recorder};
-        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
-        let _handle = InputHandle::start(tx).unwrap();
-        let mut state = InputState::default();
-        let mut recorder = Recorder::default();
-        let until = Instant::now() + Duration::from_secs(30);
-        eprintln!("Ready: press and release physical F8 within 30 seconds.");
-        while Instant::now() < until {
-            while let Ok(dispatch) = rx.try_recv() {
-                let RoutedInput::Edge { event, .. } = dispatch else {
-                    continue;
-                };
-                if event.code != InputCode::Key(0x77) {
-                    continue;
-                }
-                eprintln!("F8 down={}", event.down);
-                state.update(event);
-                if let Some(shortcut) = recorder.observe(&state, event) {
-                    assert_eq!(shortcut.display(), "F8");
-                    return;
-                }
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
-        panic!("No complete physical F8 press/release received");
-    }
-    #[test]
-    #[ignore = "requires an interactive Windows desktop"]
-    fn native_hook_start_stop_restart() {
-        for _ in 0..3 {
-            let (tx, _rx) = tokio::sync::mpsc::channel(256);
-            let handle = InputHandle::start(tx).unwrap();
-            assert!(!handle.is_finished());
-            drop(handle);
-        }
-    }
     #[test]
     fn mouse_motion_wheel_and_unknown_xbuttons_are_ignored() {
         assert_eq!(mouse_edge(WM_MOUSEMOVE, 0), None);

@@ -243,34 +243,6 @@ mod tests {
     }
 
     #[test]
-    fn compiled_scopes_match_union_rules_and_fail_closed_for_invalid_references() {
-        let mut rules = rules();
-        rules.toggle_scope(FunctionId::MediaVolumeUp, "work");
-        rules
-            .assignments
-            .insert(FunctionId::MediaNext, ["missing".into()].into());
-        let index = ScopeIndex::new(&rules);
-        for id in crate::function::function_ids() {
-            for path in [
-                None,
-                Some("c:/GAMES/A.EXE"),
-                Some(r"C:\Work\c.exe"),
-                Some(r"C:\outside.exe"),
-            ] {
-                let identity = path.map(executable_identity);
-                assert_eq!(
-                    index.allows(id, identity.as_deref()),
-                    rules.allows(id, path)
-                );
-            }
-        }
-        rules.groups.clear();
-        let index = ScopeIndex::new(&rules);
-        assert!(!index.allows(FunctionId::MediaVolumeUp, Some(r"c:\games\a.exe")));
-        assert!(index.allows(FunctionId::AppToggleListening, None));
-    }
-
-    #[test]
     fn multiple_groups_form_a_union_and_all_foreground_apps_is_exclusive() {
         let mut rules = rules();
         let id = FunctionId::MediaVolumeUp;

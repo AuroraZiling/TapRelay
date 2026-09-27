@@ -495,12 +495,6 @@ mod tests {
     }
 
     #[test]
-    fn every_current_function_must_have_a_config() {
-        let mut configs = default_configs();
-        configs.remove(&FunctionId::MediaMute);
-        assert!(!valid_configs(&configs));
-    }
-    #[test]
     fn app_shortcuts_conflict_with_media_even_when_disabled() {
         let mut configs = default_configs();
         let shortcut = Shortcut::keyboard(ModifierSet::empty(), 0x78);

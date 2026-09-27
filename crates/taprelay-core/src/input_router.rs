@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 /// gesture takes over. Time is the only thing that separates a tapped
 /// "previous" from a held "rewind", so the router must be able to wait.
 pub const HOLD_THRESHOLD: Duration = Duration::from_millis(400);
+pub const VOLUME_REPEAT_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RouterReason {
@@ -93,8 +94,7 @@ struct ActiveToken {
     token: u64,
     revision: u64,
     created: Instant,
-    /// When the hold gesture becomes due. `None` when there is nothing left to
-    /// wait for, either because it was emitted or because there is none.
+    /// Next hold promotion or volume repeat; `None` when nothing is due.
     deadline: Option<Instant>,
     /// The hold gesture was emitted and owns one held output.
     hold_started: bool,
@@ -318,6 +318,7 @@ impl InputRouter {
             return self.route_event(event);
         }
         let changed = self.physical.update(event);
+        self.cancel_unmatched_repeats();
         if !changed {
             if self.active.contains_key(&event.code)
                 || self.suppressed_until_up.contains(&event.code)
@@ -385,6 +386,7 @@ impl InputRouter {
 
     fn route_edge(&mut self, event: InputEvent) -> RouteResult {
         let changed = self.physical.update(event);
+        self.cancel_unmatched_repeats();
         if !changed {
             if self.passthrough {
                 return self.stamp(RouteResult {
@@ -462,6 +464,20 @@ impl InputRouter {
         self.normal_input(event)
     }
 
+    fn cancel_unmatched_repeats(&mut self) {
+        let modifiers = self.physical.logical_modifiers();
+        self.active.retain(|code, active| {
+            if function_definition(active.binding.function).repeats()
+                && active.shortcut.modifiers != modifiers
+            {
+                self.suppressed_until_up.insert(*code);
+                false
+            } else {
+                true
+            }
+        });
+    }
+
     fn normal_input(&mut self, event: InputEvent) -> RouteResult {
         if self.passthrough {
             return RouteResult {
@@ -505,8 +521,9 @@ impl InputRouter {
         // meant yet: the tap is emitted on release, and the hold gesture
         // becomes due at the threshold. A plain tap has nothing to wait for,
         // so it keeps firing on the press edge.
-        let deadline = definition.hold_action.map(|_| created + HOLD_THRESHOLD);
-        if deadline.is_none() {
+        let deadline = (definition.hold_action.is_some() || definition.repeats())
+            .then_some(created + HOLD_THRESHOLD);
+        if definition.hold_action.is_none() {
             result.outputs.push(RoutedOutput::Function {
                 binding: binding.key,
                 action: definition.tap_action,
@@ -532,8 +549,7 @@ impl InputRouter {
     }
 
     /// The earliest instant at which [`InputRouter::tick`] would emit an
-    /// output. The platform arms its wake-up from this and owns the clock;
-    /// the router never reads the current time itself.
+    /// output. The platform arms its wake-up from this and supplies tick times.
     pub fn next_deadline(&self) -> Option<Instant> {
         self.active
             .values()
@@ -541,7 +557,7 @@ impl InputRouter {
             .min()
     }
 
-    /// Promote every shortcut that has been held past [`HOLD_THRESHOLD`].
+    /// Promote held gestures and emit due volume repeats without catch-up bursts.
     /// Returns no outputs while nothing is due, so a platform timer may call
     /// this freely.
     pub fn tick(&mut self, now: Instant) -> RouteResult {
@@ -557,6 +573,20 @@ impl InputRouter {
             .map(|(&code, _)| code)
             .collect();
         for code in due {
+            if let Some(active) = self.active.get_mut(&code)
+                && function_definition(active.binding.function).repeats()
+            {
+                active.deadline = Some(now + VOLUME_REPEAT_INTERVAL);
+                result.outputs.push(RoutedOutput::Function {
+                    binding: active.binding,
+                    action: function_definition(active.binding.function).tap_action,
+                    down: true,
+                    token: active.token,
+                    revision: active.revision,
+                    created: now,
+                });
+                continue;
+            }
             let Some((binding, action, token, revision)) =
                 self.active.get(&code).and_then(|active| {
                     function_definition(active.binding.function)
@@ -690,6 +720,98 @@ mod tests {
         let mut router = InputRouter::new(&configs, 1);
         router.set_listening(true);
         router
+    }
+
+    #[test]
+    fn volume_press_repeats_on_timer_without_os_repeat_or_catch_up() {
+        for code in [
+            InputCode::Key(0x58),
+            InputCode::Mouse(crate::input::MouseButton::Side1),
+        ] {
+            let shortcut = Shortcut::from_physical(&[], code).unwrap();
+            let mut router = router_with(shortcut, FunctionId::MediaVolumeUp);
+            let now = Instant::now();
+            let expected = [(media(MediaCommand::VolumeUp), true)];
+            assert_eq!(
+                outputs(&router.route_event(event_at(code, true, now))),
+                expected
+            );
+            assert!(outputs(&router.route_event(event_at(code, true, now))).is_empty());
+            assert!(
+                outputs(&router.tick(now + HOLD_THRESHOLD - Duration::from_millis(1))).is_empty()
+            );
+            assert_eq!(outputs(&router.tick(now + HOLD_THRESHOLD)), expected);
+            let later = now + Duration::from_secs(5);
+            assert_eq!(outputs(&router.tick(later)), expected);
+            assert_eq!(router.next_deadline(), Some(later + VOLUME_REPEAT_INTERVAL));
+            assert!(router.route_event(event_at(code, false, later)).consume);
+            assert!(router.next_deadline().is_none());
+            assert!(outputs(&router.tick(later + Duration::from_secs(1))).is_empty());
+        }
+    }
+
+    #[test]
+    fn volume_repeat_stops_on_modifier_release_and_lifecycle_changes() {
+        for reason in [
+            RouterReason::ListenerStopped,
+            RouterReason::TransportLost,
+            RouterReason::SessionChanged,
+            RouterReason::BeginRecording,
+            RouterReason::ApplicationExit,
+        ] {
+            let mut router = router_with(
+                Shortcut::keyboard(ModifierSet::empty(), 0x58),
+                FunctionId::MediaVolumeDown,
+            );
+            let now = Instant::now();
+            router.route_event(event_at(InputCode::Key(0x58), true, now));
+            router.terminate(reason);
+            assert!(outputs(&router.tick(now + HOLD_THRESHOLD)).is_empty());
+            assert!(
+                router
+                    .route_event(event(InputCode::Key(0x58), false))
+                    .consume
+            );
+        }
+        let mut router = router_with(
+            Shortcut::keyboard(ModifierSet::from_keys([0x11]), 0x58),
+            FunctionId::MediaVolumeDown,
+        );
+        router.route_event(event(InputCode::Key(0x11), true));
+        router.route_event(event(InputCode::Key(0x58), true));
+        assert!(
+            !router
+                .route_event(event(InputCode::Key(0x11), false))
+                .consume
+        );
+        assert!(router.next_deadline().is_none());
+        assert!(
+            router
+                .route_event(event(InputCode::Key(0x58), false))
+                .consume
+        );
+    }
+
+    #[test]
+    fn volume_repeat_stops_when_binding_is_disabled_or_edited() {
+        for disable in [true, false] {
+            let mut router = router_with(
+                Shortcut::keyboard(ModifierSet::empty(), 0x58),
+                FunctionId::MediaVolumeUp,
+            );
+            router.route_event(event(InputCode::Key(0x58), true));
+            let mut configs = default_configs();
+            configs.insert(
+                FunctionId::MediaVolumeUp,
+                FunctionConfig {
+                    enabled: !disable,
+                    shortcuts: vec![Shortcut::keyboard(ModifierSet::empty(), 0x59)],
+                },
+            );
+            router.update_config(&configs, 2);
+            assert!(router.next_deadline().is_none());
+            assert!(outputs(&router.tick(Instant::now() + HOLD_THRESHOLD)).is_empty());
+        }
     }
 
     fn observe_host(host: &mut BTreeSet<InputCode>, result: RouteResult) {

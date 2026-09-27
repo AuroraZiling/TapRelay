@@ -469,6 +469,11 @@ impl Worker {
     }
 
     fn media(&mut self, action: MediaCommand, down: bool) -> Result<(), BackendError> {
+        // Rapid volume taps may arrive inside the 40 ms pulse. Send
+        // an intervening release so the host sees distinct volume presses.
+        if down && release_volume_pulses(&mut self.consumer, &mut self.pulses, action) {
+            self.send_report(ReportKind::Consumer, &self.consumer.report())?;
+        }
         let owner = u64::from(action.usage());
         if !down {
             self.consumer.release(owner, action);
@@ -655,5 +660,59 @@ impl Worker {
             )));
         }
         Ok(())
+    }
+}
+
+fn release_volume_pulses(
+    consumer: &mut ConsumerState,
+    pulses: &mut Vec<(Instant, u64, MediaCommand)>,
+    action: MediaCommand,
+) -> bool {
+    if !matches!(action, MediaCommand::VolumeUp | MediaCommand::VolumeDown) {
+        return false;
+    }
+    let mut released = false;
+    pulses.retain(|(_, owner, previous)| {
+        if matches!(previous, MediaCommand::VolumeUp | MediaCommand::VolumeDown) {
+            consumer.release(*owner, *previous);
+            released = true;
+            false
+        } else {
+            true
+        }
+    });
+    released
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rapid_volume_presses_release_previous_volume_without_disturbing_other_controls() {
+        let mut consumer = ConsumerState::default();
+        let mut pulses = vec![
+            (Instant::now(), 1, MediaCommand::VolumeUp),
+            (Instant::now(), 2, MediaCommand::PlayPause),
+        ];
+        for (_, owner, action) in &pulses {
+            consumer.press(*owner, *action);
+        }
+        for next in [MediaCommand::VolumeUp, MediaCommand::VolumeDown] {
+            assert!(release_volume_pulses(&mut consumer, &mut pulses, next));
+            assert_eq!(
+                consumer.report(),
+                hid::consumer_press(MediaCommand::PlayPause)
+            );
+            assert_eq!(pulses.len(), 1);
+            consumer.press(1, next);
+            pulses.push((Instant::now(), 1, next));
+        }
+        assert!(!release_volume_pulses(
+            &mut consumer,
+            &mut pulses,
+            MediaCommand::PlayPause
+        ));
+        assert_eq!(pulses.len(), 2);
     }
 }

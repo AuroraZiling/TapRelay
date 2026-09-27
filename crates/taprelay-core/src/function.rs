@@ -48,6 +48,15 @@ pub struct FunctionDefinition {
     pub name_key: &'static str,
 }
 
+impl FunctionDefinition {
+    pub fn repeats(&self) -> bool {
+        matches!(
+            self.id,
+            FunctionId::MediaVolumeUp | FunctionId::MediaVolumeDown
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum FunctionId {
     #[serde(rename = "media.play-pause")]
@@ -58,6 +67,10 @@ pub enum FunctionId {
     MediaNext,
     #[serde(rename = "media.mute")]
     MediaMute,
+    #[serde(rename = "media.volume-up")]
+    MediaVolumeUp,
+    #[serde(rename = "media.volume-down")]
+    MediaVolumeDown,
     #[serde(rename = "app.toggle-listening")]
     AppToggleListening,
     #[serde(rename = "app.toggle-passthrough")]
@@ -71,6 +84,8 @@ impl FunctionId {
             Self::MediaPrevious => "media.previous",
             Self::MediaNext => "media.next",
             Self::MediaMute => "media.mute",
+            Self::MediaVolumeUp => "media.volume-up",
+            Self::MediaVolumeDown => "media.volume-down",
             Self::AppToggleListening => "app.toggle-listening",
             Self::AppTogglePassthrough => "app.toggle-passthrough",
         }
@@ -82,6 +97,8 @@ impl FunctionId {
             "media.previous" => Self::MediaPrevious,
             "media.next" => Self::MediaNext,
             "media.mute" => Self::MediaMute,
+            "media.volume-up" => Self::MediaVolumeUp,
+            "media.volume-down" => Self::MediaVolumeDown,
             "app.toggle-listening" => Self::AppToggleListening,
             "app.toggle-passthrough" => Self::AppTogglePassthrough,
             _ => return None,
@@ -89,7 +106,7 @@ impl FunctionId {
     }
 }
 
-pub const FUNCTION_CATALOG: [FunctionDefinition; 6] = [
+pub const FUNCTION_CATALOG: [FunctionDefinition; 8] = [
     FunctionDefinition {
         id: FunctionId::MediaPlayPause,
         category: CategoryId::Media,
@@ -117,6 +134,20 @@ pub const FUNCTION_CATALOG: [FunctionDefinition; 6] = [
         tap_action: FunctionAction::Media(MediaCommand::Mute),
         hold_action: None,
         name_key: "function.media.mute",
+    },
+    FunctionDefinition {
+        id: FunctionId::MediaVolumeUp,
+        category: CategoryId::Media,
+        tap_action: FunctionAction::Media(MediaCommand::VolumeUp),
+        hold_action: None,
+        name_key: "function.media.volumeup",
+    },
+    FunctionDefinition {
+        id: FunctionId::MediaVolumeDown,
+        category: CategoryId::Media,
+        tap_action: FunctionAction::Media(MediaCommand::VolumeDown),
+        hold_action: None,
+        name_key: "function.media.volumedown",
     },
     FunctionDefinition {
         id: FunctionId::AppToggleListening,

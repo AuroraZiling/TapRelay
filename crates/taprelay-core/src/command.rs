@@ -11,6 +11,10 @@ pub enum MediaCommand {
     Next,
     #[serde(rename = "mute")]
     Mute,
+    #[serde(rename = "volume-up")]
+    VolumeUp,
+    #[serde(rename = "volume-down")]
+    VolumeDown,
     #[serde(rename = "rewind")]
     Rewind,
     #[serde(rename = "fast-forward")]
@@ -25,6 +29,8 @@ impl MediaCommand {
             Self::Previous => 0x00b6,
             Self::Next => 0x00b5,
             Self::Mute => 0x00e2,
+            Self::VolumeUp => 0x00e9,
+            Self::VolumeDown => 0x00ea,
             Self::Rewind => 0x00b4,
             Self::FastForward => 0x00b3,
         }
@@ -40,6 +46,8 @@ impl MediaCommand {
             Self::Previous => "command.media.previous",
             Self::Next => "command.media.next",
             Self::Mute => "command.media.mute",
+            Self::VolumeUp => "command.media.volumeup",
+            Self::VolumeDown => "command.media.volumedown",
             Self::Rewind => "command.media.rewind",
             Self::FastForward => "command.media.fastforward",
         }
@@ -122,6 +130,8 @@ mod tests {
         assert_eq!(MediaCommand::Previous.usage(), 0xb6);
         assert_eq!(MediaCommand::Next.usage(), 0xb5);
         assert_eq!(MediaCommand::Mute.usage(), 0xe2);
+        assert_eq!(MediaCommand::VolumeUp.usage(), 0xe9);
+        assert_eq!(MediaCommand::VolumeDown.usage(), 0xea);
         assert_eq!(MediaCommand::Rewind.usage(), 0xb4);
         assert_eq!(MediaCommand::FastForward.usage(), 0xb3);
     }

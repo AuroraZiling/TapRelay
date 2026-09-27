@@ -1114,6 +1114,12 @@ impl Controller {
                         action: self.tr(hold.name_key()).into(),
                     });
                 }
+                if definition.repeats() {
+                    gestures.push(GestureAction {
+                        gesture: self.tr(keys::BINDINGS_GESTURE_HOLD).into(),
+                        action: self.tr(keys::BINDINGS_GESTURE_REPEAT).into(),
+                    });
+                }
                 let shortcuts = config
                     .shortcuts
                     .iter()

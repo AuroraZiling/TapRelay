@@ -70,6 +70,7 @@ fn render_all_views_without_hardware() {
     check_navigation_and_settings(&ui);
     check_surface_redraw(&ui, &render_window);
     check_binding_layouts_and_actions(&ui);
+    check_volume_bindings(&ui);
     check_about_links(&ui);
     check_runtime_feedback(&ui);
 }
@@ -637,6 +638,12 @@ fn check_binding_layouts_and_actions(ui: &AppWindow) {
                             action: i18n::text(locale, hold.name_key()).into(),
                         });
                     }
+                    if d.repeats() {
+                        gestures.push(GestureAction {
+                            gesture: i18n::text(locale, "bindings.gesture.hold").into(),
+                            action: i18n::text(locale, "bindings.gesture.repeat").into(),
+                        });
+                    }
                     gestures
                 })),
                 enabled: true,
@@ -786,7 +793,12 @@ fn check_binding_layouts_and_actions(ui: &AppWindow) {
     set_binding_capture(ui, "", -1, "", "");
     ui.window().set_size(slint::LogicalSize::new(1120., 900.));
     let _ = ui.window().take_snapshot().unwrap();
-    let app = ui.global::<BindingUi>().get_rows().row_data(4).unwrap();
+    let app = ui
+        .global::<BindingUi>()
+        .get_rows()
+        .iter()
+        .find(|row| row.id.as_str() == "app.toggle-listening")
+        .unwrap();
     assert_eq!(app.id.as_str(), "app.toggle-listening");
     actions.borrow_mut().clear();
     binding_element(ui, "binding-enabled-app.toggle-listening").invoke_accessible_default_action();
@@ -798,4 +810,72 @@ fn check_binding_layouts_and_actions(ui: &AppWindow) {
             BindingUiAction::Begin("app.toggle-listening".into(), 0),
         ]
     );
+}
+
+fn check_volume_bindings(ui: &AppWindow) {
+    use taprelay_core::{
+        function::{FunctionId, ModifierSet, PrimaryInput, Shortcut},
+        input::MouseButton,
+    };
+    for locale in ["zh-cn", "en"] {
+        i18n::apply(ui, locale);
+        ui.window().set_size(slint::LogicalSize::new(900., 500.));
+        let rows = [
+            (FunctionId::MediaVolumeUp, PrimaryInput::keyboard(0x26)),
+            (
+                FunctionId::MediaVolumeDown,
+                PrimaryInput::mouse(MouseButton::Side1),
+            ),
+        ]
+        .into_iter()
+        .map(|(id, primary)| {
+            let definition = taprelay_core::function::function_definition(id);
+            let shortcut = Shortcut::new(ModifierSet::from_keys([0x11]), primary);
+            FunctionBindingRow {
+                id: id.stable_id().into(),
+                label: i18n::text(locale, definition.name_key).into(),
+                enabled: true,
+                shortcuts: ModelRc::new(VecModel::from(vec![ShortcutItem {
+                    text: shortcut
+                        .key_labels_with(crate::platform::key_name)
+                        .join("+")
+                        .into(),
+                    slot: 0,
+                    enabled: true,
+                    ..Default::default()
+                }])),
+                gestures: ModelRc::new(VecModel::from(vec![
+                    GestureAction {
+                        gesture: i18n::text(locale, "bindings.gesture.press").into(),
+                        action: i18n::text(locale, definition.tap_action.name_key()).into(),
+                    },
+                    GestureAction {
+                        gesture: i18n::text(locale, "bindings.gesture.hold").into(),
+                        action: i18n::text(locale, "bindings.gesture.repeat").into(),
+                    },
+                ])),
+            }
+        })
+        .collect();
+        set_function_bindings(ui, rows);
+        let snapshot = ui.window().take_snapshot().unwrap();
+        for id in ["media.volume-up", "media.volume-down"] {
+            let shortcut = binding_element(ui, &format!("binding-slot-{id}-0"));
+            let action = binding_element(ui, &format!("binding-function-{id}"));
+            assert!(
+                shortcut.absolute_position().x + shortcut.size().width
+                    <= action.absolute_position().x
+            );
+            assert!(action.absolute_position().y + action.size().height <= 500.);
+        }
+        if let Some(dir) = std::env::var_os("TAPRELAY_UI_SNAPSHOT_DIR") {
+            let dir = std::path::PathBuf::from(dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join(format!("volume-{locale}-900x500.rgba")),
+                snapshot.as_bytes(),
+            )
+            .unwrap();
+        }
+    }
 }

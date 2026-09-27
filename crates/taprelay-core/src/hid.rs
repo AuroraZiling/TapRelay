@@ -469,6 +469,8 @@ mod tests {
             MediaCommand::Previous,
             MediaCommand::Next,
             MediaCommand::Mute,
+            MediaCommand::VolumeUp,
+            MediaCommand::VolumeDown,
             MediaCommand::Rewind,
             MediaCommand::FastForward,
         ] {

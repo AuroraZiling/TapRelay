@@ -1,0 +1,23 @@
+import { Button } from "../vendor/components/button.slint";
+import { Tokens } from "../vendor/theme/tokens.slint";
+
+// User-defined names and executable paths must stay inside their layout slot.
+export component ElidedButton inherits Button {
+    in property <string> display-text;
+    text: "";
+    accessible-label: root.display-text;
+    preferred-width: content.preferred-width + 24px;
+    content := Text {
+        x: 12px;
+        y: 0px;
+        width: max(0px, root.width - 24px);
+        height: root.height;
+        text: root.display-text;
+        color: root.content-foreground;
+        font-size: Tokens.typography-body-sm-size;
+        font-weight: Tokens.typography-weight-medium;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+}

@@ -50,6 +50,7 @@ struct Receipt {
 
 pub struct Runtime {
     pub functions: FunctionConfigs,
+    pub foreground_app_rules: taprelay_core::foreground_app::ForegroundAppRules,
     pub remembered_device: Option<Device>,
     pub state: Snapshot,
     pub matched: u64,
@@ -97,6 +98,7 @@ impl Runtime {
         let (sender, events) = mpsc::channel(1024);
         Self {
             functions: config.functions,
+            foreground_app_rules: config.foreground_app_rules,
             remembered_device: config.remembered_device,
             state: Snapshot::default(),
             matched: 0,
@@ -319,6 +321,7 @@ impl Runtime {
             .map_or_else(RouteResult::default, |input| {
                 input.configure(
                     &self.functions,
+                    &self.foreground_app_rules,
                     self.listening,
                     self.recording(),
                     self.bindings_revision,
@@ -522,7 +525,9 @@ impl Runtime {
                 .iter()
                 .enumerate()
                 .any(|(other_slot, candidate)| {
-                    (other, other_slot) != (id, slot) && candidate == &shortcut
+                    (other, other_slot) != (id, slot)
+                        && candidate == &shortcut
+                        && self.foreground_app_rules.overlaps(id, other)
                 })
                 .then_some(other)
         }) {
@@ -576,7 +581,7 @@ impl Runtime {
                 .context("Shortcut slot out of range")? = shortcut;
         }
         anyhow::ensure!(
-            taprelay_core::binding::valid(&candidate),
+            self.foreground_app_rules.valid_bindings(&candidate),
             "Shortcut conflicts with another function"
         );
         self.functions = candidate;
@@ -591,6 +596,19 @@ impl Runtime {
             "Shortcut slot out of range"
         );
         function.shortcuts.remove(slot);
+        self.bindings_changed();
+        Ok(())
+    }
+
+    pub fn set_foreground_app_rules(
+        &mut self,
+        rules: taprelay_core::foreground_app::ForegroundAppRules,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            rules.valid_bindings(&self.functions),
+            "Invalid application group or conflicting shortcut"
+        );
+        self.foreground_app_rules = rules;
         self.bindings_changed();
         Ok(())
     }
@@ -1566,6 +1584,51 @@ mod tests {
     }
 
     #[test]
+    fn capture_reuses_shortcuts_in_disjoint_groups_but_rejects_overlap_edits() {
+        use taprelay_core::foreground_app::ForegroundAppGroup;
+        let mut runtime = capture_runtime();
+        for (id, name, path) in [
+            (FunctionId::MediaPlayPause, "games", r"C:\game.exe"),
+            (FunctionId::MediaNext, "work", r"C:\work.exe"),
+        ] {
+            runtime.foreground_app_rules.groups.insert(
+                name.into(),
+                ForegroundAppGroup {
+                    name: name.into(),
+                    foreground_apps: vec![path.into()],
+                },
+            );
+            runtime
+                .foreground_app_rules
+                .assignments
+                .insert(id, [name.into()].into());
+        }
+        begin_capture(&mut runtime, FunctionId::MediaPlayPause, 0);
+        runtime.tick_with_capture_context(true, false);
+        runtime.submit_capture(Shortcut::keyboard(ModifierSet::empty(), 0x78));
+        assert!(runtime.capture().is_none());
+        assert_eq!(
+            runtime.functions[&FunctionId::MediaPlayPause].shortcuts,
+            runtime.functions[&FunctionId::MediaNext].shortcuts
+        );
+        let original = runtime.foreground_app_rules.clone();
+        let revision = runtime.bindings_revision;
+        let mut overlap = original.clone();
+        overlap
+            .groups
+            .get_mut("work")
+            .unwrap()
+            .foreground_apps
+            .push(r"c:\GAME.exe".into());
+        assert!(runtime.set_foreground_app_rules(overlap).is_err());
+        let mut deleted = original.clone();
+        deleted.remove_group("games");
+        assert!(runtime.set_foreground_app_rules(deleted).is_err());
+        assert_eq!(runtime.foreground_app_rules, original);
+        assert_eq!(runtime.bindings_revision, revision);
+    }
+
+    #[test]
     fn capture_cancellation_rejects_pending_and_late_input_without_polluting_next_session() {
         for cancel in [0, 1, 2] {
             let mut runtime = capture_runtime();
@@ -1750,6 +1813,7 @@ mod tests {
             fn configure(
                 &self,
                 _: &FunctionConfigs,
+                _: &taprelay_core::foreground_app::ForegroundAppRules,
                 listening: bool,
                 _: bool,
                 _: u64,

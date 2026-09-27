@@ -18,6 +18,7 @@ type Command = Box<dyn FnOnce(&mut Runtime) -> Result<()> + Send>;
 
 pub struct View {
     functions: FunctionConfigs,
+    foreground_app_rules: taprelay_core::foreground_app::ForegroundAppRules,
     remembered_device: Option<Device>,
     pub state: Snapshot,
     pub matched: u64,
@@ -33,6 +34,7 @@ impl View {
     fn take(runtime: &Runtime) -> Self {
         Self {
             functions: runtime.functions.clone(),
+            foreground_app_rules: runtime.foreground_app_rules.clone(),
             remembered_device: runtime.remembered_device.clone(),
             state: runtime.state.clone(),
             matched: runtime.matched,
@@ -48,6 +50,7 @@ impl View {
 enum Kind {
     Poll,
     Edit,
+    SaveRules,
     Cancel,
     Shutdown,
 }
@@ -102,6 +105,7 @@ pub struct RuntimeHandle {
     pub config: Config,
     view: View,
     bindings_changed: bool,
+    rules_saved: Option<bool>,
     window_keys: Vec<InputEvent>,
     ui_input: Option<Instant>,
     notices: VecDeque<Notice>,
@@ -220,6 +224,7 @@ impl RuntimeHandle {
             config,
             view,
             bindings_changed: false,
+            rules_saved: None,
             window_keys: vec![],
             ui_input: None,
             notices: VecDeque::new(),
@@ -243,7 +248,7 @@ impl RuntimeHandle {
     fn enqueue(&mut self, kind: Kind, command: Command) -> Result<()> {
         self.poll();
         anyhow::ensure!(!self.stopped && !self.closing, HandoffError::Stopped);
-        if kind == Kind::Edit && self.busy() {
+        if matches!(kind, Kind::Edit | Kind::SaveRules) && self.busy() {
             return Err(HandoffError::Busy.into());
         }
         if matches!(kind, Kind::Poll | Kind::Cancel)
@@ -296,6 +301,7 @@ impl RuntimeHandle {
     fn apply(&mut self, mut view: View) {
         self.bindings_changed |= view.bindings_revision != self.view.bindings_revision;
         self.config.functions = std::mem::take(&mut view.functions);
+        self.config.foreground_app_rules = std::mem::take(&mut view.foreground_app_rules);
         self.config.remembered_device = view.remembered_device.take();
         self.view = view;
     }
@@ -304,7 +310,13 @@ impl RuntimeHandle {
         loop {
             match self.responses.try_recv() {
                 Ok(Response::Completed { id, view, result }) => {
-                    self.pending.remove(&id);
+                    if self
+                        .pending
+                        .remove(&id)
+                        .is_some_and(|pending| pending.kind == Kind::SaveRules)
+                    {
+                        self.rules_saved = Some(result.is_ok());
+                    }
                     self.apply(view);
                     if let Err(error) = result {
                         self.notices.push_back(Notice::Error(format!("{error:#}")));
@@ -340,6 +352,9 @@ impl RuntimeHandle {
     }
 
     fn mark_stopped(&mut self) {
+        if self.saving_foreground_app_rules() {
+            self.rules_saved = Some(false);
+        }
         self.stopped = true;
         self.pending.clear();
         self.commands.take();
@@ -402,6 +417,38 @@ impl RuntimeHandle {
             kind,
             Box::new(move |runtime| runtime.apply_binding_command(command)),
         )
+    }
+    pub fn set_foreground_app_rules(
+        &mut self,
+        rules: taprelay_core::foreground_app::ForegroundAppRules,
+        path: &std::path::Path,
+    ) -> Result<()> {
+        let mut config = self.config.clone();
+        let path = path.to_owned();
+        self.enqueue(
+            Kind::SaveRules,
+            Box::new(move |runtime| {
+                config.functions = runtime.functions.clone();
+                config.remembered_device = runtime.remembered_device.clone();
+                config.foreground_app_rules = rules;
+                // Save validates against these exact functions before atomically
+                // replacing the file. A failed write never changes live routing.
+                config.save(&path)?;
+                runtime.set_foreground_app_rules(config.foreground_app_rules)
+            }),
+        )?;
+        self.rules_saved = None;
+        Ok(())
+    }
+
+    pub fn saving_foreground_app_rules(&self) -> bool {
+        self.pending
+            .values()
+            .any(|pending| pending.kind == Kind::SaveRules)
+    }
+
+    pub fn take_foreground_app_rules_saved(&mut self) -> Option<bool> {
+        self.rules_saved.take()
     }
     pub fn shutdown(&mut self) -> Result<()> {
         self.poll();

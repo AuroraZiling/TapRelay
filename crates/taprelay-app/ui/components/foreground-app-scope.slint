@@ -1,0 +1,91 @@
+import { Button } from "../vendor/components/button.slint";
+import { ElidedButton } from "elided-button.slint";
+import { ScrollArea } from "../vendor/components/scroll-area.slint";
+import { Tokens } from "../vendor/theme/tokens.slint";
+import { ForegroundAppUi, ForegroundAppScopeOption } from "../types.slint";
+import { IconDisplay, IconSet } from "@lucide";
+import { I18n } from "@i18n";
+
+component ScopeChoice inherits Button {
+    in property <ForegroundAppScopeOption> option;
+    text: "";
+    variant: ghost;
+    height: 36px;
+    accessible-role: checkbox;
+    accessible-label: root.option.name;
+    accessible-checked: root.option.checked;
+    accessible-id: "scope-choice-" + (root.option.id == "" ? "all" : root.option.id);
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 10px;
+        cross-axis-alignment: center;
+        Rectangle {
+            width: 16px;
+            height: 16px;
+            border-radius: 3px;
+            border-width: 1px;
+            border-color: root.option.checked ? Tokens.color-foreground : Tokens.color-border-hairline-strong;
+            background: root.option.checked ? Tokens.color-foreground : transparent;
+            if root.option.checked: IconDisplay {
+                icon: IconSet.Check;
+                size: 12px;
+                x: 2px;
+                y: 2px;
+                stroke: Tokens.color-background;
+            }
+        }
+        Text {
+            text: root.option.name;
+            color: root.content-foreground;
+            font-size: Tokens.typography-body-sm-size;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+    }
+}
+
+export component ForegroundAppScope inherits ElidedButton {
+    in property <string> function-id;
+    in property <string> scope-label;
+    display-text: root.scope-label;
+    accessible-label: I18n.text.groups-scope + ": " + root.scope-label;
+    variant: outline;
+    size: sm;
+    accessible-id: "binding-scope-" + root.function-id;
+    disabled: ForegroundAppUi.busy;
+    clicked => {
+        ForegroundAppUi.open-scope(root.function-id);
+        choices.show();
+    }
+    choices := PopupWindow {
+        x: root.width - self.width;
+        y: root.height;
+        width: 260px;
+        height: min(280px, ForegroundAppUi.scope-options.length * 36px + 12px);
+        close-policy: close-on-click-outside;
+        Rectangle {
+            background: Tokens.color-card;
+            border-width: 1px;
+            border-color: Tokens.color-border-hairline;
+            border-radius: Tokens.radius-md;
+            ScrollArea {
+                x: 6px; y: 6px;
+                width: parent.width - 12px;
+                height: parent.height - 12px;
+                content-height: content.preferred-height;
+                content := VerticalLayout {
+                    width: parent.width;
+                    alignment: start;
+                    for option in ForegroundAppUi.scope-options: ScopeChoice {
+                        option: option;
+                        disabled: root.disabled || ForegroundAppUi.busy;
+                        clicked => {
+                            ForegroundAppUi.set-scope(ForegroundAppUi.scope-function, option.id);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -28,9 +28,16 @@ export global Navigation {
         label: I18n.text.nav-settings,
         icon: IconSet.Settings,
     };
+    out property <NavEntry> groups: {
+        page: 4,
+        label: I18n.text.nav-groups,
+        icon: IconSet.Folder,
+    };
 
-    // Sidebar order: `main` stacks from the top, `pinned` sits at the bottom.
-    out property <[NavEntry]> main: [overview, bindings, receiver];
+    // `main` stacks from the top
+    out property <[NavEntry]> main: [overview, bindings, groups, receiver];
+    // `pinned` sits at the bottom
     out property <[NavEntry]> pinned: [settings];
-    out property <[NavEntry]> pages: [overview, bindings, receiver, settings];
+
+    out property <[NavEntry]> pages: [overview, bindings, receiver, settings, groups];
 }

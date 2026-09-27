@@ -90,7 +90,7 @@ thread_local! { static TAPRELAY_WINDOW: Cell<HWND> = const { Cell::new(HWND(std:
 // must be woken at the pending threshold instead of at the next physical edge.
 // The deadline is cached so an unchanged one costs no syscall.
 thread_local! { static TIMER_DEADLINE: Cell<Option<Instant>> = const { Cell::new(None) }; }
-const POLICY_TIMER: usize = 1;
+thread_local! { static POLICY_TIMER: Cell<usize> = const { Cell::new(0) }; }
 #[derive(Clone, Copy)]
 enum StopReason {
     Overflow,
@@ -140,6 +140,9 @@ pub struct InputHandle {
 
 struct HookPolicy {
     router: InputRouter,
+    foreground: crate::foreground_apps::Foreground,
+    scoped: bool,
+    foreground_timer: usize,
     revision: u64,
     listening: bool,
     recording: bool,
@@ -149,6 +152,9 @@ impl HookPolicy {
     fn new() -> Self {
         Self {
             router: InputRouter::new(&taprelay_core::function::default_configs(), 0),
+            foreground: Default::default(),
+            scoped: false,
+            foreground_timer: 0,
             // The first app configuration must be applied even when its
             // persisted revision is also zero.
             revision: u64::MAX,
@@ -160,13 +166,33 @@ impl HookPolicy {
     fn configure(
         &mut self,
         configs: &FunctionConfigs,
+        rules: &taprelay_core::foreground_app::ForegroundAppRules,
         listening: bool,
         recording: bool,
         revision: u64,
     ) -> RouteResult {
         let mut result = RouteResult::default();
         if revision != self.revision {
+            self.scoped = !rules.assignments.is_empty();
+            // Only applications with scoped bindings need idle monitoring.
+            // With no HWND, Windows assigns the timer ID; keep the returned ID.
+            unsafe {
+                if self.scoped && self.foreground_timer == 0 {
+                    self.foreground_timer = SetTimer(None, 0, 50, None);
+                    if self.foreground_timer == 0 {
+                        stop(StopReason::PolicyUnavailable);
+                        return self
+                            .router
+                            .terminate(taprelay_core::input_router::RouterReason::ListenerStopped);
+                    }
+                } else if !self.scoped && self.foreground_timer != 0 {
+                    let _ = KillTimer(None, self.foreground_timer);
+                    self.foreground_timer = 0;
+                }
+            }
             append(&mut result, self.router.update_config(configs, revision));
+            append(&mut result, self.router.set_foreground_app_rules(rules));
+            append(&mut result, self.refresh_foreground());
             self.revision = revision;
         }
         if listening != self.listening {
@@ -182,11 +208,15 @@ impl HookPolicy {
     }
 
     fn edge(&mut self, event: InputEvent) -> RouteResult {
-        self.router.route_event(event)
+        let mut result = self.refresh_foreground();
+        append(&mut result, self.router.route_event(event));
+        result
     }
 
     fn local_edge(&mut self, event: InputEvent) -> RouteResult {
-        self.router.route_local_event(event)
+        let mut result = self.refresh_foreground();
+        append(&mut result, self.router.route_local_event(event));
+        result
     }
 
     fn motion(&mut self, motion: PhysicalInput) -> RouteResult {
@@ -205,11 +235,31 @@ impl HookPolicy {
     }
 
     fn tick(&mut self, now: Instant) -> RouteResult {
-        self.router.tick(now)
+        let mut result = self.refresh_foreground();
+        append(&mut result, self.router.tick(now));
+        result
+    }
+
+    fn refresh_foreground(&mut self) -> RouteResult {
+        if self.scoped {
+            self.router.set_foreground(self.foreground.path())
+        } else {
+            self.router.set_foreground(None)
+        }
     }
 
     fn next_deadline(&self) -> Option<Instant> {
         self.router.next_deadline()
+    }
+}
+
+impl Drop for HookPolicy {
+    fn drop(&mut self) {
+        if self.foreground_timer != 0 {
+            unsafe {
+                let _ = KillTimer(None, self.foreground_timer);
+            }
+        }
     }
 }
 
@@ -233,10 +283,17 @@ fn arm_policy_timer() {
             Some(deadline) => {
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 let elapsed = remaining.as_millis().clamp(1, u32::MAX as u128) as u32;
-                SetTimer(None, POLICY_TIMER, elapsed, None);
+                let id = SetTimer(None, POLICY_TIMER.with(Cell::get), elapsed, None);
+                POLICY_TIMER.with(|timer| timer.set(id));
+                if id == 0 {
+                    stop(StopReason::PolicyUnavailable);
+                }
             }
             None => {
-                let _ = KillTimer(None, POLICY_TIMER);
+                let id = POLICY_TIMER.with(|timer| timer.replace(0));
+                if id != 0 {
+                    let _ = KillTimer(None, id);
+                }
             }
         }
     }
@@ -305,6 +362,7 @@ impl InputHandle {
     pub fn configure(
         &self,
         configs: &FunctionConfigs,
+        rules: &taprelay_core::foreground_app::ForegroundAppRules,
         listening: bool,
         recording: bool,
         revision: u64,
@@ -316,6 +374,7 @@ impl InputHandle {
         }
         *previous = Some(next);
         let configs = configs.clone();
+        let rules = rules.clone();
         self.request(
             Box::new(move |policy| {
                 PASSTHROUGH.with(|link| {
@@ -326,7 +385,7 @@ impl InputHandle {
                         link.end();
                     }
                 });
-                policy.configure(&configs, listening, recording, revision)
+                policy.configure(&configs, &rules, listening, recording, revision)
             }),
             true,
         )

@@ -16,6 +16,7 @@ pub trait InputSource {
     fn configure(
         &self,
         _functions: &FunctionConfigs,
+        _rules: &taprelay_core::foreground_app::ForegroundAppRules,
         _listening: bool,
         _recording: bool,
         _revision: u64,
@@ -78,11 +79,12 @@ impl InputSource for taprelay_windows::input::InputHandle {
     fn configure(
         &self,
         functions: &FunctionConfigs,
+        rules: &taprelay_core::foreground_app::ForegroundAppRules,
         listening: bool,
         recording: bool,
         revision: u64,
     ) -> RouteResult {
-        self.configure(functions, listening, recording, revision)
+        self.configure(functions, rules, listening, recording, revision)
     }
     fn terminate(&self, reason: RouterReason) -> RouteResult {
         self.terminate(reason)
@@ -158,6 +160,8 @@ pub fn transport(remembered: Option<taprelay_core::state::Target>) -> Result<Box
 pub use taprelay_windows::InstanceLock;
 #[cfg(windows)]
 pub use taprelay_windows::desktop;
+#[cfg(windows)]
+pub use taprelay_windows::foreground_apps;
 
 #[cfg(test)]
 mod tests {

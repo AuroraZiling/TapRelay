@@ -1,0 +1,82 @@
+import { IconButton } from "../components/icon-button.slint";
+import { IconSet } from "@lucide";
+import { ListView } from "std-widgets.slint";
+import { Tokens } from "../vendor/theme/tokens.slint";
+import { Caption, Label } from "../components/primitives.slint";
+import { ForegroundAppUi } from "../types.slint";
+import { I18n } from "@i18n";
+
+export component ForegroundAppGroupsPage inherits VerticalLayout {
+    spacing: 16px;
+    vertical-stretch: 1;
+    Caption {
+        text: I18n.text.groups-help;
+        vertical-stretch: 0;
+        accessible-id: "groups-description";
+    }
+    if ForegroundAppUi.error != "": Label {
+        text: ForegroundAppUi.error;
+        color: Tokens.color-destructive;
+        vertical-stretch: 0;
+        accessible-id: "groups-error";
+    }
+    ListView {
+        accessible-id: "groups-list";
+        for group in ForegroundAppUi.groups: Rectangle {
+            height: 84px;
+            Rectangle {
+                height: parent.height - 8px;
+                background: Tokens.color-card;
+                border-radius: Tokens.radius-md;
+                HorizontalLayout {
+                    padding: 16px;
+                    spacing: 16px;
+                    cross-axis-alignment: center;
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 5px;
+                        Text {
+                            text: group.name;
+                            color: Tokens.color-foreground;
+                            font-size: 16px;
+                            font-weight: 500;
+                            overflow: elide;
+                        }
+                        Caption {
+                            text: group.count == 0 ? I18n.text.groups-list-empty : group.summary;
+                            wrap: no-wrap;
+                            overflow: elide;
+                        }
+                    }
+                    Caption {
+                        text: group.count-label;
+                        horizontal-stretch: 0;
+                        wrap: no-wrap;
+                        accessible-id: "group-count-" + group.id;
+                    }
+                    IconButton {
+                        icon: IconSet.Pencil;
+                        hint: I18n.text.groups-edit;
+                        size: icon;
+                        variant: outline;
+                        horizontal-stretch: 0;
+                        disabled: ForegroundAppUi.busy;
+                        accessible-id: "group-edit-" + group.id;
+                        clicked => { ForegroundAppUi.command("edit", group.id); }
+                    }
+                    IconButton {
+                        icon: IconSet.Trash2;
+                        hint: I18n.text.groups-delete;
+                        size: icon;
+                        variant: destructive;
+                        destructive-outline: true;
+                        horizontal-stretch: 0;
+                        disabled: ForegroundAppUi.busy;
+                        accessible-id: "group-delete-" + group.id;
+                        clicked => { ForegroundAppUi.command("request-delete", group.id); }
+                    }
+                }
+            }
+        }
+    }
+}

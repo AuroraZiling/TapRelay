@@ -20,16 +20,22 @@ pub struct IndexedBinding {
     pub shortcut: Shortcut,
 }
 
-/// Valid Check for conflicting, duplicate or invalid shortcuts in the configs.
-pub fn valid(configs: &FunctionConfigs) -> bool {
-    let mut seen = HashSet::new();
+/// Structural checks shared by global and application-scoped conflict policies.
+pub(crate) fn valid_structure(configs: &FunctionConfigs) -> bool {
     configs.values().all(|config| {
         config.shortcuts.len() <= MAX_SHORTCUTS_PER_FUNCTION
-            && config
-                .shortcuts
-                .iter()
-                .all(|shortcut| shortcut.valid() && seen.insert(shortcut.clone()))
+            && config.shortcuts.iter().all(Shortcut::valid)
     })
+}
+
+/// Check for conflicting, duplicate or invalid shortcuts in global configs.
+pub fn valid(configs: &FunctionConfigs) -> bool {
+    let mut seen = HashSet::new();
+    valid_structure(configs)
+        && configs
+            .values()
+            .flat_map(|config| &config.shortcuts)
+            .all(|shortcut| seen.insert(shortcut))
 }
 
 /// Runtime index keyed by the only edge that can start a shortcut: its primary.

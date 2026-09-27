@@ -1,0 +1,75 @@
+import { Button } from "../vendor/components/button.slint";
+import { ScrollArea } from "../vendor/components/scroll-area.slint";
+import { Tokens } from "../vendor/theme/tokens.slint";
+import { Heading, Caption, Label } from "primitives.slint";
+import { ForegroundAppUi } from "../types.slint";
+import { I18n } from "@i18n";
+
+// Deletion alone needs confirmation; editing is a full subpage.
+export component ForegroundAppGroupDeleteDialog inherits FocusScope {
+    forward-focus: cancel-button;
+    property <int> focus-request: ForegroundAppUi.focus-request;
+    changed focus-request => { cancel-button.focus(); }
+    capture-key-pressed(event) => {
+        if event.text == Key.Escape {
+            if !ForegroundAppUi.saving { ForegroundAppUi.command("cancel", ""); }
+            return accept;
+        }
+        return reject;
+    }
+    Rectangle { background: Tokens.color-scrim-2; TouchArea { } }
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: min(560px, parent.width - 48px);
+        height: min(320px, parent.height - 48px);
+        background: Tokens.color-background;
+        border-radius: Tokens.radius-xl;
+        border-width: 1px;
+        border-color: Tokens.color-border-hairline;
+        accessible-role: groupbox;
+        accessible-id: "groups-delete-dialog";
+        accessible-label: I18n.text.groups-delete;
+        VerticalLayout {
+            padding: 24px;
+            spacing: 16px;
+            Heading { text: I18n.text.groups-delete; vertical-stretch: 0; }
+            ScrollArea {
+                content-height: message.preferred-height;
+                message := VerticalLayout {
+                    width: parent.width;
+                    spacing: 12px;
+                    alignment: start;
+                    Label { text: ForegroundAppUi.selected-name; }
+                    Caption { text: ForegroundAppUi.deletion-warning; }
+                }
+            }
+            if ForegroundAppUi.form-error != "": Label {
+                text: ForegroundAppUi.form-error;
+                color: Tokens.color-destructive;
+                vertical-stretch: 0;
+                accessible-live-region: polite;
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: end;
+                vertical-stretch: 0;
+                cancel-button := Button {
+                    text: I18n.text.groups-cancel;
+                    variant: ghost;
+                    horizontal-stretch: 0;
+                    disabled: ForegroundAppUi.saving;
+                    clicked => { ForegroundAppUi.command("cancel", ""); }
+                }
+                Button {
+                    text: ForegroundAppUi.saving ? I18n.text.groups-saving : I18n.text.groups-delete-confirm;
+                    variant: destructive;
+                    horizontal-stretch: 0;
+                    disabled: ForegroundAppUi.busy || ForegroundAppUi.saving;
+                    accessible-id: "groups-delete-confirm";
+                    clicked => { ForegroundAppUi.command("delete", ""); }
+                }
+            }
+        }
+    }
+}

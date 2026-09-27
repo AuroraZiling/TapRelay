@@ -12,7 +12,7 @@ use crate::{
     runtime_worker::{HandoffError, Notice, RuntimeHandle},
 };
 use anyhow::{Context, Result, bail};
-use slint::{ComponentHandle, ModelRc, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::{
     cell::RefCell,
     path::PathBuf,
@@ -23,6 +23,21 @@ use taprelay_core::{
     function::{self, FunctionId},
     state::{Target, TransportActivity},
 };
+mod foreground_app_groups;
+
+/// Refresh data without destroying delegates that own keyboard focus or an open popup.
+pub(crate) fn update_model<T: Clone + 'static>(model: ModelRc<T>, rows: Vec<T>) -> ModelRc<T> {
+    if let Some(current) = model.as_any().downcast_ref::<VecModel<T>>()
+        && current.row_count() == rows.len()
+    {
+        for (index, row) in rows.into_iter().enumerate() {
+            current.set_row_data(index, row);
+        }
+        model
+    } else {
+        ModelRc::new(VecModel::from(rows))
+    }
+}
 
 fn dispatch_controller(
     controller: &Rc<RefCell<Controller>>,
@@ -137,6 +152,7 @@ pub fn run() -> Result<()> {
     }
     controller.present_startup(&ui)?;
     let controller = Rc::new(RefCell::new(controller));
+    foreground_app_groups::connect(&controller, &ui);
     let action_controller = controller.clone();
     let action_window = ui.as_weak();
     ui.on_action(move |name, value| match Action::try_from(name.as_str()) {
@@ -421,6 +437,9 @@ enum ExitIntent {
 }
 
 struct Controller {
+    foreground_app_icons: Rc<RefCell<foreground_app_groups::IconCache>>,
+    group_draft: Option<foreground_app_groups::GroupDraft>,
+    pending_group_rules: Option<taprelay_core::foreground_app::ForegroundAppRules>,
     runtime: RuntimeHandle,
     path: PathBuf,
     logs: Option<tracing_appender::non_blocking::ErrorCounter>,
@@ -471,6 +490,9 @@ impl Controller {
         let persisted_remembered_device = config.remembered_device.clone();
         let now = Instant::now();
         Ok(Self {
+            group_draft: None,
+            foreground_app_icons: Rc::new(RefCell::new(foreground_app_groups::IconCache::new())),
+            pending_group_rules: None,
             runtime: RuntimeHandle::new(config)?,
             path,
             logs,
@@ -541,7 +563,8 @@ impl Controller {
         }
     }
     fn flush(&mut self, force: bool) {
-        if self.fatal.is_some() {
+        // Do not race the worker's atomic group save with an older UI snapshot.
+        if self.fatal.is_some() || self.runtime.saving_foreground_app_rules() {
             return;
         }
         self.track_remembered_device();
@@ -625,7 +648,10 @@ impl Controller {
                 if !self.runtime.stopped() {
                     self.cancel_capture()?;
                 }
-                ui.set_page(action::page(value)?.clamp(0, 3));
+                ui.set_page(action::page(value)?.clamp(0, 4));
+                ui.global::<crate::ForegroundAppUi>().set_error("".into());
+                ui.global::<crate::ForegroundAppUi>()
+                    .set_confirming_delete(false);
             }
             Action::Listen => {
                 self.runtime.set_listening(!self.runtime.listening)?;
@@ -930,6 +956,14 @@ impl Controller {
         }
         let locale = self.locale();
         i18n::apply(ui, locale);
+        self.sync_group_operation(ui);
+        let icons_changed = self.foreground_app_icons.borrow_mut().poll();
+        if icons_changed {
+            let view = ui.global::<crate::ForegroundAppUi>();
+            view.set_icon_revision(view.get_icon_revision().wrapping_add(1));
+        }
+        ui.global::<crate::ForegroundAppUi>()
+            .set_busy(self.runtime.busy() || self.runtime.stopped() || self.recording());
         let o = &self.runtime.config.options;
         let dark = match o.theme {
             ThemeSetting::System => self.system_theme,
@@ -1095,6 +1129,7 @@ impl Controller {
         {
             self.previous_bindings =
                 Some((self.runtime.bindings_revision, locale, keyboard_layout));
+            self.sync_foreground_app_groups(ui);
             let mut rows = Vec::new();
             let mut summary = Vec::new();
             for definition in taprelay_core::function::FUNCTION_CATALOG {
@@ -1154,6 +1189,24 @@ impl Controller {
                     }
                 }
                 let row = FunctionBindingRow {
+                    scope_label: self
+                        .runtime
+                        .config
+                        .foreground_app_rules
+                        .assignments
+                        .get(&definition.id)
+                        .map(|ids| {
+                            ids.iter()
+                                .filter_map(|id| {
+                                    self.runtime.config.foreground_app_rules.groups.get(id)
+                                })
+                                .map(|group| group.name.as_str())
+                                .collect::<Vec<_>>()
+                                .join(" / ")
+                        })
+                        .unwrap_or_else(|| self.tr(keys::GROUPS_ALL))
+                        .into(),
+                    scope_editable: definition.category == function::CategoryId::Media,
                     id: definition.id.stable_id().into(),
                     label: self.tr(definition.name_key).into(),
                     gestures: ModelRc::new(VecModel::from(gestures)),
@@ -1163,7 +1216,7 @@ impl Controller {
                 rows.push(row);
             }
             ui.global::<BindingUi>()
-                .set_rows(ModelRc::new(VecModel::from(rows)));
+                .set_rows(update_model(ui.global::<BindingUi>().get_rows(), rows));
             ui.set_bindings(ModelRc::new(VecModel::from(summary)));
         }
         if self

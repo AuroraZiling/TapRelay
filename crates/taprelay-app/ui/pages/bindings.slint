@@ -9,6 +9,8 @@ import { Caption, Label } from "../components/primitives.slint";
 import { IconButton } from "../components/icon-button.slint";
 import { SwitchRow } from "../components/switch-row.slint";
 import { Badge } from "../vendor/components/badge.slint";
+import { ForegroundAppScope } from "../components/foreground-app-scope.slint";
+import { ForegroundAppUi } from "../types.slint";
 
 component ShortcutCapture inherits Rectangle {
     in property <string> text;
@@ -284,10 +286,11 @@ component FunctionBindingRowView inherits Rectangle {
     in property <length> column-spacing: 16px;
     property <length> chip-spacing: 8px;
     in property <length> switch-width: 36px;
-    in property <length> function-column-width: 300px;
+    in property <length> function-column-width: 240px;
+    in property <length> scope-column-width: 124px;
     property <length> shortcut-column-width: max(0px,
-        root.width - 2 * root.row-padding - 2 * root.column-spacing
-        - root.switch-width - root.function-column-width);
+        root.width - 2 * root.row-padding - 3 * root.column-spacing
+        - root.switch-width - root.function-column-width - root.scope-column-width);
     property <bool> two-shortcut-columns:
         root.binding-row.shortcuts.length > 1
         || (!root.inactive && root.binding-row.shortcuts.length == 1);
@@ -434,6 +437,23 @@ component FunctionBindingRowView inherits Rectangle {
                 }
             }
         }
+        Rectangle {
+            width: root.scope-column-width;
+            height: Tokens.density-button-sm;
+            if root.binding-row.scope-editable: ForegroundAppScope {
+                width: parent.width;
+                function-id: root.binding-row.id;
+                scope-label: root.binding-row.scope-label;
+                disabled: root.capture-busy || ForegroundAppUi.busy;
+            }
+            if !root.binding-row.scope-editable: Caption {
+                width: parent.width;
+                height: parent.height;
+                text: I18n.text.groups-all;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
     }
 
 }
@@ -442,9 +462,11 @@ export component FunctionBindingsPage inherits VerticalLayout {
     property <length> row-padding: 16px;
     property <length> column-spacing: 16px;
     property <length> switch-width: 36px;
-    property <length> function-column-width: 300px;
+    property <length> function-column-width: 240px;
+    property <length> scope-column-width: 124px;
     spacing: 24px;
-    Caption { text: I18n.text.bindings-help; vertical-stretch: 0; }
+    Caption { text: I18n.text.bindings-help; vertical-stretch: 0; accessible-id: "bindings-description"; }
+    if ForegroundAppUi.error != "": Label { text: ForegroundAppUi.error; color: Tokens.color-destructive; }
     ScrollArea {
         drag-to-scroll: false;
         content-height: max(self.height, content.preferred-height);
@@ -463,6 +485,12 @@ export component FunctionBindingsPage inherits VerticalLayout {
                 Caption { text: I18n.text.bindings-column-enabled; width: root.switch-width; }
                 Caption { text: I18n.text.bindings-column-shortcut; horizontal-stretch: 1; }
                 Caption { text: I18n.text.bindings-column-function; width: root.function-column-width; }
+                Caption {
+                    text: I18n.text.groups-scope;
+                    width: root.scope-column-width;
+                    horizontal-alignment: left;
+                    accessible-id: "bindings-column-scope";
+                }
             }
             for row in BindingUi.rows: FunctionBindingRowView {
                 binding-row: row;
@@ -471,6 +499,7 @@ export component FunctionBindingsPage inherits VerticalLayout {
                 column-spacing: root.column-spacing;
                 switch-width: root.switch-width;
                 function-column-width: root.function-column-width;
+                scope-column-width: root.scope-column-width;
                 begin-binding-capture(function-id, slot) => {
                     BindingUi.begin-capture(function-id, slot);
                 }

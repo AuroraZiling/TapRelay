@@ -104,6 +104,8 @@ struct ActiveToken {
 /// function lifetimes. Callers publish a new config at a revision
 /// boundary and then feed subsequent physical events through `route`.
 pub struct InputRouter {
+    foreground_app_scopes: crate::foreground_app::ScopeIndex,
+    foreground: Option<String>,
     index: BindingIndex,
     revision: u64,
     listening: bool,
@@ -120,6 +122,8 @@ pub struct InputRouter {
 impl InputRouter {
     pub fn new(configs: &FunctionConfigs, revision: u64) -> Self {
         Self {
+            foreground_app_scopes: Default::default(),
+            foreground: None,
             index: BindingIndex::new(configs),
             revision,
             listening: false,
@@ -136,6 +140,50 @@ impl InputRouter {
 
     pub fn revision(&self) -> u64 {
         self.revision
+    }
+
+    pub fn set_foreground_app_rules(
+        &mut self,
+        rules: &crate::foreground_app::ForegroundAppRules,
+    ) -> RouteResult {
+        self.foreground_app_scopes = crate::foreground_app::ScopeIndex::new(rules);
+        self.cancel_out_of_scope()
+    }
+
+    pub fn set_foreground(&mut self, executable: Option<&str>) -> RouteResult {
+        // Native discovery caches canonical identities; the common unchanged
+        // foreground path needs neither allocation nor another scope lookup.
+        if self.foreground.as_deref() == executable {
+            return self.stamp(RouteResult::default());
+        }
+        let foreground = executable.map(crate::foreground_app::executable_identity);
+        if self.foreground == foreground {
+            return self.stamp(RouteResult::default());
+        }
+        self.foreground = foreground;
+        self.cancel_out_of_scope()
+    }
+
+    fn cancel_out_of_scope(&mut self) -> RouteResult {
+        let codes: Vec<_> = self
+            .active
+            .iter()
+            .filter_map(|(&code, active)| {
+                (!self
+                    .foreground_app_scopes
+                    .allows(active.binding.function, self.foreground.as_deref()))
+                .then_some(code)
+            })
+            .collect();
+        let mut result = RouteResult::default();
+        for code in codes {
+            let active = self.active.remove(&code).expect("active token");
+            if active.hold_started {
+                self.release_hold(&active, &mut result, Instant::now());
+            }
+            self.suppressed_until_up.insert(code);
+        }
+        self.stamp(result)
     }
 
     pub fn passthrough(&self) -> bool {
@@ -300,7 +348,7 @@ impl InputRouter {
 
     /// Route an edge that belongs to TapRelay's own configuration window.
     /// Physical state is still updated and a captured function is released,
-    /// Only the passthrough toggle can start here; active passthrough owns
+    /// App control toggles can start here; active passthrough owns
     /// the window's input just like every other window.
     pub fn route_local_event(&mut self, event: InputEvent) -> RouteResult {
         if self.passthrough {
@@ -311,7 +359,10 @@ impl InputRouter {
             && self
                 .index
                 .best_match_where(event.code, &self.physical, |id| {
-                    id == FunctionId::AppTogglePassthrough
+                    matches!(
+                        id,
+                        FunctionId::AppToggleListening | FunctionId::AppTogglePassthrough
+                    )
                 })
                 .is_some()
         {
@@ -449,12 +500,14 @@ impl InputRouter {
             && let Some(index) = self
                 .index
                 .best_match_where(event.code, &self.physical, |id| {
-                    self.listening
-                        || self.passthrough
-                        || matches!(
-                            id,
-                            FunctionId::AppToggleListening | FunctionId::AppTogglePassthrough
-                        )
+                    self.foreground_app_scopes
+                        .allows(id, self.foreground.as_deref())
+                        && (self.listening
+                            || self.passthrough
+                            || matches!(
+                                id,
+                                FunctionId::AppToggleListening | FunctionId::AppTogglePassthrough
+                            ))
                 })
         {
             let binding = self.index.binding(index).expect("index entry").clone();
@@ -720,6 +773,132 @@ mod tests {
         let mut router = InputRouter::new(&configs, 1);
         router.set_listening(true);
         router
+    }
+
+    fn scoped_rules(id: FunctionId) -> crate::foreground_app::ForegroundAppRules {
+        use crate::foreground_app::{ForegroundAppGroup, ForegroundAppRules};
+        ForegroundAppRules {
+            groups: BTreeMap::from([(
+                "games".into(),
+                ForegroundAppGroup {
+                    name: "Games".into(),
+                    foreground_apps: vec![r"C:\a.exe".into(), r"C:\b.exe".into()],
+                },
+            )]),
+            assignments: BTreeMap::from([(id, ["games".into()].into())]),
+        }
+    }
+
+    #[test]
+    fn foreground_app_scope_preserves_same_group_volume_hold_and_stops_on_exit() {
+        let code = InputCode::Mouse(MouseButton::Side1);
+        let mut router = router_with(
+            Shortcut::from_physical(&[], code).unwrap(),
+            FunctionId::MediaVolumeUp,
+        );
+        router.set_foreground_app_rules(&scoped_rules(FunctionId::MediaVolumeUp));
+        assert!(!router.route_event(event(code, true)).consume);
+        router.route_event(event(code, false));
+        router.set_foreground(Some(r"C:\a.exe"));
+        let now = Instant::now();
+        assert!(router.route_event(event_at(code, true, now)).consume);
+        router.set_foreground(Some(r"C:\b.exe"));
+        assert_eq!(
+            outputs(&router.tick(now + HOLD_THRESHOLD)),
+            [(media(MediaCommand::VolumeUp), true)]
+        );
+        router.set_foreground(None);
+        assert!(outputs(&router.tick(now + HOLD_THRESHOLD * 2)).is_empty());
+        router.set_foreground(Some(r"C:\a.exe"));
+        assert!(outputs(&router.route_event(event(code, true))).is_empty());
+        assert!(router.route_event(event(code, false)).consume);
+        assert_eq!(
+            outputs(&router.route_event(event(code, true))),
+            [(media(MediaCommand::VolumeUp), true)]
+        );
+    }
+
+    #[test]
+    fn scope_exit_cancels_pending_tap_and_releases_active_seek_once() {
+        let code = InputCode::Key(0x58);
+        for held in [false, true] {
+            let mut router = router_with(
+                Shortcut::from_physical(&[], code).unwrap(),
+                FunctionId::MediaNext,
+            );
+            let mut rules = scoped_rules(FunctionId::MediaNext);
+            router.set_foreground_app_rules(&rules);
+            router.set_foreground(Some(r"C:\a.exe"));
+            let now = Instant::now();
+            router.route_event(event_at(code, true, now));
+            if held {
+                router.tick(now + HOLD_THRESHOLD);
+            }
+            rules
+                .groups
+                .get_mut("games")
+                .unwrap()
+                .foreground_apps
+                .clear();
+            let cleanup = router.set_foreground_app_rules(&rules);
+            assert_eq!(
+                outputs(&cleanup),
+                if held {
+                    vec![(media(MediaCommand::FastForward), false)]
+                } else {
+                    vec![]
+                }
+            );
+            assert!(outputs(&router.route_event(event(code, false))).is_empty());
+            assert!(outputs(&router.set_foreground(None)).is_empty());
+            assert!(!router.route_event(event(code, true)).consume);
+        }
+    }
+
+    #[test]
+    fn disjoint_scopes_route_shared_shortcut_and_keep_controls_global() {
+        let code = InputCode::Key(0x58);
+        let mut configs = default_configs();
+        for id in [FunctionId::MediaPlayPause, FunctionId::MediaMute] {
+            configs.get_mut(&id).unwrap().enabled = true;
+            configs
+                .get_mut(&id)
+                .unwrap()
+                .shortcuts
+                .push(Shortcut::from_physical(&[], code).unwrap());
+        }
+        let mut rules = scoped_rules(FunctionId::MediaPlayPause);
+        rules.groups.insert(
+            "work".into(),
+            crate::foreground_app::ForegroundAppGroup {
+                name: "Work".into(),
+                foreground_apps: vec![r"C:\c.exe".into()],
+            },
+        );
+        rules
+            .assignments
+            .insert(FunctionId::MediaMute, ["work".into()].into());
+        assert!(rules.valid_bindings(&configs));
+        let mut router = InputRouter::new(&configs, 1);
+        router.set_listening(true);
+        router.set_foreground_app_rules(&rules);
+        for (path, command) in [
+            (r"C:\a.exe", MediaCommand::PlayPause),
+            (r"C:\c.exe", MediaCommand::Mute),
+        ] {
+            router.set_foreground(Some(path));
+            assert_eq!(
+                outputs(&router.route_event(event(code, true))),
+                [(media(command), true)]
+            );
+            router.route_event(event(code, false));
+        }
+        let toggle = FunctionId::AppToggleListening;
+        let mut router = router_with(Shortcut::from_physical(&[], code).unwrap(), toggle);
+        router.set_foreground_app_rules(&rules);
+        router.set_foreground(None);
+        router.set_listening(false);
+        assert!(!outputs(&router.route_event(event(code, true))).is_empty());
     }
 
     #[test]

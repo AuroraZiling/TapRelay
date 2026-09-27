@@ -7,6 +7,8 @@ pub mod desktop;
 #[cfg(windows)]
 pub mod diagnostics;
 #[cfg(windows)]
+pub mod foreground_apps;
+#[cfg(windows)]
 pub mod input;
 #[cfg(windows)]
 mod native;

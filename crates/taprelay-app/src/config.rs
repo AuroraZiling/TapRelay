@@ -12,6 +12,8 @@ use taprelay_core::function::{self, FunctionConfigs};
 pub struct Config {
     pub schema: u32,
     pub functions: FunctionConfigs,
+    #[serde(default)]
+    pub foreground_app_rules: taprelay_core::foreground_app::ForegroundAppRules,
     pub remembered_device: Option<Device>,
     pub wizard: Wizard,
     pub options: Options,
@@ -22,6 +24,7 @@ impl Default for Config {
         Self {
             schema: 3,
             functions: function::default_configs(),
+            foreground_app_rules: Default::default(),
             remembered_device: None,
             wizard: Wizard::default(),
             options: Options::default(),
@@ -191,8 +194,8 @@ impl Config {
             "Unsupported configuration format (expected schema 3)"
         );
         ensure!(
-            function::valid_configs(&self.functions),
-            "Invalid or duplicate shortcut"
+            self.foreground_app_rules.valid_bindings(&self.functions),
+            "Invalid application group or conflicting shortcut"
         );
         ensure!(self.wizard.page <= 3, "Invalid wizard page");
         ensure!(
@@ -271,6 +274,105 @@ impl SaveQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn single_group_configs_load_and_multi_group_selections_round_trip() {
+        use taprelay_core::{foreground_app::ForegroundAppGroup, function::FunctionId};
+        let mut config = Config::default();
+        for id in ["games", "work"] {
+            config.foreground_app_rules.groups.insert(
+                id.into(),
+                ForegroundAppGroup {
+                    name: id.into(),
+                    foreground_apps: vec![],
+                },
+            );
+        }
+        let mut json = serde_json::to_value(&config).unwrap();
+        // The previous feature used both the application_rules field and an
+        // applications member list. Read either schema, but write only new names.
+        let mut legacy_rules = json
+            .as_object_mut()
+            .unwrap()
+            .remove("foreground_app_rules")
+            .unwrap();
+        for group in legacy_rules["groups"].as_object_mut().unwrap().values_mut() {
+            let paths = group
+                .as_object_mut()
+                .unwrap()
+                .remove("foreground_apps")
+                .unwrap();
+            group["applications"] = paths;
+        }
+        legacy_rules["assignments"]["media.play-pause"] = "games".into();
+        json["application_rules"] = legacy_rules;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let bytes = serde_json::to_vec(&json).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        let mut loaded = Config::load(&path).unwrap();
+        let id = FunctionId::MediaPlayPause;
+        assert_eq!(
+            loaded.foreground_app_rules.assignments[&id],
+            ["games".into()].into()
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        loaded.foreground_app_rules.toggle_scope(id, "work");
+        loaded.save(&path).unwrap();
+        assert_eq!(
+            Config::load(&path).unwrap().foreground_app_rules,
+            loaded.foreground_app_rules
+        );
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(saved.get("application_rules").is_none());
+        for group in saved["foreground_app_rules"]["groups"]
+            .as_object()
+            .unwrap()
+            .values()
+        {
+            assert!(group.get("foreground_apps").is_some());
+            assert!(group.get("applications").is_none());
+        }
+        assert_eq!(
+            saved["foreground_app_rules"]["assignments"]["media.play-pause"],
+            serde_json::json!(["games", "work"])
+        );
+    }
+
+    #[test]
+    fn old_configs_remain_global_and_groups_round_trip_without_rewriting_input() {
+        use taprelay_core::{foreground_app::ForegroundAppGroup, function::FunctionId};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut json = serde_json::to_value(Config::default()).unwrap();
+        json.as_object_mut().unwrap().remove("foreground_app_rules");
+        let bytes = serde_json::to_vec(&json).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        let mut config = Config::load(&path).unwrap();
+        assert!(config.foreground_app_rules.assignments.is_empty());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        config.foreground_app_rules.groups.insert(
+            "games".into(),
+            ForegroundAppGroup {
+                name: "游戏".into(),
+                foreground_apps: vec![r"C:\Games\game.exe".into()],
+            },
+        );
+        config
+            .foreground_app_rules
+            .assignments
+            .insert(FunctionId::MediaPlayPause, ["games".into()].into());
+        config.save(&path).unwrap();
+        let saved = Config::load(&path).unwrap();
+        assert_eq!(saved.foreground_app_rules, config.foreground_app_rules);
+        config.foreground_app_rules.groups.remove("games");
+        assert!(config.save(&path).is_err());
+        assert_eq!(
+            Config::load(&path).unwrap().foreground_app_rules,
+            saved.foreground_app_rules
+        );
+    }
 
     #[test]
     fn mouse_report_rate_defaults_for_old_configs_and_round_trips() {

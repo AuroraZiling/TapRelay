@@ -18,6 +18,100 @@ fn idle(handle: &mut RuntimeHandle) {
 }
 
 #[test]
+fn foreground_app_group_edits_publish_only_valid_revisions_and_persist_in_config() {
+    use taprelay_core::foreground_app::ForegroundAppGroup;
+    let mut handle = RuntimeHandle::new(Config::default()).unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config.json");
+    let mut rules = handle.config.foreground_app_rules.clone();
+    rules.groups.insert(
+        "games".into(),
+        ForegroundAppGroup {
+            name: "Games".into(),
+            foreground_apps: vec![],
+        },
+    );
+    rules
+        .assignments
+        .insert(FunctionId::MediaPlayPause, ["games".into()].into());
+    handle
+        .set_foreground_app_rules(rules.clone(), &path)
+        .unwrap();
+    assert!(handle.saving_foreground_app_rules());
+    idle(&mut handle);
+    assert_eq!(handle.config.foreground_app_rules, rules);
+    assert_eq!(Config::load(&path).unwrap().foreground_app_rules, rules);
+    assert_eq!(handle.take_foreground_app_rules_saved(), Some(true));
+    assert!(handle.take_bindings_changed());
+    assert!(handle.take_notice().is_none());
+    let revision = handle.bindings_revision;
+    let mut invalid = rules.clone();
+    invalid.groups.clear();
+    handle.set_foreground_app_rules(invalid, &path).unwrap();
+    idle(&mut handle);
+    assert_eq!(handle.bindings_revision, revision);
+    assert_eq!(handle.config.foreground_app_rules, rules);
+    assert_eq!(Config::load(&path).unwrap().foreground_app_rules, rules);
+    assert_eq!(handle.take_foreground_app_rules_saved(), Some(false));
+    assert!(matches!(handle.take_notice(), Some(Notice::Error(_))));
+}
+
+#[test]
+fn group_write_failures_leave_new_delete_and_unchanged_edits_unapplied_and_retryable() {
+    use taprelay_core::foreground_app::ForegroundAppGroup;
+    let mut config = Config::default();
+    config.foreground_app_rules.groups.insert(
+        "original".into(),
+        ForegroundAppGroup {
+            name: "Original".into(),
+            foreground_apps: vec![],
+        },
+    );
+    config
+        .foreground_app_rules
+        .toggle_scope(FunctionId::MediaMute, "original");
+    let original = config.foreground_app_rules.clone();
+    let mut handle = RuntimeHandle::new(config).unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config.json");
+    std::fs::create_dir(&path).unwrap(); // Force atomic replacement to fail.
+    let mut created = original.clone();
+    created.groups.insert(
+        "new".into(),
+        ForegroundAppGroup {
+            name: "New".into(),
+            foreground_apps: vec![],
+        },
+    );
+    let mut deleted = original.clone();
+    deleted.remove_group("original");
+    let revision = handle.bindings_revision;
+    for candidate in [&created, &deleted, &original] {
+        handle
+            .set_foreground_app_rules(candidate.clone(), &path)
+            .unwrap();
+        idle(&mut handle);
+        assert_eq!(handle.take_foreground_app_rules_saved(), Some(false));
+        assert_eq!(handle.config.foreground_app_rules, original);
+        assert_eq!(handle.bindings_revision, revision);
+        assert!(!handle.take_bindings_changed());
+        assert!(matches!(handle.take_notice(), Some(Notice::Error(_))));
+    }
+    // Cancelling the failed edit requires no rollback; even a later general
+    // autosave still sees the original rules, not any failed candidate.
+    std::fs::remove_dir(&path).unwrap();
+    handle.config.save(&path).unwrap();
+    assert_eq!(Config::load(&path).unwrap().foreground_app_rules, original);
+    handle
+        .set_foreground_app_rules(created.clone(), &path)
+        .unwrap();
+    idle(&mut handle);
+    assert_eq!(handle.take_foreground_app_rules_saved(), Some(true));
+    assert_eq!(Config::load(&path).unwrap().foreground_app_rules, created);
+    assert_eq!(handle.config.foreground_app_rules.groups.len(), 2);
+}
+
+#[test]
 fn mouse_report_rate_updates_persist_and_invalid_values_leave_config_unchanged() {
     let mut handle = RuntimeHandle::new(Config::default()).unwrap();
     for hz in taprelay_core::passthrough::MOUSE_REPORT_RATES {

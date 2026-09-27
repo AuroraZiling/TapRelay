@@ -1,0 +1,250 @@
+// Foreground-app group subpage.
+import { ListView } from "std-widgets.slint";
+import { Button } from "../vendor/components/button.slint";
+import { Input } from "../vendor/components/input.slint";
+
+import { Tokens } from "../vendor/theme/tokens.slint";
+import { Caption, Label } from "../components/primitives.slint";
+import { IconButton } from "../components/icon-button.slint";
+import { IconDisplay, IconSet } from "@lucide";
+import { ForegroundAppUi, ForegroundAppRow } from "../types.slint";
+import { I18n } from "@i18n";
+
+component ForegroundAppTab inherits Button {
+    in property <bool> selected;
+    in property <int> index;
+    variant: ghost;
+    foreground-only: true;
+    opacity: root.disabled ? 0.5 : root.selected ? 1 : 0.65;
+    accessible-role: tab;
+    accessible-item-index: root.index;
+    accessible-item-selectable: true;
+    accessible-item-selected: root.selected;
+    if root.selected: Rectangle {
+        y: root.height - 2px;
+        height: 2px;
+        width: root.width;
+        background: Tokens.color-foreground;
+    }
+}
+
+component ForegroundAppTabs inherits FocusScope {
+    height: 36px;
+    in property <bool> disabled: ForegroundAppUi.busy || ForegroundAppUi.saving;
+    enabled: !root.disabled;
+    accessible-role: tab-list;
+    accessible-label: I18n.text.groups-foreground-apps;
+    accessible-item-count: 2;
+    function choose(running: bool) {
+        if !root.disabled {
+            if running { running-tab.focus(); } else { selected-tab.focus(); }
+            if running != ForegroundAppUi.choosing-running {
+                ForegroundAppUi.command(running ? "running" : "show-selected", "");
+            }
+        }
+    }
+    capture-key-pressed(event) => {
+        if event.text == Key.LeftArrow || event.text == Key.Home {
+            root.choose(false);
+            return accept;
+        }
+        if event.text == Key.RightArrow || event.text == Key.End {
+            root.choose(true);
+            return accept;
+        }
+        return reject;
+    }
+    Rectangle { y: root.height - 1px; height: 1px; background: Tokens.color-border-hairline; }
+    selected-tab := ForegroundAppTab {
+        x: 0px;
+        width: root.width / 2;
+        text: I18n.text.groups-selected + " (" + ForegroundAppUi.foreground-apps.length + ")";
+        selected: !ForegroundAppUi.choosing-running;
+        index: 0;
+        disabled: root.disabled;
+        accessible-id: "groups-tab-selected";
+        clicked => { root.choose(false); }
+    }
+    running-tab := ForegroundAppTab {
+        x: root.width / 2;
+        width: root.width / 2;
+        text: I18n.text.groups-running;
+        selected: ForegroundAppUi.choosing-running;
+        index: 1;
+        disabled: root.disabled;
+        accessible-id: "groups-tab-running";
+        clicked => { root.choose(true); }
+    }
+}
+
+component ForegroundAppEntry inherits Rectangle {
+    in property <ForegroundAppRow> foreground-app;
+    in property <bool> adding;
+    height: root.missing ? 88px : 62px;
+    border-radius: Tokens.radius-md;
+    background: Tokens.color-card;
+    property <int> icon-revision: ForegroundAppUi.icon-revision;
+    property <bool> has-icon: ForegroundAppUi.has-icon(root.foreground-app.path, root.icon-revision);
+    property <bool> missing: ForegroundAppUi.app-missing(root.foreground-app.path, root.icon-revision);
+    property <string> app-name: ForegroundAppUi.app-name(root.foreground-app.path, root.icon-revision);
+    property <string> display-name: root.app-name == "" ? root.foreground-app.name : root.app-name;
+    init => { ForegroundAppUi.request-icon(root.foreground-app.path); }
+    changed foreground-app => { ForegroundAppUi.request-icon(root.foreground-app.path); }
+    changed icon-revision => { ForegroundAppUi.request-icon(root.foreground-app.path); }
+    HorizontalLayout {
+        padding: 10px;
+        spacing: 12px;
+        cross-axis-alignment: center;
+        Rectangle {
+            width: 32px;
+            height: 32px;
+            accessible-role: image;
+            accessible-label: root.display-name;
+            accessible-id: "group-icon-" + root.foreground-app.path;
+            if root.has-icon: Image {
+                accessible-role: none;
+                width: parent.width;
+                height: parent.height;
+                source: ForegroundAppUi.app-icon(root.foreground-app.path, root.icon-revision);
+                image-fit: contain;
+            }
+            if !root.has-icon: IconDisplay {
+                icon: IconSet.AppWindow;
+                size: 28px;
+                x: 2px;
+                y: 2px;
+                stroke: Tokens.color-muted-foreground;
+            }
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 3px;
+            Text {
+                text: root.display-name;
+                color: Tokens.color-foreground;
+                overflow: elide;
+                accessible-id: "group-foreground-app-name-" + root.foreground-app.path;
+            }
+            Caption { text: root.foreground-app.path; wrap: no-wrap; overflow: elide; }
+            if root.missing: Caption {
+                text: I18n.text.groups-missing;
+                accessible-id: "group-missing-" + root.foreground-app.path;
+                color: Tokens.color-warning;
+                wrap: no-wrap;
+                overflow: elide;
+            }
+        }
+        Button {
+            text: root.adding ? I18n.text.groups-add : I18n.text.groups-remove;
+            variant: ghost;
+            horizontal-stretch: 0;
+            disabled: ForegroundAppUi.busy || ForegroundAppUi.saving;
+            accessible-id: "group-foreground-app-" + (root.adding ? "add-" : "remove-") + root.foreground-app.path;
+            clicked => { ForegroundAppUi.command(root.adding ? "add" : "remove", root.foreground-app.path); }
+        }
+    }
+}
+
+export component ForegroundAppGroupEditor inherits FocusScope {
+    vertical-stretch: 1;
+    forward-focus: name-field;
+    property <int> focus-request: ForegroundAppUi.focus-request;
+    changed focus-request => { name-field.focus(); }
+    capture-key-pressed(event) => {
+        if event.text == Key.Escape {
+            if !ForegroundAppUi.saving { ForegroundAppUi.command("cancel", ""); }
+            return accept;
+        }
+        return reject;
+    }
+    accessible-role: form;
+    accessible-id: "groups-editor";
+    accessible-label: ForegroundAppUi.selected-id == "" ? I18n.text.groups-create : I18n.text.groups-edit;
+    VerticalLayout {
+        spacing: 12px;
+        HorizontalLayout {
+            spacing: 16px;
+            vertical-stretch: 0;
+            cross-axis-alignment: center;
+            Label { text: I18n.text.groups-name; horizontal-stretch: 0; }
+            name-field := Input {
+                auto-focus: true;
+                text <=> ForegroundAppUi.selected-name;
+                placeholder: I18n.text.groups-name-example;
+                enabled: !ForegroundAppUi.saving;
+                accessible-role: groupbox;
+                accessible-id: "groups-name-input";
+                accessible-label: I18n.text.groups-name;
+                accepted(value) => { if !ForegroundAppUi.saving { ForegroundAppUi.command("save", ""); } }
+            }
+        }
+        ForegroundAppTabs { vertical-stretch: 0; }
+        if ForegroundAppUi.choosing-running: HorizontalLayout {
+            spacing: 8px;
+            cross-axis-alignment: center;
+            vertical-stretch: 0;
+            Caption { text: I18n.text.groups-running-help; horizontal-stretch: 1; }
+            IconButton {
+                icon: IconSet.RefreshCw;
+                hint: I18n.text.groups-refresh;
+                size: icon-sm;
+                width: 28px;
+                disabled: ForegroundAppUi.busy || ForegroundAppUi.saving;
+                clicked => { ForegroundAppUi.command("running", ""); }
+            }
+            Button {
+                text: I18n.text.groups-browse;
+                variant: outline;
+                size: sm;
+                horizontal-stretch: 0;
+                disabled: ForegroundAppUi.busy || ForegroundAppUi.saving;
+                accessible-id: "groups-browse";
+                clicked => { ForegroundAppUi.command("browse", ""); }
+            }
+        }
+        if ForegroundAppUi.choosing-running: VerticalLayout {
+            spacing: 6px;
+            if ForegroundAppUi.running.length == 0: Caption { text: I18n.text.groups-running-empty; vertical-stretch: 0; }
+            ListView {
+                accessible-id: "groups-running-list";
+                for foreground-app in ForegroundAppUi.running: Rectangle {
+                    height: running-entry.height + 6px;
+                    running-entry := ForegroundAppEntry { foreground-app: foreground-app; adding: true; }
+                }
+            }
+        }
+        if !ForegroundAppUi.choosing-running: VerticalLayout {
+            spacing: 6px;
+            if ForegroundAppUi.foreground-apps.length == 0: Caption { text: I18n.text.groups-no-apps; vertical-stretch: 0; }
+            ListView {
+                accessible-id: "groups-selected-list";
+                for foreground-app in ForegroundAppUi.foreground-apps: Rectangle {
+                    height: selected-entry.height + 6px;
+                    selected-entry := ForegroundAppEntry { foreground-app: foreground-app; }
+                }
+            }
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            cross-axis-alignment: center;
+            vertical-stretch: 0;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                if ForegroundAppUi.form-error != "": Label {
+                    text: ForegroundAppUi.form-error;
+                    color: Tokens.color-destructive;
+                    accessible-id: "groups-editor-error";
+                    accessible-live-region: polite;
+                }
+            }
+            Button {
+                text: ForegroundAppUi.saving ? I18n.text.groups-saving : I18n.text.groups-save;
+                horizontal-stretch: 0;
+                disabled: ForegroundAppUi.busy || ForegroundAppUi.saving;
+                accessible-id: "groups-editor-save";
+                clicked => { ForegroundAppUi.command("save", ""); }
+            }
+        }
+    }
+}

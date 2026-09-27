@@ -2,6 +2,7 @@
 pub mod binding;
 pub mod command;
 pub mod devices;
+pub mod foreground_app;
 pub mod function;
 pub mod hid;
 pub mod input;

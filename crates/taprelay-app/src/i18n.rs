@@ -80,6 +80,16 @@ pub fn text(locale_id: &str, key: &str) -> String {
     english.get(key).cloned().unwrap_or_else(|| key.to_owned())
 }
 
+/// Formats the application total with the locale's singular/plural wording.
+pub fn foreground_app_count(locale_id: &str, count: usize) -> String {
+    let key = if count == 1 {
+        keys::GROUPS_COUNT_ONE
+    } else {
+        keys::GROUPS_COUNT_OTHER
+    };
+    text(locale_id, key).replace("{count}", &count.to_string())
+}
+
 /// Borrows one compiled catalog. The caller passes an identifier it resolved already.
 fn catalog(locale_id: &str) -> &'static Catalog {
     CATALOGS
@@ -142,6 +152,19 @@ pub fn tray_labels(locale_id: &str) -> [String; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn foreground_app_totals_use_localized_wording() {
+        for count in [0, 1, 2, 100] {
+            assert_eq!(
+                foreground_app_count("zh-cn", count),
+                format!("共 {count} 个应用")
+            );
+        }
+        assert_eq!(foreground_app_count("en", 0), "0 applications");
+        assert_eq!(foreground_app_count("en", 1), "1 application");
+        assert_eq!(foreground_app_count("en", 2), "2 applications");
+    }
 
     #[test]
     fn every_locale_defines_a_language_name_key() {

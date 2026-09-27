@@ -13,7 +13,39 @@ export struct FunctionBindingRow {
     label: string,
     gestures: [GestureAction],
     enabled: bool,
-    shortcuts: [ShortcutItem]
+    shortcuts: [ShortcutItem],
+    scope-label: string,
+    scope-editable: bool,
+}
+export struct ForegroundAppGroupRow { id: string, name: string, count: int, count-label: string, summary: string }
+export struct ForegroundAppRow { path: string, name: string }
+export struct ForegroundAppScopeOption { id: string, name: string, checked: bool }
+export global ForegroundAppUi {
+    in-out property <string> scope-function;
+    in property <[ForegroundAppScopeOption]> scope-options;
+    callback open-scope(string);
+    in property <int> icon-revision;
+    pure callback app-icon(string, int) -> image;
+    pure callback has-icon(string, int) -> bool;
+    pure callback app-name(string, int) -> string;
+    pure callback app-missing(string, int) -> bool;
+    callback request-icon(string);
+    in property <[ForegroundAppGroupRow]> groups;
+    in property <[ForegroundAppRow]> foreground-apps;
+    in property <[ForegroundAppRow]> running;
+    in property <bool> busy;
+    in property <bool> saving;
+    in-out property <bool> editor-open;
+    in-out property <string> selected-id;
+    in-out property <string> selected-name;
+    in-out property <string> error;
+    in-out property <string> form-error;
+    in-out property <string> deletion-warning;
+    in-out property <bool> confirming-delete;
+    in-out property <bool> choosing-running;
+    callback command(string, string);
+    in-out property <int> focus-request;
+    callback set-scope(string, string);
 }
 // Single host/UI seam for binding presentation. Rust owns the source of truth;
 // Slint renders the snapshot and reports typed user intent through callbacks.

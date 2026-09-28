@@ -32,6 +32,7 @@ actions! {
     SetAutostart => "set-autostart",
     SetStartHidden => "set-start-hidden",
     SetAutoListen => "set-auto-listen",
+    SetPassthroughOverlay => "set-passthrough-overlay",
     SetPassthroughReverseScroll => "set-passthrough-reverse-scroll",
     // Payload: target Hz, or "0" to follow the Bluetooth connection interval.
     SetPassthroughMouseReportRate => "set-passthrough-mouse-report-rate",

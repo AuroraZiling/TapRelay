@@ -13,6 +13,8 @@ pub mod input;
 #[cfg(windows)]
 mod native;
 #[cfg(windows)]
+pub mod overlay;
+#[cfg(windows)]
 pub use native::{Apartment, InstanceLock};
 #[cfg(windows)]
 pub fn monotonic_millis() -> u64 {

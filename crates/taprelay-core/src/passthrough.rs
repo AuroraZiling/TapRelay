@@ -69,6 +69,7 @@ struct Shared {
     // an active session. One CAS prevents a racing stop from being undone.
     mode: AtomicU64,
     next_epoch: AtomicU64,
+    disconnected_epoch: AtomicU64,
     started: Instant,
     media_boundary: AtomicU64,
     worker: OnceLock<thread::Thread>,
@@ -102,6 +103,7 @@ impl InputLink {
                     reverse_scroll: AtomicBool::new(false),
                     mode: AtomicU64::new(0),
                     next_epoch: AtomicU64::new(1),
+                    disconnected_epoch: AtomicU64::new(0),
                     started: Instant::now(),
                     media_boundary: AtomicU64::new(0),
                     worker: OnceLock::new(),
@@ -203,6 +205,22 @@ impl InputLink {
     pub fn end(&self) {
         self.update_profile_request(false);
         self.suspend();
+    }
+
+    /// Retain which capture lost its transport even after automatic profile recovery.
+    /// Ordinary stops must not overwrite this evidence with a later inactive state.
+    pub fn disconnect(&self) {
+        let epoch = self.epoch();
+        if epoch != 0 {
+            self.shared
+                .disconnected_epoch
+                .store(epoch, Ordering::Release);
+        }
+        self.end();
+    }
+
+    pub fn disconnected_epoch(&self) -> u64 {
+        self.shared.disconnected_epoch.load(Ordering::Acquire)
     }
 
     pub fn set_profile_available(&self, available: bool) {
@@ -318,5 +336,28 @@ impl InputLink {
         if let Some(worker) = self.shared.worker.get() {
             worker.unpark();
         }
+    }
+}
+
+#[cfg(test)]
+mod observation_tests {
+    use super::*;
+
+    #[test]
+    fn transport_loss_is_retained_for_its_epoch_but_normal_stops_do_not_mark_loss() {
+        let (link, _receiver) = InputLink::channel(Arc::new(AtomicU64::new(1)));
+        link.set_ready(1);
+        assert!(link.begin());
+        let first = link.epoch();
+        link.disconnect();
+        assert_eq!(link.epoch(), 0);
+        assert_eq!(link.disconnected_epoch(), first);
+        link.end();
+        assert_eq!(link.disconnected_epoch(), first);
+        link.set_ready(1);
+        assert!(link.begin());
+        assert_ne!(link.epoch(), first);
+        link.end();
+        assert_eq!(link.disconnected_epoch(), first);
     }
 }

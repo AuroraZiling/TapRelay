@@ -1115,6 +1115,14 @@ fn check_navigation_and_settings(ui: &AppWindow) {
 
     for locale in ["en", "zh-cn"] {
         i18n::apply(ui, locale);
+        ui.set_passthrough_overlay(true);
+        let _ = ui.window().take_snapshot().unwrap();
+        actions.borrow_mut().clear();
+        binding_element(ui, "setting-passthrough-overlay").invoke_accessible_default_action();
+        assert_eq!(
+            *actions.borrow(),
+            vec![("set-passthrough-overlay".into(), "0".into())]
+        );
         for hz in taprelay_core::passthrough::MOUSE_REPORT_RATES {
             ui.set_passthrough_mouse_report_rate(i32::from(hz));
             let snapshot = ui.window().take_snapshot().unwrap();

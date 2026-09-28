@@ -359,12 +359,16 @@ fn only_matching_arm_authorizes_capture_and_losing_input_returns_to_media() {
             }
         )
     )));
+    let capture_epoch = h.handle.link.epoch();
+    assert_ne!(capture_epoch, 0);
     h.message(h.current(), status(3, "phone", false));
     h.step();
     assert_eq!(h.handle.link.epoch(), 0);
+    assert_eq!(h.handle.link.disconnected_epoch(), capture_epoch);
     assert!(!h.handle.link.profile_requested());
     h.step();
     assert_eq!(h.snapshot().hid_profile, Profile::MediaOnly);
+    assert_eq!(h.handle.link.disconnected_epoch(), capture_epoch);
 }
 
 #[test]

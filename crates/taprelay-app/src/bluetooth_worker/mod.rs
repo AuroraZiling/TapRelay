@@ -228,7 +228,7 @@ impl<E: Execution> Supervisor<E> {
     }
 
     fn finish(&mut self, mut result: Result<()>) -> Result<()> {
-        self.link.end();
+        self.link.disconnect();
         self.link.set_profile_available(false);
         for (_, pending) in std::mem::take(&mut self.pending) {
             let _ = pending.reply.send(Err(BackendError::Stale));
@@ -267,6 +267,7 @@ impl<E: Execution> Supervisor<E> {
                     break;
                 }
                 if self.profile == Profile::Full {
+                    self.link.disconnect();
                     self.link.fail(format!("Passthrough stopped: {error:#}"));
                     self.replace_worker(Profile::MediaOnly, self.publish)?;
                 } else {
@@ -583,7 +584,7 @@ impl<E: Execution> Supervisor<E> {
                 }
                 if self.native_generation != Some(generation) {
                     if self.link.epoch() != 0 {
-                        self.link.end();
+                        self.link.disconnect();
                     } else {
                         self.link.suspend();
                     }
@@ -618,7 +619,7 @@ impl<E: Execution> Supervisor<E> {
                     state.peripheral = self.snapshot.peripheral;
                 }
                 if self.armed && !input_available {
-                    self.link.end();
+                    self.link.disconnect();
                     self.armed = false;
                 }
                 if self.profile == Profile::Full

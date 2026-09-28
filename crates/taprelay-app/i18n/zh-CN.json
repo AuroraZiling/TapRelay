@@ -1,4 +1,10 @@
 {
+  "settings.passthrough_overlay": "透传提醒",
+  "settings.passthrough_overlay_hint": "当进入、退出透传或连接中断时，在屏幕底部短暂提示。",
+  "overlay.controlling": "正在控制 {device}",
+  "overlay.stopped": "已停止控制 {device}",
+  "overlay.disconnected": "已断开与 {device} 的连接",
+  "overlay.unknown_device": "接收设备",
   "nav.groups": "应用组",
   "groups.help": "设置前台应用白名单。",
   "groups.scope": "生效范围",

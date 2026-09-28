@@ -41,6 +41,8 @@ pub struct Wizard {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Options {
+    #[serde(default = "default_passthrough_overlay")]
+    pub passthrough_overlay: bool,
     #[serde(default = "default_mouse_percent")]
     pub passthrough_mouse_percent: u16,
     #[serde(default)]
@@ -61,6 +63,7 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         Self {
+            passthrough_overlay: true,
             passthrough_mouse_percent: default_mouse_percent(),
             passthrough_mouse_report_rate: 0,
             passthrough_reverse_scroll: false,
@@ -76,6 +79,9 @@ impl Default for Options {
             language: Language::System,
         }
     }
+}
+fn default_passthrough_overlay() -> bool {
+    true
 }
 fn default_mouse_percent() -> u16 {
     50
@@ -274,6 +280,25 @@ impl SaveQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overlay_defaults_on_for_old_configs_and_disabled_setting_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut json = serde_json::to_value(Config::default()).unwrap();
+        json["options"]
+            .as_object_mut()
+            .unwrap()
+            .remove("passthrough_overlay");
+        let bytes = serde_json::to_vec(&json).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        let mut config = Config::load(&path).unwrap();
+        assert!(config.options.passthrough_overlay);
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        config.options.passthrough_overlay = false;
+        config.save(&path).unwrap();
+        assert!(!Config::load(&path).unwrap().options.passthrough_overlay);
+    }
 
     #[test]
     fn old_configs_remain_global_and_groups_round_trip_without_rewriting_input() {

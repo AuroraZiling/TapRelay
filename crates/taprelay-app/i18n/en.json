@@ -1,4 +1,10 @@
 {
+  "settings.passthrough_overlay": "Passthrough notifications",
+  "settings.passthrough_overlay_hint": "Briefly show a status capsule at the bottom when passthrough starts, stops, or disconnects.",
+  "overlay.controlling": "Controlling {device}",
+  "overlay.stopped": "Stopped controlling {device}",
+  "overlay.disconnected": "Disconnected from {device}",
+  "overlay.unknown_device": "receiver",
   "nav.groups": "App Groups",
   "groups.help": "Set up a whitelist of applications for TapRelay to respond to.",
   "groups.scope": "Scope",

@@ -437,6 +437,8 @@ enum ExitIntent {
 }
 
 struct Controller {
+    #[cfg(windows)]
+    overlay: crate::passthrough_overlay::Overlay,
     foreground_app_icons: Rc<RefCell<foreground_app_groups::IconCache>>,
     group_draft: Option<foreground_app_groups::GroupDraft>,
     pending_group_rules: Option<taprelay_core::foreground_app::ForegroundAppRules>,
@@ -490,6 +492,8 @@ impl Controller {
         let persisted_remembered_device = config.remembered_device.clone();
         let now = Instant::now();
         Ok(Self {
+            #[cfg(windows)]
+            overlay: crate::passthrough_overlay::Overlay::default(),
             group_draft: None,
             foreground_app_icons: Rc::new(RefCell::new(foreground_app_groups::IconCache::new())),
             pending_group_rules: None,
@@ -762,6 +766,10 @@ impl Controller {
                 self.runtime.config.options.auto_listen = action::toggle(value)?;
                 self.saves.changed();
             }
+            Action::SetPassthroughOverlay => {
+                self.runtime.config.options.passthrough_overlay = action::toggle(value)?;
+                self.saves.changed();
+            }
             Action::SetPassthroughReverseScroll => {
                 self.runtime
                     .set_passthrough_reverse_scroll(action::toggle(value)?)?;
@@ -813,14 +821,29 @@ impl Controller {
             self.runtime.poll();
         }
         self.track_remembered_device();
+        let mut passthrough_notice = None;
         while let Some(notice) = self.runtime.take_notice() {
             match notice {
                 Notice::Error(error) => self.error(&error),
                 Notice::Test(TestStatus::Succeeded) => self.say(self.tr(keys::TEST_SENT)),
                 Notice::Test(TestStatus::Failed(error)) => self.error(&error),
                 Notice::Test(_) => {}
+                Notice::Passthrough(notice) => passthrough_notice = Some(notice),
             }
         }
+        #[cfg(windows)]
+        {
+            let rgb = |color: slint::Color| [color.red(), color.green(), color.blue()];
+            self.overlay.update(
+                passthrough_notice,
+                self.runtime.config.options.passthrough_overlay && self.exit.is_none(),
+                self.locale(),
+                rgb(ui.get_overlay_background()),
+                rgb(ui.get_overlay_foreground()),
+            );
+        }
+        #[cfg(not(windows))]
+        let _ = passthrough_notice;
         if self.exit.is_some() {
             if let Err(error) = self.finish_exit(ui) {
                 self.command_error(&error);
@@ -992,6 +1015,7 @@ impl Controller {
         });
         ui.set_auto_start(o.autostart);
         ui.set_auto_listen(o.auto_listen);
+        ui.set_passthrough_overlay(o.passthrough_overlay);
         ui.set_passthrough_reverse_scroll(o.passthrough_reverse_scroll);
         ui.set_passthrough_mouse_report_rate(i32::from(o.passthrough_mouse_report_rate));
         ui.set_start_hidden(o.start_hidden);

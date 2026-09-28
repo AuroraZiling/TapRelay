@@ -9,6 +9,7 @@ mod feedback;
 mod gui;
 mod i18n;
 mod logging;
+mod passthrough_overlay;
 mod platform;
 mod receiver_view;
 mod runtime;

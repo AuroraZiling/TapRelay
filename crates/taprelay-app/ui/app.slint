@@ -23,6 +23,8 @@ import { ChoiceOption, SettingsPage } from "pages/settings.slint";
 export { Theme, ThemeMode, I18n, TranslationText, BindingCaptureState, BindingUi, BindingRow, DeviceRow, CheckRow, FunctionBindingRow, GestureAction, ShortcutItem, RelayStatus, ChoiceOption }
 
 export component AppWindow inherits Window {
+    out property <color> overlay-background: Tokens.color-card;
+    out property <color> overlay-foreground: Tokens.color-foreground;
     title: "TapRelay";
     preferred-width: 900px;
     preferred-height: 500px;
@@ -62,6 +64,7 @@ export component AppWindow inherits Window {
     in property <string> data-directory;
     in property <string> app-version;
     in-out property <bool> auto-listen;
+    in-out property <bool> passthrough-overlay;
     in-out property <bool> passthrough-reverse-scroll;
     in property <int> passthrough-mouse-report-rate;
     in-out property <bool> auto-start;
@@ -213,6 +216,7 @@ export component AppWindow inherits Window {
                     always-admin <=> root.always-admin;
                     app-version: root.app-version;
                     auto-listen <=> root.auto-listen;
+                    passthrough-overlay <=> root.passthrough-overlay;
                     passthrough-reverse-scroll <=> root.passthrough-reverse-scroll;
                     passthrough-mouse-report-rate: root.passthrough-mouse-report-rate;
                     auto-start <=> root.auto-start;

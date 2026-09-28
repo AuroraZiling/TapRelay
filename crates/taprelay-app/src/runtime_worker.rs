@@ -70,6 +70,7 @@ struct Pending {
 pub enum Notice {
     Error(String),
     Test(TestStatus),
+    Passthrough(crate::passthrough_overlay::Notice),
 }
 enum Response {
     Completed {
@@ -127,9 +128,17 @@ impl Deref for RuntimeHandle {
 fn collect_notices(
     runtime: &mut Runtime,
     last_test: &mut TestStatus,
+    passthrough: &mut crate::passthrough_overlay::Tracker,
     tx: &mpsc::Sender<Response>,
     error: Option<&str>,
 ) {
+    if let Some(notice) = passthrough.update(
+        &runtime.state,
+        runtime.passthrough_epoch(),
+        runtime.passthrough_disconnected_epoch(),
+    ) {
+        let _ = tx.send(Response::Notice(Notice::Passthrough(notice)));
+    }
     if let Some(message) = runtime.error.take()
         && Some(message.as_str()) != error
     {
@@ -166,10 +175,11 @@ impl RuntimeHandle {
                     return;
                 }
                 let mut last_test = TestStatus::Idle;
+                let mut passthrough = crate::passthrough_overlay::Tracker::default();
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     loop {
                         tick(&mut runtime);
-                        collect_notices(&mut runtime, &mut last_test, &tx, None);
+                        collect_notices(&mut runtime, &mut last_test, &mut passthrough, &tx, None);
                         match rx.try_recv() {
                             Ok(request) => {
                                 if let Some(boundary) = request.ui_input {
@@ -178,7 +188,13 @@ impl RuntimeHandle {
                                 runtime.window_keys.extend(request.keys);
                                 // Window edges accepted before an edit cross the same revision barrier as hook input.
                                 tick(&mut runtime);
-                                collect_notices(&mut runtime, &mut last_test, &tx, None);
+                                collect_notices(
+                                    &mut runtime,
+                                    &mut last_test,
+                                    &mut passthrough,
+                                    &tx,
+                                    None,
+                                );
                                 if request.kind == Kind::Shutdown {
                                     break;
                                 }
@@ -187,6 +203,7 @@ impl RuntimeHandle {
                                 collect_notices(
                                     &mut runtime,
                                     &mut last_test,
+                                    &mut passthrough,
                                     &tx,
                                     error.as_deref(),
                                 );
@@ -210,7 +227,7 @@ impl RuntimeHandle {
                 }));
                 let cleanup =
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| runtime.shutdown()));
-                collect_notices(&mut runtime, &mut last_test, &tx, None);
+                collect_notices(&mut runtime, &mut last_test, &mut passthrough, &tx, None);
                 let error = (outcome.is_err() || cleanup.is_err()).then(|| {
                     "Runtime worker panicked; unfinished operations were not retried".to_owned()
                 });

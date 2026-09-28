@@ -83,6 +83,20 @@ pub struct Runtime {
 }
 
 impl Runtime {
+    pub fn passthrough_epoch(&self) -> u64 {
+        self.transport
+            .as_ref()
+            .and_then(|transport| transport.input_link())
+            .map_or(0, |link| link.epoch())
+    }
+
+    pub fn passthrough_disconnected_epoch(&self) -> u64 {
+        self.transport
+            .as_ref()
+            .and_then(|transport| transport.input_link())
+            .map_or(0, |link| link.disconnected_epoch())
+    }
+
     fn discard_events(&mut self) {
         while let Ok(input) = self.events.try_recv() {
             if let RoutedInput::Control(result) = input {

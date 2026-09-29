@@ -1,12 +1,10 @@
 //! Windows shell integration, isolated from Slint and the application state model.
-use super::native::{OwnedIcon, OwnedRegistryKey, OwnedWindow};
-use std::{
-    collections::VecDeque,
-    mem::size_of,
-    sync::{
-        Mutex,
-        atomic::{AtomicBool, AtomicU32, Ordering},
-    },
+mod shell_features;
+use super::native::{OwnedRegistryKey, OwnedWindow};
+use std::{collections::VecDeque, sync::Mutex};
+use tray_icon::{
+    Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent,
+    menu::{Menu, MenuEvent, MenuItem},
 };
 use windows::{
     Win32::{
@@ -18,19 +16,13 @@ use windows::{
     core::{PCWSTR, w},
 };
 static EVENTS: Mutex<VecDeque<DesktopEvent>> = Mutex::new(VecDeque::new());
-static MENU_LABELS: Mutex<[String; 4]> =
-    Mutex::new([String::new(), String::new(), String::new(), String::new()]);
-static LISTENING: AtomicBool = AtomicBool::new(false);
-static TASKBAR: AtomicU32 = AtomicU32::new(0);
 const ACTIVATE: u32 = WM_APP + 71;
-const TRAY: u32 = WM_APP + 72;
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DesktopEvent {
     Show,
     Toggle,
     Quit,
     Resume,
-    TrayReset,
 }
 fn emit(e: DesktopEvent) {
     if let Ok(mut q) = EVENTS.lock() {
@@ -38,6 +30,16 @@ fn emit(e: DesktopEvent) {
     }
 }
 pub fn events() -> Vec<DesktopEvent> {
+    for event in TrayIconEvent::receiver().try_iter() {
+        if let Some(event) = tray_event(&event) {
+            emit(event);
+        }
+    }
+    for event in MenuEvent::receiver().try_iter() {
+        if let Some(event) = menu_event(event.id.as_ref()) {
+            emit(event);
+        }
+    }
     EVENTS
         .lock()
         .map(|mut q| q.drain(..).collect())
@@ -45,13 +47,6 @@ pub fn events() -> Vec<DesktopEvent> {
 }
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(Some(0)).collect()
-}
-fn copy_wide(dst: &mut [u16], s: &str) {
-    dst.fill(0);
-    let count = dst.len().saturating_sub(1);
-    for (d, c) in dst.iter_mut().take(count).zip(s.encode_utf16()) {
-        *d = c;
-    }
 }
 pub fn any_input_held() -> bool {
     unsafe {
@@ -83,74 +78,69 @@ pub fn activate_existing() -> bool {
 }
 unsafe extern "system" fn procedure(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     unsafe {
-        if msg == TASKBAR.load(Ordering::Relaxed) && msg != 0 {
-            emit(DesktopEvent::TrayReset);
-            return LRESULT(0);
-        }
         match msg {
             ACTIVATE => emit(DesktopEvent::Show),
             WM_POWERBROADCAST if wp.0 == 18 || wp.0 == 7 => emit(DesktopEvent::Resume),
-            TRAY => match lp.0 as u32 {
-                WM_LBUTTONUP | NIN_BALLOONUSERCLICK => emit(DesktopEvent::Show),
-                WM_RBUTTONUP => {
-                    if let Ok(menu) = CreatePopupMenu() {
-                        let labels = MENU_LABELS
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .clone();
-                        let texts = [
-                            &labels[0],
-                            &labels[if LISTENING.load(Ordering::Relaxed) {
-                                2
-                            } else {
-                                1
-                            }],
-                            &labels[3],
-                        ];
-                        for (i, t) in texts.iter().enumerate() {
-                            let text = wide(t);
-                            let _ = AppendMenuW(menu, MF_STRING, i + 1, PCWSTR(text.as_ptr()));
-                        }
-                        let mut point = POINT::default();
-                        let _ = GetCursorPos(&mut point);
-                        let _ = SetForegroundWindow(hwnd);
-                        let selected = TrackPopupMenu(
-                            menu,
-                            TPM_RETURNCMD | TPM_RIGHTBUTTON,
-                            point.x,
-                            point.y,
-                            Some(0),
-                            hwnd,
-                            None,
-                        )
-                        .0;
-                        match selected {
-                            1 => emit(DesktopEvent::Show),
-                            2 => emit(DesktopEvent::Toggle),
-                            3 => emit(DesktopEvent::Quit),
-                            _ => {}
-                        }
-                        let _ = DestroyMenu(menu);
-                        let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
-                    }
-                }
-                _ => {}
-            },
             _ => return DefWindowProcW(hwnd, msg, wp, lp),
         }
         LRESULT(0)
     }
 }
+
+const TRAY_ID: &str = "taprelay";
+const SHOW_ID: &str = "taprelay.show";
+const TOGGLE_ID: &str = "taprelay.toggle";
+const QUIT_ID: &str = "taprelay.quit";
+
+fn menu_event(id: &str) -> Option<DesktopEvent> {
+    match id {
+        SHOW_ID => Some(DesktopEvent::Show),
+        TOGGLE_ID => Some(DesktopEvent::Toggle),
+        QUIT_ID => Some(DesktopEvent::Quit),
+        _ => None,
+    }
+}
+
+fn tray_event(event: &TrayIconEvent) -> Option<DesktopEvent> {
+    match event {
+        TrayIconEvent::Click {
+            id,
+            button: MouseButton::Left,
+            button_state: MouseButtonState::Up,
+            ..
+        } if id.as_ref() == TRAY_ID => Some(DesktopEvent::Show),
+        _ => None,
+    }
+}
+
+fn tray_error(error: impl std::fmt::Display) -> windows::core::Error {
+    windows::core::Error::new(E_FAIL, error.to_string())
+}
+
+fn tray_guid(path: &std::path::Path) -> u128 {
+    // Unsigned portable executables must not share a GUID across different paths.
+    // A name UUID keeps the identity stable for subsequent launches at this path.
+    use std::os::windows::ffi::OsStrExt;
+    let path: Vec<_> = path
+        .as_os_str()
+        .encode_wide()
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, &path).as_u128()
+}
+
 pub struct Desktop {
     _window: OwnedWindow,
-    icon: OwnedIcon,
-    data: NOTIFYICONDATAW,
+    tray: TrayIcon,
+    show: MenuItem,
+    toggle: MenuItem,
+    quit: MenuItem,
+    shell: shell_features::ShellFeatures,
     state: u8,
     shell_failed: bool,
 }
 impl Desktop {
     pub fn new(labels: [String; 4]) -> windows::core::Result<Self> {
-        *MENU_LABELS.lock().unwrap_or_else(|e| e.into_inner()) = labels;
         unsafe {
             let instance = GetModuleHandleW(None)?;
             let class = WNDCLASSW {
@@ -176,94 +166,95 @@ impl Desktop {
                 Some(instance.into()),
                 None,
             )?);
-            let hwnd = window.0;
-            // Only these data-free messages may cross the Explorer/UAC boundary.
-            ChangeWindowMessageFilterEx(hwnd, ACTIVATE, MSGFLT_ALLOW, None)?;
-            let taskbar = RegisterWindowMessageW(w!("TaskbarCreated"));
-            if taskbar == 0 {
-                return Err(windows::core::Error::from_thread());
-            }
-            ChangeWindowMessageFilterEx(hwnd, taskbar, MSGFLT_ALLOW, None)?;
-            TASKBAR.store(taskbar, Ordering::Relaxed);
-            let icon = OwnedIcon(make_icon(1)?);
-            let mut data = NOTIFYICONDATAW {
-                cbSize: size_of::<NOTIFYICONDATAW>() as u32,
-                hWnd: hwnd,
-                uID: 1,
-                uFlags: NIF_ICON | NIF_TIP | NIF_MESSAGE,
-                uCallbackMessage: TRAY,
-                hIcon: icon.0,
-                ..Default::default()
-            };
-            copy_wide(&mut data.szTip, "TapRelay");
-            if !Shell_NotifyIconW(NIM_ADD, &data).as_bool() {
-                return Err(windows::core::Error::from_thread());
-            }
+            // The activation host remains separate from the library-owned tray window.
+            ChangeWindowMessageFilterEx(window.0, ACTIVATE, MSGFLT_ALLOW, None)?;
+            let show = MenuItem::with_id(SHOW_ID, &labels[0], true, None);
+            let toggle = MenuItem::with_id(TOGGLE_ID, &labels[1], true, None);
+            let quit = MenuItem::with_id(QUIT_ID, &labels[3], true, None);
+            let menu = Menu::with_items(&[&show, &toggle, &quit]).map_err(tray_error)?;
+            let guid = tray_guid(&std::env::current_exe().map_err(tray_error)?);
+            let tray = TrayIconBuilder::new()
+                .with_id(TRAY_ID)
+                .with_guid(guid)
+                .with_icon(Icon::from_rgba(icon_rgba(1), 32, 32).map_err(tray_error)?)
+                .with_tooltip("TapRelay")
+                .with_menu(Box::new(menu))
+                .with_menu_on_left_click(false)
+                .build()
+                .map_err(tray_error)?;
+            let shell = shell_features::ShellFeatures::new(&tray, guid)?;
             Ok(Self {
                 _window: window,
-                icon,
-                data,
+                tray,
+                show,
+                toggle,
+                quit,
+                shell,
                 state: 1,
                 shell_failed: false,
             })
         }
     }
+
     pub fn update(&mut self, state: u8, tip: &str, listening: bool, labels: [String; 4]) {
-        unsafe {
-            LISTENING.store(listening, Ordering::Relaxed);
-            *MENU_LABELS.lock().unwrap_or_else(|e| e.into_inner()) = labels;
-            if self.state != state
-                && let Ok(icon) = make_icon(state)
-            {
-                self.icon = OwnedIcon(icon);
-                self.data.hIcon = icon;
+        self.show.set_text(&labels[0]);
+        self.toggle.set_text(&labels[if listening { 2 } else { 1 }]);
+        self.quit.set_text(&labels[3]);
+        let update = || -> windows::core::Result<()> {
+            if self.state != state || self.shell_failed {
+                self.tray
+                    .set_icon(Some(
+                        Icon::from_rgba(icon_rgba(state), 32, 32).map_err(tray_error)?,
+                    ))
+                    .map_err(tray_error)?;
+            }
+            self.shell.set_tooltip(tip)
+        };
+        match update() {
+            Ok(()) => {
+                if self.shell_failed {
+                    tracing::info!("Tray icon restored");
+                }
                 self.state = state;
+                self.shell_failed = false;
             }
-            copy_wide(&mut self.data.szTip, tip);
-            let ok = Shell_NotifyIconW(NIM_MODIFY, &self.data).as_bool();
-            if !ok && !self.shell_failed {
-                tracing::warn!("Tray update failed; attempting to restore icon");
-            }
-            self.shell_failed = !ok;
-            if !ok {
-                self.restore();
+            Err(error) => {
+                if !self.shell_failed {
+                    tracing::warn!(%error, "Tray update failed; attempting recovery");
+                }
+                self.shell_failed = true;
+                // Let tray-icon re-register its own icon, menu, visibility and callback state.
+                unsafe {
+                    let message = RegisterWindowMessageW(w!("TaskbarCreated"));
+                    if message != 0 {
+                        let _ = PostMessageW(
+                            Some(HWND(self.tray.window_handle())),
+                            message,
+                            WPARAM(0),
+                            LPARAM(0),
+                        );
+                    }
+                }
             }
         }
     }
-    pub fn restore(&mut self) {
-        unsafe {
-            let restored = Shell_NotifyIconW(NIM_ADD, &self.data).as_bool();
-            if !restored && !self.shell_failed {
-                tracing::warn!("Tray restore failed");
-            }
-            if restored && self.shell_failed {
-                tracing::info!("Tray icon restored");
-            }
-            self.shell_failed = !restored;
-        }
-    }
+
     pub fn notify(&self, title: &str, body: &str) {
-        unsafe {
-            let mut data = self.data;
-            data.uFlags = NIF_INFO;
-            data.dwInfoFlags = NIIF_INFO;
-            copy_wide(&mut data.szInfoTitle, title);
-            copy_wide(&mut data.szInfo, body);
-            if !Shell_NotifyIconW(NIM_MODIFY, &data).as_bool() {
-                tracing::warn!("Tray notification failed");
-            }
-        }
+        self.shell.notify(title, body);
     }
 }
-impl Drop for Desktop {
-    fn drop(&mut self) {
-        unsafe {
-            if !Shell_NotifyIconW(NIM_DELETE, &self.data).as_bool() {
-                tracing::debug!("Tray icon was already absent at shutdown");
-            }
-        }
-    }
+
+fn truncate_utf16(value: &str, units: usize) -> String {
+    let mut used = 0;
+    value
+        .chars()
+        .take_while(|ch| {
+            used += ch.len_utf16();
+            used <= units
+        })
+        .collect()
 }
+
 /// App artwork, plus lower-right state dot. Colors: green/gray/amber/red.
 pub fn icon_rgba(state: u8) -> Vec<u8> {
     let mut rgba = include_bytes!("../resources/taprelay-32.rgba").to_vec();
@@ -285,25 +276,6 @@ pub fn icon_rgba(state: u8) -> Vec<u8> {
         }
     }
     rgba
-}
-fn make_icon(state: u8) -> windows::core::Result<HICON> {
-    unsafe {
-        let mut bytes = icon_rgba(state);
-        for pixel in bytes.as_chunks_mut::<4>().0 {
-            pixel.swap(0, 2);
-        }
-        let color = CreateBitmap(32, 32, 1, 32, Some(bytes.as_ptr().cast()));
-        let mask = CreateBitmap(32, 32, 1, 1, Some([0u8; 128].as_ptr().cast()));
-        let icon = CreateIconIndirect(&ICONINFO {
-            fIcon: true.into(),
-            hbmColor: color,
-            hbmMask: mask,
-            ..Default::default()
-        });
-        let _ = DeleteObject(color.into());
-        let _ = DeleteObject(mask.into());
-        icon
-    }
 }
 pub fn open(target: &str) -> windows::core::Result<()> {
     unsafe {

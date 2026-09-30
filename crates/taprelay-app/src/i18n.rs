@@ -1,118 +1,53 @@
-//! Shared resource catalogs for pages, application messages and the system tray.
-use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
-use std::{
-    collections::{BTreeMap, HashMap},
-    sync::LazyLock,
-};
-type Catalog = HashMap<String, String>;
+use rust_i18n::t;
+use slint::{ComponentHandle, ModelRc, VecModel};
+use std::sync::LazyLock;
 
-pub struct Locale {
-    id: &'static str,
-    english_name: &'static str,
-}
-impl Locale {
-    fn new(id: &'static str, english_name: &'static str) -> Self {
-        Self { id, english_name }
-    }
-    pub const fn id(&self) -> &'static str {
-        self.id
-    }
-    fn label_key(&self) -> String {
-        format!("language.{}", self.id.replace('-', "_"))
+pub mod locale {
+    use super::*;
+    pub const SOURCE: &str = "en";
+
+    pub fn all() -> &'static [String] {
+        static LOCALES: LazyLock<Vec<String>> = LazyLock::new(|| {
+            let mut locales: Vec<_> = rust_i18n::available_locales!()
+                .into_iter()
+                .map(|id| id.into_owned())
+                .collect();
+            locales.sort();
+            locales
+        });
+        &LOCALES
     }
 }
 
 include!(concat!(env!("OUT_DIR"), "/i18n_bindings.rs"));
 
-static CATALOGS: LazyLock<BTreeMap<&'static str, Catalog>> = LazyLock::new(|| {
-    locale::all()
-        .iter()
-        .map(|locale| (locale.id(), read(locale.id())))
-        .collect()
-});
-
-fn read(locale_id: &str) -> Catalog {
-    serde_json::from_str(catalog_source(locale_id)).expect("Build-validated translation catalog")
-}
-
-/// Resolves a locale identifier the way the build normalized catalog file names.
 pub fn resolve(id: &str) -> Option<&'static str> {
-    let normalized = id.trim().to_ascii_lowercase().replace('_', "-");
+    // Accept legacy config/OS spellings, but pass the catalog's exact ID to t!.
+    let normalized = id.trim().replace('_', "-");
     locale::all()
         .iter()
-        .map(Locale::id)
-        .find(|candidate| *candidate == normalized)
+        .map(String::as_str)
+        .find(|id| id.eq_ignore_ascii_case(&normalized))
 }
 
-/// The source-of-truth locale identifier, checked against the compiled registry.
-fn source() -> &'static str {
-    let source = locale::default_locale().id();
-    debug_assert_eq!(source, locale::SOURCE);
-    source
-}
-
-/// Resolves the locale the operating system asks for, falling back to the source.
 pub fn system_locale() -> &'static str {
     crate::platform::desktop::system_locale_id()
         .as_deref()
         .and_then(resolve)
-        .unwrap_or_else(source)
+        .unwrap_or(locale::SOURCE)
 }
 
-pub fn text(locale_id: &str, key: &str) -> String {
-    let locale_id = resolve(locale_id).unwrap_or_else(source);
-    let english = catalog(source());
-    let localized = catalog(locale_id);
-    // An unknown key is a programming error: the key constants exist for that.
-    assert!(
-        english.contains_key(key),
-        "Unknown translation key: {key} in {locale_id}"
-    );
-    if let Some(value) = localized.get(key).filter(|value| !value.is_empty()) {
-        return value.clone();
-    }
-    // Development builds refuse to ship an untranslated fallback.
-    debug_assert_eq!(
-        locale_id,
-        source(),
-        "Missing {locale_id} translation: {key}"
-    );
-    english.get(key).cloned().unwrap_or_else(|| key.to_owned())
-}
-
-/// Formats the application total with the locale's singular/plural wording.
 pub fn foreground_app_count(locale_id: &str, count: usize) -> String {
-    let key = if count == 1 {
-        keys::GROUPS_COUNT_ONE
+    let locale = resolve(locale_id).unwrap_or(locale_id);
+    if count == 1 {
+        t!("groups.count_one", locale = locale, count = count).into_owned()
     } else {
-        keys::GROUPS_COUNT_OTHER
-    };
-    text(locale_id, key).replace("{count}", &count.to_string())
-}
-
-/// Borrows one compiled catalog. The caller passes an identifier it resolved already.
-fn catalog(locale_id: &str) -> &'static Catalog {
-    CATALOGS
-        .get(locale_id)
-        .unwrap_or_else(|| panic!("Unresolved locale: {locale_id}"))
-}
-
-/// The language's own name from the reserved `language.<id>` key, falling back to
-/// English and finally to the bare identifier.
-fn language_name(locale: &Locale) -> String {
-    let key = locale.label_key();
-    let localized = catalog(locale.id());
-    let english = catalog(source());
-    localized
-        .get(&key)
-        .filter(|value| !value.is_empty())
-        .or_else(|| english.get(&key))
-        .cloned()
-        .unwrap_or_else(|| locale.english_name.to_owned())
+        t!("groups.count_other", locale = locale, count = count).into_owned()
+    }
 }
 
 pub fn apply(ui: &crate::AppWindow, locale_id: &str) {
-    let locale_id = resolve(locale_id).unwrap_or_else(source);
+    let locale_id = resolve(locale_id).unwrap_or(locale::SOURCE);
     let global = ui.global::<crate::I18n>();
     if global.get_locale() == locale_id {
         return;
@@ -127,31 +62,67 @@ pub fn language_options(locale_id: &str) -> ModelRc<crate::ChoiceOption> {
 
 /// The single definition of the selector content, shared by the model and its tests.
 fn option_rows(locale_id: &str) -> Vec<crate::ChoiceOption> {
-    let locale_id = resolve(locale_id).unwrap_or_else(source);
+    let locale_id = resolve(locale_id).unwrap_or(locale::SOURCE);
     let mut options = vec![crate::ChoiceOption {
-        label: text(locale_id, keys::LANGUAGE_SYSTEM).into(),
+        label: t!("language.system", locale = locale_id)
+            .into_owned()
+            .into(),
         value: "system".into(),
     }];
-    options.extend(locale::all().iter().map(|locale| crate::ChoiceOption {
-        label: language_name(locale).into(),
-        value: SharedString::from(locale.id()),
+    options.extend(locale::all().iter().map(|locale| {
+        crate::ChoiceOption {
+            label: t!(
+                format!("language.{}", locale.to_ascii_lowercase().replace('-', "_")),
+                locale = locale
+            )
+            .into_owned()
+            .into(),
+            value: locale.as_str().into(),
+        }
     }));
     options
 }
 
 pub fn tray_labels(locale_id: &str) -> [String; 4] {
+    let locale = resolve(locale_id).unwrap_or(locale_id);
     [
         keys::TRAY_OPEN,
         keys::LISTENING_START,
         keys::LISTENING_STOP,
         keys::COMMON_QUIT,
     ]
-    .map(|key| text(locale_id, key))
+    .map(|key| t!(key, locale = locale).into_owned())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_catalog_key_is_loaded_by_the_shared_backend() {
+        for (id, source) in [
+            ("en", include_str!("../locales/en.json")),
+            ("zh-CN", include_str!("../locales/zh-CN.json")),
+        ] {
+            let mut catalog: std::collections::BTreeMap<String, serde_json::Value> =
+                serde_json::from_str(source).unwrap();
+            assert_eq!(catalog.remove("_version"), Some(1.into()));
+            for (key, value) in catalog {
+                assert_eq!(t!(&key, locale = id), value.as_str().unwrap(), "{id}/{key}");
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_locales_keep_tray_and_messages_independent() {
+        for _ in 0..2 {
+            assert_eq!(tray_labels("en")[0], t!("tray.open", locale = "en"));
+            assert_eq!(tray_labels("ZH_cn")[0], t!("tray.open", locale = "zh-CN"));
+            assert_ne!(tray_labels("en"), tray_labels("zh-cn"));
+            assert_eq!(foreground_app_count("zh-CN", 2), "共 2 个应用");
+            assert_eq!(foreground_app_count("en", 2), "2 applications");
+        }
+    }
 
     #[test]
     fn foreground_app_totals_use_localized_wording() {
@@ -168,8 +139,9 @@ mod tests {
 
     #[test]
     fn locale_identifiers_are_normalized() {
-        assert_eq!(resolve("zh-CN"), Some("zh-cn"));
-        assert_eq!(resolve("ZH_cn"), Some("zh-cn"));
+        assert_eq!(resolve("zh-CN"), Some("zh-CN"));
+        assert_eq!(resolve("zh-cn"), Some("zh-CN"));
+        assert_eq!(resolve("ZH_cn"), Some("zh-CN"));
         assert_eq!(resolve(" en "), Some("en"));
         assert_eq!(resolve("de"), None);
     }
@@ -177,14 +149,14 @@ mod tests {
     #[test]
     fn an_unknown_locale_falls_back_to_the_source_catalog() {
         assert_eq!(
-            text("de", keys::NAV_OVERVIEW),
-            text("en", keys::NAV_OVERVIEW)
+            t!("nav.overview", locale = "de"),
+            t!("nav.overview", locale = "en")
         );
     }
 
     #[test]
-    fn an_unknown_key_is_a_bug_in_every_build() {
-        assert!(std::panic::catch_unwind(|| text("en", "nav.missing")).is_err());
+    fn missing_keys_follow_the_library_default() {
+        assert_eq!(t!("nav.missing", locale = "en"), "nav.missing");
     }
 
     #[test]
@@ -195,7 +167,7 @@ mod tests {
         assert_eq!(options[0].label, "系统语言");
         assert_eq!(options[1].value, "en");
         assert_eq!(options[1].label, "English");
-        assert_eq!(options[2].value, "zh-cn");
+        assert_eq!(options[2].value, "zh-CN");
         assert_eq!(options[2].label, "简体中文");
         let english = option_rows("en");
         assert_eq!(english[0].label, "System language");

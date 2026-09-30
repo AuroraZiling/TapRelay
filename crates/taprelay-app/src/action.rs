@@ -15,7 +15,7 @@ actions! {
     // Payload: the page number declared in ui/navigation.slint.
     Navigate => "navigate",
     Listen => "listen", Test => "test", Refresh => "refresh", Retry => "retry",
-    Resume => "resume", TrayReset => "tray-reset", BluetoothSettings => "bluetooth-settings",
+    Resume => "resume", BluetoothSettings => "bluetooth-settings",
     DataFolder => "data-folder", LogsFolder => "logs-folder",
     Repository => "repository", License => "license", ThirdPartyNotices => "third-party-notices",
     // Payload: the device id the row was built from.

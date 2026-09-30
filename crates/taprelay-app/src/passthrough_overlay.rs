@@ -27,15 +27,18 @@ impl Notice {
 
     pub fn text_parts(&self, locale: &str) -> (String, String, String) {
         use crate::i18n::{self, keys};
+        let locale = i18n::resolve(locale).unwrap_or(locale);
         let key = match self.status {
             Status::Controlling => keys::OVERLAY_CONTROLLING,
             Status::Stopped => keys::OVERLAY_STOPPED,
             Status::Disconnected => keys::OVERLAY_DISCONNECTED,
         };
-        let template = i18n::text(locale, key);
-        let (prefix, suffix) = template.split_once("{device}").expect("device placeholder");
+        let template = rust_i18n::t!(key, locale = locale).into_owned();
+        let (prefix, suffix) = template
+            .split_once("%{device}")
+            .expect("device placeholder");
         let device = if self.device.trim().is_empty() {
-            i18n::text(locale, keys::OVERLAY_UNKNOWN_DEVICE)
+            rust_i18n::t!(keys::OVERLAY_UNKNOWN_DEVICE, locale = locale).into_owned()
         } else {
             // Device names are external input; keep the capsule on one line.
             self.device.chars().filter(|c| !c.is_control()).collect()
@@ -281,7 +284,7 @@ mod tests {
             device: "Artemis\niPad".into(),
         };
         assert_eq!(
-            notice.text_parts("zh-cn"),
+            notice.text_parts("zh-CN"),
             ("已断开与 ".into(), "ArtemisiPad".into(), " 的连接".into())
         );
         assert_eq!(

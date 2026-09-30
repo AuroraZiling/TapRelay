@@ -1,4 +1,5 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
+rust_i18n::i18n!("locales", fallback = "en");
 mod action;
 mod administrator;
 #[cfg(windows)]

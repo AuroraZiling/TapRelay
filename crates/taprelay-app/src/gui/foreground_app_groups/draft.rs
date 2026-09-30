@@ -77,8 +77,8 @@ mod tests {
 
     #[test]
     fn new_groups_can_be_saved_with_the_localized_default_name() {
-        for locale in ["en", "zh-cn"] {
-            let default_name = crate::i18n::text(locale, "groups.default_name");
+        for locale in ["en", "zh-CN"] {
+            let default_name = rust_i18n::t!("groups.default_name", locale = locale).into_owned();
             let rules = ForegroundAppRules::default();
             let draft = GroupDraft::new(&rules, &default_name);
             assert_eq!(draft.group.name, default_name);

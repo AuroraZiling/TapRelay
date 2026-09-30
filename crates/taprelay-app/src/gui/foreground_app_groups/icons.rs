@@ -1,9 +1,7 @@
 use crate::platform::foreground_apps::IconPixels;
+use lru::LruCache;
 use slint::{Image, Rgba8Pixel, SharedPixelBuffer};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::mpsc,
-};
+use std::{collections::BTreeSet, num::NonZeroUsize, sync::mpsc};
 use taprelay_core::foreground_app::executable_identity;
 
 struct Entry {
@@ -11,7 +9,6 @@ struct Entry {
     name: Option<String>,
     missing: bool,
     fresh: bool,
-    used: u64,
 }
 
 #[derive(Default)]
@@ -22,11 +19,10 @@ struct Metadata {
 }
 
 pub(crate) struct IconCache {
-    images: BTreeMap<String, Entry>,
+    images: LruCache<String, Entry>,
     pending: BTreeSet<String>,
     requests: mpsc::SyncSender<String>,
     results: mpsc::Receiver<(String, Metadata)>,
-    clock: u64,
 }
 
 impl IconCache {
@@ -53,11 +49,10 @@ impl IconCache {
                 }
             });
         Self {
-            images: BTreeMap::new(),
+            images: LruCache::new(NonZeroUsize::new(512).unwrap()),
             pending: BTreeSet::new(),
             requests,
             results,
-            clock: 0,
         }
     }
 
@@ -66,12 +61,10 @@ impl IconCache {
             return;
         }
         let key = executable_identity(path);
-        self.clock += 1;
-        if let Some(entry) = self.images.get_mut(&key) {
-            entry.used = self.clock;
-            if entry.fresh {
-                return;
-            }
+        if let Some(entry) = self.images.get_mut(&key)
+            && entry.fresh
+        {
+            return;
         }
         if self.pending.contains(&key) {
             return;
@@ -83,27 +76,27 @@ impl IconCache {
 
     pub fn image(&self, path: &str) -> Option<Image> {
         self.images
-            .get(&executable_identity(path))
+            .peek(&executable_identity(path))
             .and_then(|entry| entry.image.clone())
     }
 
     /// Reopening the editor rechecks visible paths without discarding their
     /// current icons while a disconnected share or slow drive is being probed.
     pub fn refresh(&mut self) {
-        for entry in self.images.values_mut() {
+        for (_, entry) in self.images.iter_mut() {
             entry.fresh = false;
         }
     }
 
     pub fn name(&self, path: &str) -> Option<&str> {
         self.images
-            .get(&executable_identity(path))
+            .peek(&executable_identity(path))
             .and_then(|entry| entry.name.as_deref())
     }
 
     pub fn missing(&self, path: &str) -> bool {
         self.images
-            .get(&executable_identity(path))
+            .peek(&executable_identity(path))
             .is_some_and(|entry| entry.missing)
     }
 
@@ -117,24 +110,13 @@ impl IconCache {
                 buffer.make_mut_bytes().copy_from_slice(&pixels.rgba);
                 Image::from_rgba8(buffer)
             });
-            if self.images.len() >= 512 && !self.images.contains_key(&key) {
-                let oldest = self
-                    .images
-                    .iter()
-                    .min_by_key(|(_, entry)| entry.used)
-                    .map(|(key, _)| key.clone())
-                    .unwrap();
-                self.images.remove(&oldest);
-            }
-            self.clock += 1;
-            self.images.insert(
+            self.images.put(
                 key,
                 Entry {
                     image,
                     name: metadata.name,
                     missing: metadata.missing,
                     fresh: true,
-                    used: self.clock,
                 },
             );
             changed = true;
@@ -146,6 +128,57 @@ impl IconCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn wait_for_result(cache: &mut IconCache) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while !cache.poll() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn capacity_evicts_the_least_requested_entry_not_the_last_rendered_one() {
+        let mut cache = IconCache::with_loader(|path| Metadata {
+            name: Some(path.into()),
+            missing: true,
+            ..Metadata::default()
+        });
+        for index in 0..512 {
+            cache.request(&format!(r"C:\Apps\{index}.exe"));
+            wait_for_result(&mut cache);
+        }
+        cache.request("c:/apps/0.exe");
+        // Rendering must not promote an entry; only requesting it does.
+        assert!(cache.name(r"C:\Apps\1.exe").is_some());
+        assert!(cache.missing(r"C:\Apps\1.exe"));
+        assert!(cache.image(r"C:\Apps\1.exe").is_none());
+        cache.request(r"C:\Apps\512.exe");
+        wait_for_result(&mut cache);
+        assert_eq!(cache.images.len(), 512);
+        assert!(cache.name(r"C:\Apps\0.exe").is_some());
+        assert!(cache.name(r"C:\Apps\1.exe").is_none());
+        assert!(cache.name(r"C:\Apps\512.exe").is_some());
+    }
+
+    #[test]
+    fn refreshing_keeps_old_metadata_until_the_background_result_arrives() {
+        let (release, waiting) = mpsc::channel();
+        let mut cache = IconCache::with_loader(move |_| Metadata {
+            name: Some(waiting.recv().unwrap()),
+            ..Metadata::default()
+        });
+        cache.request(r"C:\Apps\one.exe");
+        release.send("Old name".to_string()).unwrap();
+        wait_for_result(&mut cache);
+        cache.refresh();
+        cache.request(r"C:\Apps\one.exe");
+        assert!(!cache.poll());
+        assert_eq!(cache.name(r"C:\Apps\one.exe"), Some("Old name"));
+        release.send("New name".to_string()).unwrap();
+        wait_for_result(&mut cache);
+        assert_eq!(cache.name(r"C:\Apps\one.exe"), Some("New name"));
+    }
     #[test]
     fn completed_pixels_are_published_as_a_cached_image() {
         let mut cache = IconCache::with_loader(|_| Metadata {

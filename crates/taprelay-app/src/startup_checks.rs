@@ -14,6 +14,7 @@ pub fn rows(
     flags: [bool; 4],
     failed: bool,
 ) -> Vec<CheckRow> {
+    let locale = i18n::resolve(locale).unwrap_or(locale);
     let flags = if environment_failed {
         [false; 5]
     } else {
@@ -30,7 +31,7 @@ pub fn rows(
     .into_iter()
     .enumerate()
     .map(|(index, key)| CheckRow {
-        title: i18n::text(locale, key).into(),
+        title: rust_i18n::t!(key, locale = locale).into_owned().into(),
         state: if flags[index] {
             2
         } else if index == first {
@@ -48,7 +49,7 @@ mod tests {
 
     #[test]
     fn environment_failure_leaves_bluetooth_checks_waiting() {
-        let rows = rows("zh-cn", true, [false; 4], true);
+        let rows = rows("zh-CN", true, [false; 4], true);
         assert_eq!(
             rows.iter().map(|row| row.state).collect::<Vec<_>>(),
             [3, 0, 0, 0, 0]

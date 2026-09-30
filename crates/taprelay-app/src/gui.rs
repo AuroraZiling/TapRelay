@@ -241,7 +241,6 @@ pub fn run() -> Result<()> {
                     DesktopEvent::Toggle => Action::Listen,
                     DesktopEvent::Quit => Action::Quit,
                     DesktopEvent::Resume => Action::Resume,
-                    DesktopEvent::TrayReset => Action::TrayReset,
                 };
                 actions.borrow_mut().push((name, String::new()));
             }
@@ -541,7 +540,7 @@ impl Controller {
         }
     }
     fn tr(&self, key: &str) -> String {
-        i18n::text(self.locale(), key)
+        rust_i18n::t!(key, locale = self.locale()).into_owned()
     }
     fn say(&mut self, message: String) {
         self.toast = message;
@@ -602,10 +601,10 @@ impl Controller {
     }
     fn action(&mut self, ui: &AppWindow, name: Action, value: &str) -> Result<()> {
         self.runtime.poll();
-        if self.exit.is_some() && !matches!(name, Action::Show | Action::TrayReset) {
+        if self.exit.is_some() && !matches!(name, Action::Show) {
             return Ok(());
         }
-        if !matches!(name, Action::Show | Action::Resume | Action::TrayReset) {
+        if !matches!(name, Action::Show | Action::Resume) {
             self.runtime.consume_ui_input();
         }
         if (!self.passed || self.fatal.is_some())
@@ -616,7 +615,6 @@ impl Controller {
                     | Action::Quit
                     | Action::Retry
                     | Action::BluetoothSettings
-                    | Action::TrayReset
             )
         {
             return Ok(());
@@ -678,7 +676,6 @@ impl Controller {
                 self.stage_since = Instant::now();
                 self.last_error.clear();
             }
-            Action::TrayReset => self.desktop.restore(),
             Action::BluetoothSettings => self.runtime.bluetooth_settings()?,
             Action::Repository => desktop::open("https://github.com/AuroraZiling/TapRelay")?,
             Action::License => {
@@ -1009,7 +1006,7 @@ impl Controller {
             ref selected => {
                 1 + i18n::locale::all()
                     .iter()
-                    .position(|compiled| compiled.id() == selected.locale())
+                    .position(|compiled| compiled == selected.locale())
                     .unwrap_or_default() as i32
             }
         });

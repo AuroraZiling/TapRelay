@@ -164,7 +164,11 @@ mod tests {
             pairing: Knowledge::Yes,
             ..Default::default()
         };
-        let project = |t: &Target| row(t, &state, |key| crate::i18n::text("en", key));
+        let project = |t: &Target| {
+            row(t, &state, |key| {
+                rust_i18n::t!(key, locale = "en").into_owned()
+            })
+        };
         assert!(project(&target).name.contains("unnamed-endpoint"));
         assert_eq!(project(&target).status, "paired");
         target.link = Knowledge::Yes;
@@ -188,7 +192,9 @@ mod tests {
             pairing: Knowledge::No,
             ..Default::default()
         };
-        let project = |t: &Target, s: &Snapshot| row(t, s, |key| crate::i18n::text("en", key));
+        let project = |t: &Target, s: &Snapshot| {
+            row(t, s, |key| rust_i18n::t!(key, locale = "en").into_owned())
+        };
         let unpaired = project(&target, &state);
         assert_eq!(unpaired.action, "pair-device");
         assert!(unpaired.enabled);
@@ -226,7 +232,9 @@ mod tests {
             connection: Connection::AwaitingHostSubscription,
             ..Default::default()
         };
-        let device = row(&target, &state, |key| crate::i18n::text("en", key));
+        let device = row(&target, &state, |key| {
+            rust_i18n::t!(key, locale = "en").into_owned()
+        });
         assert_eq!(device.action, "disconnect-device");
         assert!(device.enabled);
         assert!(!device.detail.contains("Compatibility"));

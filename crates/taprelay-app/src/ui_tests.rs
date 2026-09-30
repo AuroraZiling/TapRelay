@@ -110,8 +110,12 @@ fn check_foreground_app_icons(ui: &AppWindow) {
             name: "explorer.exe".into(),
             path: path.clone().into(),
         }])));
-        i18n::apply(ui, "zh-cn");
-        groups.set_form_error(i18n::text("zh-cn", "groups.name_required").into());
+        i18n::apply(ui, "zh-CN");
+        groups.set_form_error(
+            rust_i18n::t!("groups.name_required", locale = "zh-CN")
+                .into_owned()
+                .into(),
+        );
         ui.invoke_show_group_editor();
         ui.window().take_snapshot().unwrap();
         let image = binding_element(ui, &format!("group-icon-{path}"));
@@ -143,7 +147,11 @@ fn check_foreground_app_icons(ui: &AppWindow) {
             binding_element(ui, &format!("group-missing-{path}"))
                 .accessible_label()
                 .as_deref(),
-            Some(i18n::text("zh-cn", "groups.missing").as_str())
+            Some(
+                rust_i18n::t!("groups.missing", locale = "zh-CN")
+                    .into_owned()
+                    .as_str()
+            )
         );
         ui.invoke_close_group_editor();
         groups.on_app_name(|_, _| "".into());
@@ -323,7 +331,7 @@ fn check_empty_foreground_app_groups(ui: &AppWindow) {
     let created = std::rc::Rc::new(std::cell::Cell::new(false));
     let observed = created.clone();
     groups.on_command(move |command, _| observed.set(command == "create"));
-    for locale in ["en", "zh-cn"] {
+    for locale in ["en", "zh-CN"] {
         i18n::apply(ui, locale);
         for (width, height) in [(900., 500.), (1700., 950.)] {
             ui.window().set_size(slint::LogicalSize::new(width, height));
@@ -492,7 +500,7 @@ fn check_foreground_app_groups(ui: &AppWindow) {
             }
         }
     });
-    for locale in ["en", "zh-cn"] {
+    for locale in ["en", "zh-CN"] {
         i18n::apply(ui, locale);
         for dark in [false, true] {
             let rows = groups
@@ -532,7 +540,7 @@ fn check_foreground_app_groups(ui: &AppWindow) {
                 assert!((button.size().width - button.size().height).abs() < 1.);
                 assert_eq!(
                     button.accessible_label().as_deref(),
-                    Some(i18n::text(locale, key).as_str())
+                    Some(rust_i18n::t!(key, locale = locale).into_owned().as_str())
                 );
             }
             groups.set_selected_id("".into());
@@ -559,13 +567,21 @@ fn check_foreground_app_groups(ui: &AppWindow) {
                 binding_element(ui, "page-title")
                     .accessible_label()
                     .as_deref(),
-                Some(i18n::text(locale, "nav.groups").as_str())
+                Some(
+                    rust_i18n::t!("nav.groups", locale = locale)
+                        .into_owned()
+                        .as_str()
+                )
             );
             assert_eq!(
                 binding_element(ui, "groups-subpage-title")
                     .accessible_label()
                     .as_deref(),
-                Some(i18n::text(locale, "groups.new_title").as_str())
+                Some(
+                    rust_i18n::t!("groups.new_title", locale = locale)
+                        .into_owned()
+                        .as_str()
+                )
             );
             binding_element(ui, "groups-browse");
             binding_element(ui, "groups-running-list");
@@ -579,7 +595,11 @@ fn check_foreground_app_groups(ui: &AppWindow) {
             );
             binding_element(ui, "groups-editor-save").invoke_accessible_default_action();
             assert_eq!(actions.borrow().last(), Some(&("save".into(), "".into())));
-            groups.set_form_error(i18n::text(locale, "groups.conflict").into());
+            groups.set_form_error(
+                rust_i18n::t!("groups.conflict", locale = locale)
+                    .into_owned()
+                    .into(),
+            );
             ui.window().take_snapshot().unwrap();
             let error = binding_element(ui, "groups-editor-error");
             let save = binding_element(ui, "groups-editor-save");
@@ -619,7 +639,13 @@ fn check_foreground_app_groups(ui: &AppWindow) {
             binding_element(ui, "groups-browse");
             assert_eq!(
                 selected_tab.accessible_label().as_deref(),
-                Some(format!("{} (1)", i18n::text(locale, "groups.selected")).as_str())
+                Some(
+                    format!(
+                        "{} (1)",
+                        rust_i18n::t!("groups.selected", locale = locale).into_owned()
+                    )
+                    .as_str()
+                )
             );
             selected_tab.invoke_accessible_default_action();
             assert!(!groups.get_choosing_running());
@@ -684,7 +710,7 @@ fn check_foreground_app_groups(ui: &AppWindow) {
         groups.set_deletion_warning(
             format!(
                 "{}\nPlay / Pause, Volume up",
-                i18n::text(locale, "groups.delete_warning")
+                rust_i18n::t!("groups.delete_warning", locale = locale).into_owned()
             )
             .into(),
         );
@@ -747,14 +773,14 @@ fn save_groups_snapshot(ui: &AppWindow, name: &str) {
 fn check_runtime_feedback(ui: &AppWindow) {
     ui.set_mode(2);
     ui.set_page(0);
-    for locale in ["en", "zh-cn"] {
+    for locale in ["en", "zh-CN"] {
         i18n::apply(ui, locale);
         for key in [
             i18n::keys::RUNTIME_BUSY,
             i18n::keys::RUNTIME_SLOW,
             i18n::keys::RUNTIME_FINISHING,
         ] {
-            let text = i18n::text(locale, key);
+            let text = rust_i18n::t!(key, locale = locale).into_owned();
             ui.set_toast(text.clone().into());
             assert_eq!(ui.get_toast().as_str(), text);
             let snapshot = ui.window().take_snapshot().unwrap();
@@ -779,7 +805,7 @@ fn check_environment_failure(ui: &AppWindow) {
     ui.set_mode(3);
     ui.set_busy(false);
     ui.set_problem("Invalid configuration; move config.json aside to start fresh: unknown field `passthrough_reverse_scroll`, expected one of `schema`, `functions`, `remembered_device`, `wizard`, `options`, `window` at line 103 column 30".into());
-    for locale in ["en", "zh-cn"] {
+    for locale in ["en", "zh-CN"] {
         i18n::apply(ui, locale);
         ui.set_checks(ModelRc::new(VecModel::from(crate::startup_checks::rows(
             locale, true, [false; 4], true,
@@ -825,7 +851,7 @@ fn check_about_links(ui: &AppWindow) {
             .borrow_mut()
             .push((name.to_string(), value.to_string()));
     });
-    for locale in ["en", "zh-cn"] {
+    for locale in ["en", "zh-CN"] {
         i18n::apply(ui, locale);
         for dark in [false, true] {
             ui.global::<Theme>().set_mode(if dark {
@@ -880,7 +906,11 @@ fn check_about_links(ui: &AppWindow) {
                     let button = binding_element(ui, &format!("settings-{command}"));
                     assert_eq!(
                         button.accessible_label().as_deref(),
-                        Some(i18n::text(locale, label_key).as_str())
+                        Some(
+                            rust_i18n::t!(label_key, locale = locale)
+                                .into_owned()
+                                .as_str()
+                        )
                     );
                     let origin = button.absolute_position();
                     let size = button.size();
@@ -962,13 +992,13 @@ fn render_pages(ui: &AppWindow) {
     ui.set_language_options(i18n::language_options("en"));
     ui.set_data_directory("D:\\Apps\\TapRelay".into());
     ui.set_app_version(version::VERSION.into());
-    for (locale, dark, width, height) in [("en", true, 1000., 700.), ("zh-cn", false, 800., 560.)] {
+    for (locale, dark, width, height) in [("en", true, 1000., 700.), ("zh-CN", false, 800., 560.)] {
         i18n::apply(ui, locale);
         let global = ui.global::<I18n>();
         assert_eq!(global.get_locale(), locale);
         assert_eq!(
             global.get_text().nav_overview,
-            i18n::text(locale, i18n::keys::NAV_OVERVIEW)
+            rust_i18n::t!(i18n::keys::NAV_OVERVIEW, locale = locale).into_owned()
         );
         ui.global::<Theme>().set_mode(if dark {
             ThemeMode::Dark
@@ -1113,7 +1143,7 @@ fn check_navigation_and_settings(ui: &AppWindow) {
     ui.set_page(3);
     let _ = ui.window().take_snapshot().unwrap();
 
-    for locale in ["en", "zh-cn"] {
+    for locale in ["en", "zh-CN"] {
         i18n::apply(ui, locale);
         ui.set_passthrough_overlay(true);
         let _ = ui.window().take_snapshot().unwrap();
@@ -1288,9 +1318,9 @@ fn check_binding_layouts_and_actions(ui: &AppWindow) {
     set_binding_capture(ui, "", -1, "", "");
     ui.set_problem("".into());
     for (locale, dark, width, height) in [
-        ("zh-cn", true, 900., 500.),
+        ("zh-CN", true, 900., 500.),
         ("en", false, 900., 500.),
-        ("zh-cn", false, 1120., 700.),
+        ("zh-CN", false, 1120., 700.),
         ("en", true, 1120., 700.),
     ] {
         i18n::apply(ui, locale);
@@ -1304,25 +1334,41 @@ fn check_binding_layouts_and_actions(ui: &AppWindow) {
             .iter()
             .enumerate()
             .map(|(i, d)| FunctionBindingRow {
-                scope_label: i18n::text(locale, "groups.all").into(),
+                scope_label: rust_i18n::t!("groups.all", locale = locale)
+                    .into_owned()
+                    .into(),
                 scope_editable: d.category == taprelay_core::function::CategoryId::Media,
                 id: d.id.stable_id().into(),
-                label: i18n::text(locale, d.name_key).into(),
+                label: rust_i18n::t!(d.name_key, locale = locale)
+                    .into_owned()
+                    .into(),
                 gestures: ModelRc::new(VecModel::from({
                     let mut gestures = vec![GestureAction {
-                        gesture: i18n::text(locale, "bindings.gesture.press").into(),
-                        action: i18n::text(locale, d.tap_action.name_key()).into(),
+                        gesture: rust_i18n::t!("bindings.gesture.press", locale = locale)
+                            .into_owned()
+                            .into(),
+                        action: rust_i18n::t!(d.tap_action.name_key(), locale = locale)
+                            .into_owned()
+                            .into(),
                     }];
                     if let Some(hold) = d.hold_action {
                         gestures.push(GestureAction {
-                            gesture: i18n::text(locale, "bindings.gesture.hold").into(),
-                            action: i18n::text(locale, hold.name_key()).into(),
+                            gesture: rust_i18n::t!("bindings.gesture.hold", locale = locale)
+                                .into_owned()
+                                .into(),
+                            action: rust_i18n::t!(hold.name_key(), locale = locale)
+                                .into_owned()
+                                .into(),
                         });
                     }
                     if d.repeats() {
                         gestures.push(GestureAction {
-                            gesture: i18n::text(locale, "bindings.gesture.hold").into(),
-                            action: i18n::text(locale, "bindings.gesture.repeat").into(),
+                            gesture: rust_i18n::t!("bindings.gesture.hold", locale = locale)
+                                .into_owned()
+                                .into(),
+                            action: rust_i18n::t!("bindings.gesture.repeat", locale = locale)
+                                .into_owned()
+                                .into(),
                         });
                     }
                     gestures
@@ -1359,7 +1405,11 @@ fn check_binding_layouts_and_actions(ui: &AppWindow) {
         let scope_header = binding_element(ui, "bindings-column-scope");
         assert_eq!(
             scope_header.accessible_label().as_deref(),
-            Some(i18n::text(locale, "groups.scope").as_str())
+            Some(
+                rust_i18n::t!("groups.scope", locale = locale)
+                    .into_owned()
+                    .as_str()
+            )
         );
         for id in [
             "media.play-pause",
@@ -1528,7 +1578,7 @@ fn check_volume_bindings(ui: &AppWindow) {
         function::{FunctionId, ModifierSet, PrimaryInput, Shortcut},
         input::MouseButton,
     };
-    for locale in ["zh-cn", "en"] {
+    for locale in ["zh-CN", "en"] {
         i18n::apply(ui, locale);
         ui.window().set_size(slint::LogicalSize::new(900., 500.));
         let rows = [
@@ -1543,10 +1593,14 @@ fn check_volume_bindings(ui: &AppWindow) {
             let definition = taprelay_core::function::function_definition(id);
             let shortcut = Shortcut::new(ModifierSet::from_keys([0x11]), primary);
             FunctionBindingRow {
-                scope_label: i18n::text(locale, "groups.all").into(),
+                scope_label: rust_i18n::t!("groups.all", locale = locale)
+                    .into_owned()
+                    .into(),
                 scope_editable: true,
                 id: id.stable_id().into(),
-                label: i18n::text(locale, definition.name_key).into(),
+                label: rust_i18n::t!(definition.name_key, locale = locale)
+                    .into_owned()
+                    .into(),
                 enabled: true,
                 shortcuts: ModelRc::new(VecModel::from(vec![ShortcutItem {
                     text: shortcut
@@ -1559,12 +1613,20 @@ fn check_volume_bindings(ui: &AppWindow) {
                 }])),
                 gestures: ModelRc::new(VecModel::from(vec![
                     GestureAction {
-                        gesture: i18n::text(locale, "bindings.gesture.press").into(),
-                        action: i18n::text(locale, definition.tap_action.name_key()).into(),
+                        gesture: rust_i18n::t!("bindings.gesture.press", locale = locale)
+                            .into_owned()
+                            .into(),
+                        action: rust_i18n::t!(definition.tap_action.name_key(), locale = locale)
+                            .into_owned()
+                            .into(),
                     },
                     GestureAction {
-                        gesture: i18n::text(locale, "bindings.gesture.hold").into(),
-                        action: i18n::text(locale, "bindings.gesture.repeat").into(),
+                        gesture: rust_i18n::t!("bindings.gesture.hold", locale = locale)
+                            .into_owned()
+                            .into(),
+                        action: rust_i18n::t!("bindings.gesture.repeat", locale = locale)
+                            .into_owned()
+                            .into(),
                     },
                 ])),
             }

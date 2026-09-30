@@ -114,7 +114,7 @@ pub enum Language {
 impl Language {
     pub fn locale(&self) -> &'static str {
         match self {
-            Self::Chinese => "zh-cn",
+            Self::Chinese => "zh-CN",
             Self::English => "en",
             Self::Locale(id) => crate::i18n::resolve(id).unwrap_or(crate::i18n::locale::SOURCE),
             Self::System => crate::i18n::locale::SOURCE,
@@ -124,7 +124,7 @@ impl Language {
         if let Some(id) = crate::i18n::resolve(name) {
             return match id {
                 "en" => Some(Self::English),
-                "zh-cn" => Some(Self::Chinese),
+                "zh-CN" => Some(Self::Chinese),
                 _ => Some(Self::Locale(id.to_owned())),
             };
         }
@@ -471,6 +471,10 @@ mod tests {
     #[test]
     fn locale_identifiers_select_the_matching_catalog() {
         assert_eq!(Language::from_name("zh-CN"), Some(Language::Chinese));
+        assert_eq!(Language::from_name("zh-cn"), Some(Language::Chinese));
+        assert_eq!(Language::from_name("ZH_cn"), Some(Language::Chinese));
+        let legacy: Language = serde_json::from_str(r#"{"locale":"zh-cn"}"#).unwrap();
+        assert_eq!(legacy.locale(), "zh-CN");
         assert_eq!(Language::from_name("en"), Some(Language::English));
         assert_eq!(Language::from_name("de"), None);
     }

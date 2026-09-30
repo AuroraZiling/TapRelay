@@ -16,7 +16,7 @@ Keep each pull request focused. Explain the problem, the resulting behavior and 
 
 - Keep domain logic in `taprelay-core`, Windows integration in `taprelay-windows` and presentation coordination in `taprelay-app`.
 - Follow existing naming and formatting. Add comments for workarounds or code that is difficult to understand.
-- Update both files in `crates/taprelay-app/i18n/` when changing interface text. Remove unused translation keys.
+- Update both files in `crates/taprelay-app/locales/` when changing interface text. Remove unused translation keys.
 
 ## Local checks
 

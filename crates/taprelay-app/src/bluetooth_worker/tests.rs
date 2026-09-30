@@ -406,6 +406,86 @@ fn cancellation_and_new_request_cannot_be_undone_by_old_process_arm_or_status() 
 }
 
 #[test]
+fn unrelated_peer_refresh_preserves_full_request_arm_generation_and_input_delivery() {
+    let h = Harness::new();
+    h.connected();
+    h.full();
+    h.arm();
+    let generation = h.snapshot().generation;
+    let epoch = h.handle.link.epoch();
+    let request = h.handle.link.profile_request();
+    let worker = h.current();
+    let calls = h.state.lock().unwrap().calls.len();
+    let Message::Status {
+        mut state,
+        input_available,
+    } = status(3, "phone", true)
+    else {
+        unreachable!();
+    };
+    state.targets[0].aliases.push("discovered:selected".into());
+    state.targets.push(Target {
+        id: "other-subscriber".into(),
+        link: taprelay_core::state::Knowledge::Yes,
+        subscribed: taprelay_core::state::Knowledge::Yes,
+        ..Default::default()
+    });
+    h.message(
+        worker,
+        Message::Status {
+            state,
+            input_available,
+        },
+    );
+    h.step();
+    assert_eq!(h.snapshot().targets.len(), 2);
+    assert_eq!(h.snapshot().generation, generation);
+    assert_eq!(h.snapshot().hid_profile, Profile::Full);
+    assert_eq!(h.handle.link.epoch(), epoch);
+    assert_eq!(h.handle.link.profile_request(), request);
+    assert_eq!(h.current(), worker);
+    assert!(
+        !h.state.lock().unwrap().calls[calls..]
+            .iter()
+            .any(|call| matches!(
+                call,
+                Call::Stop(_) | Call::Start(_, _) | Call::Send(_, Command::Arm { .. })
+            ))
+    );
+    assert!(
+        h.handle
+            .link
+            .submit(Event::Motion { dx: 3, dy: 4 }, Instant::now())
+    );
+    h.step();
+    assert!(
+        h.state.lock().unwrap().calls[calls..]
+            .iter()
+            .any(|call| matches!(call, Call::Send(id, Command::Input { .. }) if *id == worker))
+    );
+}
+
+#[test]
+fn unrelated_refresh_keeps_pending_arm_but_real_generation_change_cancels_full() {
+    let h = Harness::new();
+    h.connected();
+    h.full();
+    let generation = h.snapshot().generation;
+    let request = h.handle.link.profile_request();
+    h.status(3, "phone", true);
+    assert_eq!(h.snapshot().generation, generation);
+    assert_eq!(h.handle.link.profile_request(), request);
+    h.arm();
+    // A loss/recovery can publish identical readiness and identity with a new
+    // native generation. It must still retire the previous capture request.
+    h.status(4, "phone", true);
+    assert_eq!(h.handle.link.epoch(), 0);
+    assert!(!h.handle.link.profile_requested());
+    assert!(!h.handle.link.begin());
+    assert!(h.snapshot().generation > generation);
+}
+
+#[test]
 fn generation_change_rejects_old_status_arm_and_delivery() {
     let h = Harness::new();
     h.connected();

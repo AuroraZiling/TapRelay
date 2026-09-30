@@ -1,3 +1,4 @@
+mod authorization;
 mod discovery;
 mod maintenance;
 mod publication;
@@ -292,15 +293,18 @@ impl BleHandle {
                                 publication.attempted(Instant::now());
                                 refresh_at = Instant::now();
                             }
-                            if Instant::now() >= refresh_at {
+                            let subscription_refresh =
+                                server.as_ref().is_some_and(|s| s.refresh_signal.take());
+                            if subscription_refresh || Instant::now() >= refresh_at {
                                 let candidates = discovery.inventory.merged();
                                 if let Some(s) = &mut server {
                                     s.connected = candidates;
                                     s.state.adapter_state = discovery.adapter;
                                     s.state.discovery = discovery.state;
-                                    if startup_restore
-                                        .borrow()
-                                        .refresh_due(discovery.adapter, Instant::now())
+                                    if subscription_refresh
+                                        || startup_restore
+                                            .borrow()
+                                            .refresh_due(discovery.adapter, Instant::now())
                                     {
                                         if let Err(e) = s.refresh() {
                                             s.fail(&e);
@@ -501,6 +505,41 @@ fn active_subscriber(target: Option<&Target>) -> bool {
     target.is_some_and(|t| t.link == Knowledge::Yes && t.subscribed == Knowledge::Yes)
 }
 
+fn native_peer(
+    client: &GattSubscribedClient,
+) -> windows::core::Result<authorization::Peer<GattSession>> {
+    let session = client.Session()?;
+    Ok(authorization::Peer {
+        id: session.DeviceId()?.Id()?.to_string(),
+        active: session.SessionStatus()? == GattSessionStatus::Active,
+        session,
+    })
+}
+
+fn subscribed_peer(
+    characteristic: &GattLocalCharacteristic,
+    id: &str,
+) -> windows::core::Result<Option<(GattSubscribedClient, authorization::Peer<GattSession>)>> {
+    for client in characteristic.SubscribedClients()? {
+        let native_id = match client
+            .Session()
+            .and_then(|session| session.DeviceId())
+            .and_then(|id| id.Id())
+        {
+            Ok(id) => id,
+            Err(error) => {
+                tracing::warn!(%error, "Unreadable report subscriber identity");
+                continue;
+            }
+        };
+        if native_id == id {
+            let peer = native_peer(&client)?;
+            return Ok(Some((client, peer)));
+        }
+    }
+    Ok(None)
+}
+
 fn record_hid_suspend(
     suspended: &Mutex<std::collections::BTreeMap<String, bool>>,
     id: String,
@@ -574,13 +613,15 @@ struct Server {
     write_token: Option<i64>,
     protocol_token: Option<i64>,
     session: Option<(GattSession, i64)>,
+    report_sessions: Vec<(GattSession, i64)>,
     maintained_session: Option<GattSession>,
     link_device: Option<BluetoothLEDevice>,
-    session_active: bool,
     radio: Radio,
     radio_token: Option<i64>,
     advertisement_tokens: Vec<i64>,
     revision: Arc<AtomicU64>,
+    authorization: Arc<authorization::Authorization<GattSession>>,
+    refresh_signal: Arc<authorization::Refresh>,
     suspended: Arc<Mutex<std::collections::BTreeMap<String, bool>>>,
     selected_clients: [Option<GattSubscribedClient>; 3],
     state: Snapshot,
@@ -623,6 +664,11 @@ impl Server {
             })(),
         )?;
         let initial_generation = revision.load(Ordering::Acquire);
+        let authorization = Arc::new(authorization::Authorization::new(
+            profile,
+            revision.clone(),
+            sender.link.clone(),
+        ));
         let mut s = Self {
             profile,
             sender,
@@ -634,13 +680,15 @@ impl Server {
             write_token: None,
             protocol_token: None,
             session: None,
+            report_sessions: vec![],
             maintained_session: None,
             link_device: None,
-            session_active: false,
             radio,
             radio_token: None,
             advertisement_tokens: vec![],
             revision,
+            authorization,
+            refresh_signal: Arc::new(authorization::Refresh::new()),
             suspended: Arc::new(Mutex::new(std::collections::BTreeMap::new())),
             selected_clients: std::array::from_fn(|_| None),
             state: Snapshot {
@@ -673,11 +721,17 @@ impl Server {
         Ok(s)
     }
     fn build(&mut self) -> windows::core::Result<()> {
-        let rev = self.revision.clone();
+        let authorization = self.authorization.clone();
+        let refresh = self.refresh_signal.clone();
+        let radio = self.radio.clone();
         self.radio_token = Some(self.radio.StateChanged(&TypedEventHandler::new(
             move |_, _| {
                 callback(|| {
-                    rev.fetch_add(1, Ordering::AcqRel);
+                    authorization.reconcile(|selected| {
+                        selected.radio_on =
+                            radio.State().is_ok_and(|state| state == RadioState::On);
+                    });
+                    refresh.signal();
                     tracing::info!("Bluetooth radio state changed");
                     Ok(())
                 })
@@ -769,6 +823,8 @@ impl Server {
                 )?;
                 self.control = Some(control.clone());
                 let suspended = self.suspended.clone();
+                let authorization = self.authorization.clone();
+                let refresh = self.refresh_signal.clone();
                 self.write_token =
                     Some(control.WriteRequested(&TypedEventHandler::<
                         GattLocalCharacteristic,
@@ -784,7 +840,16 @@ impl Server {
                                     let v = reader.ReadByte()?;
                                     if v <= 1 {
                                         let id = args.Session()?.DeviceId()?.Id()?.to_string();
-                                        record_hid_suspend(&suspended, id, v == 0);
+                                        authorization.reconcile(|selected| {
+                                            record_hid_suspend(&suspended, id.clone(), v == 0);
+                                            if selected.reports[0]
+                                                .as_ref()
+                                                .is_some_and(|peer| peer.id == id)
+                                            {
+                                                selected.suspended = v == 0;
+                                            }
+                                        });
+                                        refresh.signal();
                                     }
                                 }
                                 Ok(())
@@ -868,11 +933,22 @@ impl Server {
                 result
             })
         }))?;
-        let revision = self.revision.clone();
+        let authorization = self.authorization.clone();
+        let refresh = self.refresh_signal.clone();
+        let subscription_characteristic = characteristic.clone();
         let subscription_token =
             characteristic.SubscribedClientsChanged(&TypedEventHandler::new(move |_, _| {
                 callback(|| {
-                    revision.fetch_add(1, Ordering::AcqRel);
+                    authorization.subscription_changed(kind, |peer| {
+                        match subscribed_peer(&subscription_characteristic, &peer.id) {
+                            Ok(Some((_, current))) => Some(current),
+                            Ok(None) => None,
+                            Err(error) => {
+                                tracing::warn!(?kind, %error, "Selected report subscription unavailable");
+                                None
+                            }
+                        }
+                    }, &refresh);
                     tracing::info!(?kind, "HID report subscription changed");
                     Ok(())
                 })
@@ -912,6 +988,9 @@ impl Server {
         );
     }
     fn fail(&mut self, e: &BackendError) {
+        self.authorization
+            .reconcile(|selected| *selected = authorization::Selected::default());
+        self.adopt_generation();
         let restoring = self.startup_restore.borrow().pending();
         if restoring {
             self.startup_restore.borrow_mut().failure(Instant::now());
@@ -944,14 +1023,7 @@ impl Server {
         api("GATT state refresh", self.refresh_native())
     }
     fn refresh_native(&mut self) -> windows::core::Result<()> {
-        let revision = self.revision.load(Ordering::Acquire);
-        if revision != self.state.generation {
-            self.state.generation = revision;
-            self.generation_started = Instant::now();
-            self.synced = false;
-            self.synced_reports = [false; 3];
-            self.reset_report_state();
-        }
+        self.adopt_generation();
         let radio_on = self.radio.State()? == RadioState::On;
         self.state.adapter = radio_on;
         self.state.broadcasting = matches!(
@@ -987,8 +1059,14 @@ impl Server {
         let mut subscribers = vec![];
         let mut subscriber_targets = vec![];
         for client in clients {
-            let session = client.Session()?;
-            let id = session.DeviceId()?.Id()?.to_string();
+            let peer = match native_peer(&client) {
+                Ok(peer) => peer,
+                Err(error) => {
+                    tracing::warn!(%error, "Unreadable discovery subscriber");
+                    continue;
+                }
+            };
+            let id = peer.id;
             let updates = self.updates.clone();
             let Metadata { name, pairing, identity } = self.metadata.resolve(&id, Instant::now(), || {
                 updates.send_modify(|s| s.activity = TransportActivity::ResolvingDevice);
@@ -1033,7 +1111,7 @@ impl Server {
                     }
                 }
             });
-            let link = if session.SessionStatus()? == GattSessionStatus::Active {
+            let link = if peer.active {
                 Knowledge::Yes
             } else {
                 Knowledge::No
@@ -1064,84 +1142,77 @@ impl Server {
             .selected
             .as_ref()
             .and_then(|id| selected_subscriber_index(id, &targets, &subscriber_targets));
-        let selected_client = selected_index
+        let selected_native_id = selected_index
             .and_then(|index| subscribers.get(index))
-            .map(|(_, client)| client.clone());
-        let mut next_selected_clients = [selected_client.clone(), None, None];
-        if let Some(selected) = &selected_client {
-            let id = selected.Session()?.DeviceId()?.Id()?;
-            for &kind in self
-                .profile
-                .reports()
-                .iter()
-                .filter(|kind| **kind != hid::ReportKind::Consumer)
-            {
-                for client in self.report(kind).characteristic.SubscribedClients()? {
-                    if client.Session()?.DeviceId()?.Id()? == id {
-                        next_selected_clients[kind.index()] = Some(client);
-                        break;
+            .map(|(id, _)| id.as_str());
+        let authorization = self.authorization.clone();
+        let (observation, observed_generation) = authorization.reconcile(|selected| {
+            let result = (|| -> windows::core::Result<_> {
+                let mut clients = [None, None, None];
+                let mut peers = [None, None, None];
+                if let Some(id) = selected_native_id {
+                    for &kind in self.profile.reports() {
+                        if let Some((client, peer)) =
+                            subscribed_peer(&self.report(kind).characteristic, id)?
+                        {
+                            clients[kind.index()] = Some(client);
+                            peers[kind.index()] = Some(peer);
+                        }
                     }
                 }
+                let radio_on = self.radio.State()? == RadioState::On;
+                let live_ids = self
+                    .report(hid::ReportKind::Consumer)
+                    .characteristic
+                    .SubscribedClients()?
+                    .into_iter()
+                    .filter_map(|client| {
+                        client
+                            .Session()
+                            .and_then(|session| session.DeviceId())
+                            .and_then(|id| id.Id())
+                            .ok()
+                            .map(|id| id.to_string())
+                    })
+                    .collect::<Vec<_>>();
+                let mut suspended = self.suspended.lock().unwrap_or_else(|e| e.into_inner());
+                suspended.retain(|id, _| {
+                    live_ids.contains(id) || peers[0].as_ref().is_some_and(|peer| &peer.id == id)
+                });
+                let hid_suspended = peers[0]
+                    .as_ref()
+                    .is_some_and(|peer| suspended.get(&peer.id).copied().unwrap_or(false));
+                Ok((clients, peers, radio_on, hid_suspended))
+            })();
+            match &result {
+                Ok((_, peers, radio_on, suspended)) => {
+                    *selected = authorization::Selected {
+                        reports: peers.clone(),
+                        radio_on: *radio_on,
+                        suspended: *suspended,
+                    };
+                }
+                Err(_) => *selected = authorization::Selected::default(),
             }
-        }
-        // Discovery's generic Bluetooth link must not override the live HID session.
-        let selected_session_active =
-            active_subscriber(selected_index.and_then(|index| subscriber_targets.get(index)));
-        let selected_link_lost = self.session_active && !selected_session_active;
-        let selected_client_replaced = self.selected_clients[0].is_some()
-            && selected_client.is_some()
-            && self.selected_clients[0] != selected_client;
-        let selected_client_lost = self.selected_clients[0].is_some()
-            && (selected_client.is_none() || selected_link_lost || selected_client_replaced);
-        // Keep the session and its connection request alive while inactive.
-        // Sending remains gated separately by the live session status.
-        let client_changed = self.selected_clients != next_selected_clients;
-        if client_changed || self.session_active != selected_session_active {
-            self.synced = false;
-            self.synced_reports = [false; 3];
-            self.reset_report_state();
-            self.state.generation = self.revision.fetch_add(1, Ordering::AcqRel) + 1;
-            self.generation_started = Instant::now();
-        }
-        self.session_active = selected_session_active;
-        if client_changed {
-            self.release_maintenance();
-            if let Some((s, token)) = self.session.take() {
-                s.RemoveSessionStatusChanged(token)?;
-            }
-            if let Some(client) = &next_selected_clients[0] {
-                let session = client.Session()?;
-                self.link_device = session
-                    .DeviceId()
-                    .and_then(|id| id.Id())
-                    .and_then(|id| BluetoothLEDevice::FromIdAsync(&id))
-                    .and_then(|operation| operation.join())
-                    .ok();
-                self.enable_connection_maintenance(client);
-                let rev = self.revision.clone();
-                let token =
-                    session.SessionStatusChanged(&TypedEventHandler::new(move |_, _| {
-                        callback(|| {
-                            rev.fetch_add(1, Ordering::AcqRel);
-                            tracing::info!("Target session changed");
-                            Ok(())
-                        })
-                    }))?;
-                self.session = Some((session, token));
-            }
-        }
+            result
+        });
+        let (next_selected_clients, peers, radio_on, hid_suspended) = observation?;
+        let selected_session_active = peers[0].as_ref().is_some_and(|peer| peer.active);
+        self.reconcile_sessions(&peers, &next_selected_clients)?;
+        // Subscription wrappers are refreshed for delivery without becoming
+        // authorization identity. Only native identity/session/status matter.
         self.selected_clients = next_selected_clients;
-        if selected_client_lost {
-            tracing::info!(
-                subscriber_missing = selected_index.is_none(),
-                session_inactive = selected_link_lost,
-                client_replaced = selected_client_replaced,
-                "Selected HID transport interrupted; retaining target for resynchronization"
-            );
-            self.state.ready = false;
-            if self.maintenance.failures == 0 {
-                self.state.device_error = None;
-            }
+        self.state.hid_suspended = hid_suspended;
+        self.adopt_generation();
+        // A callback may have revoked the sampled transport while native
+        // handles were being prepared. Never stamp those handles with its new
+        // generation; collect fresh evidence on the next worker iteration.
+        if self.state.generation != observed_generation {
+            self.selected_clients = [None, None, None];
+            self.refresh_signal.signal();
+            self.configure_sender();
+            self.publish();
+            return Ok(());
         }
 
         let previous_selected = self.state.selected_target().cloned();
@@ -1169,32 +1240,7 @@ impl Server {
         }
         targets.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
         self.state.targets = targets;
-        self.suspended
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .retain(|id, _| {
-                self.state
-                    .targets
-                    .iter()
-                    .any(|t| &t.id == id && t.subscribed == Knowledge::Yes)
-            });
-        self.state.hid_suspended = self.state.selected_target().is_some_and(|target| {
-            self.suspended
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .get(&target.id)
-                .copied()
-                .unwrap_or(false)
-        });
-        let report_active = hid::ReportKind::ALL.map(|kind| {
-            let index = kind.index();
-            self.selected_clients[index].as_ref().is_some_and(|client| {
-                client
-                    .Session()
-                    .and_then(|session| session.SessionStatus())
-                    .is_ok_and(|status| status == GattSessionStatus::Active)
-            })
-        });
+        let report_active = peers.map(|peer| peer.is_some_and(|peer| peer.active));
         for (index, active) in report_active.into_iter().enumerate() {
             if !active {
                 self.synced_reports[index] = false;
@@ -1302,6 +1348,102 @@ impl Server {
 }
 
 impl Server {
+    fn adopt_generation(&mut self) {
+        let revision = self.revision.load(Ordering::Acquire);
+        if revision != self.state.generation {
+            self.state.generation = revision;
+            self.generation_started = Instant::now();
+            self.synced = false;
+            self.synced_reports = [false; 3];
+            self.state.ready = false;
+            self.reset_report_state();
+        }
+    }
+
+    fn watch_session(&self, session: &GattSession) -> windows::core::Result<i64> {
+        let authorization = self.authorization.clone();
+        let refresh = self.refresh_signal.clone();
+        let observed = session.clone();
+        let token = session.SessionStatusChanged(&TypedEventHandler::<
+            GattSession,
+            GattSessionStatusChangedEventArgs,
+        >::new(move |_, args| {
+            callback(|| {
+                authorization.session_event(
+                    &observed,
+                    args.as_ref()
+                        .and_then(|args| args.Status().ok())
+                        .is_some_and(|status| status == GattSessionStatus::Active),
+                    &refresh,
+                );
+                Ok(())
+            })
+        }))?;
+        // Close the observation-to-handler-registration window before delivery.
+        self.authorization.session_changed(
+            session,
+            || {
+                session
+                    .SessionStatus()
+                    .is_ok_and(|status| status == GattSessionStatus::Active)
+            },
+            &self.refresh_signal,
+        );
+        Ok(token)
+    }
+
+    fn reconcile_sessions(
+        &mut self,
+        peers: &[Option<authorization::Peer<GattSession>>; 3],
+        clients: &[Option<GattSubscribedClient>; 3],
+    ) -> windows::core::Result<()> {
+        let consumer = peers[0].as_ref().map(|peer| &peer.session);
+        if self.session.as_ref().map(|(session, _)| session) != consumer {
+            self.release_maintenance();
+            if let Some((session, token)) = self.session.take() {
+                session.RemoveSessionStatusChanged(token)?;
+            }
+            if let Some(session) = consumer {
+                self.link_device = session
+                    .DeviceId()
+                    .and_then(|id| id.Id())
+                    .and_then(|id| BluetoothLEDevice::FromIdAsync(&id))
+                    .and_then(|operation| operation.join())
+                    .ok();
+                if let Some(client) = &clients[0] {
+                    self.enable_connection_maintenance(client);
+                }
+                self.session = Some((session.clone(), self.watch_session(session)?));
+            }
+        }
+        let mut additional = vec![];
+        for peer in peers.iter().skip(1).flatten() {
+            if Some(&peer.session) != consumer && !additional.contains(&peer.session) {
+                additional.push(peer.session.clone());
+            }
+        }
+        let mut retained = vec![];
+        for (session, token) in self.report_sessions.drain(..) {
+            if additional.contains(&session) {
+                retained.push((session, token));
+            } else {
+                session.RemoveSessionStatusChanged(token)?;
+            }
+        }
+        self.report_sessions = retained;
+        for session in additional {
+            if !self
+                .report_sessions
+                .iter()
+                .any(|(existing, _)| existing == &session)
+            {
+                let token = self.watch_session(&session)?;
+                self.report_sessions.push((session, token));
+            }
+        }
+        Ok(())
+    }
+
     fn release_maintenance(&mut self) {
         self.link_device = None;
         if let Some(session) = self.maintained_session.take()
@@ -1365,12 +1507,19 @@ impl Server {
         tracing::info!(device_id = ?target, "Selected HID receiver changed");
         // Revoke old cached input before changing receiver ownership.
         self.revision.fetch_add(1, Ordering::AcqRel);
+        self.authorization
+            .reconcile(|selected| *selected = authorization::Selected::default());
         self.state.selected = target;
         self.state.ready = false;
         self.release_maintenance();
-        self.session_active = false;
         self.metadata.clear();
         if let Some((session, token)) = self.session.take() {
+            api(
+                "RemoveSessionStatusChanged",
+                session.RemoveSessionStatusChanged(token),
+            )?;
+        }
+        for (session, token) in self.report_sessions.drain(..) {
             api(
                 "RemoveSessionStatusChanged",
                 session.RemoveSessionStatusChanged(token),
@@ -1424,6 +1573,11 @@ impl Drop for Server {
             tracing::error!(?error, "HID endpoint teardown failed");
         }
         self.release_maintenance();
+        for (session, token) in self.report_sessions.drain(..) {
+            if let Err(e) = session.RemoveSessionStatusChanged(token) {
+                tracing::warn!("Remove GATT callback: {e}");
+            }
+        }
         if let Some((s, t)) = self.session.take() {
             if let Err(e) = s.RemoveSessionStatusChanged(t) {
                 tracing::warn!("Remove GATT callback: {e}");

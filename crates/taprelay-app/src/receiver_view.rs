@@ -83,16 +83,17 @@ pub fn row(target: &Target, state: &Snapshot, tr: impl Fn(&'static str) -> Strin
         .is_some_and(|id| target.matches_id(id));
     let (action, label) = if selected {
         ("disconnect-device", keys::RECEIVER_DISCONNECT)
-    } else if target.subscribed == Knowledge::Yes
-        || (state.service_paused && target.pairing == Knowledge::Yes)
+    } else if target.link == Knowledge::Yes
+        && (target.subscribed == Knowledge::Yes
+            || (state.service_paused && target.pairing == Knowledge::Yes))
     {
         ("device", keys::RECEIVER_CONNECT)
     } else if target.pairing == Knowledge::No {
         ("pair-device", keys::RECEIVER_PAIR)
     } else {
-        // The receiver must initiate the HID subscription. Keep this as a
-        // non-interactive hint until that subscription is observable; the
-        // Connect action appears once the receiver is actually subscribed.
+        // A bond alone is not a live receiver. Require a connected link,
+        // plus its HID subscription while the service is published. A linked
+        // paired receiver may restart a paused service to subscribe again.
         ("", keys::RECEIVER_HOST_HINT)
     };
     let detail = if target.availability == Availability::Unavailable {
@@ -207,6 +208,7 @@ mod tests {
         );
         assert!(!paired.enabled);
         assert!(paired.paired);
+        target.link = Knowledge::Yes;
         target.subscribed = Knowledge::Yes;
         assert_eq!(project(&target, &state).action_label, "Start session");
         state.selected = Some("stable".into());
@@ -217,6 +219,62 @@ mod tests {
         state.adapter_state = AdapterState::Disabled;
         assert!(project(&target, &state).enabled);
     }
+    #[test]
+    fn paired_devices_require_a_live_link_to_start_a_session_when_service_is_paused() {
+        let state = Snapshot {
+            adapter_state: AdapterState::Available,
+            service_paused: true,
+            ..Default::default()
+        };
+        let mut target = Target {
+            id: "receiver".into(),
+            pairing: Knowledge::Yes,
+            availability: Availability::Nearby,
+            ..Default::default()
+        };
+        for link in [Knowledge::No, Knowledge::Unknown] {
+            target.link = link;
+            let device = row(&target, &state, |key| key.into());
+            assert!(
+                !device.enabled,
+                "paired {link:?} link must not start a session"
+            );
+            assert_ne!(device.action, "device");
+        }
+        target.link = Knowledge::Yes;
+        let device = row(&target, &state, |key| key.into());
+        assert!(device.enabled);
+        assert_eq!(device.action, "device");
+    }
+
+    #[test]
+    fn stale_subscription_does_not_allow_a_disconnected_receiver_to_start_a_session() {
+        let mut state = Snapshot {
+            adapter_state: AdapterState::Available,
+            ..Default::default()
+        };
+        let mut target = Target {
+            id: "receiver".into(),
+            pairing: Knowledge::Yes,
+            subscribed: Knowledge::Yes,
+            availability: Availability::Nearby,
+            ..Default::default()
+        };
+        for paused in [false, true] {
+            state.service_paused = paused;
+            for link in [Knowledge::No, Knowledge::Unknown] {
+                target.link = link;
+                let device = row(&target, &state, |key| key.into());
+                assert!(!device.enabled);
+                assert_ne!(device.action, "device");
+            }
+            target.link = Knowledge::Yes;
+            let device = row(&target, &state, |key| key.into());
+            assert!(device.enabled);
+            assert_eq!(device.action, "device");
+        }
+    }
+
     #[test]
     fn a_device_is_not_hidden_or_rejected_before_subscription() {
         let state = Snapshot {

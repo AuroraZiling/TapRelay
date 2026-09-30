@@ -1,6 +1,7 @@
 mod discovery;
 mod maintenance;
 mod publication;
+mod report;
 mod restore;
 mod sender;
 use std::{
@@ -559,7 +560,7 @@ struct ReportCharacteristic {
     characteristic: GattLocalCharacteristic,
     read_token: i64,
     subscription_token: i64,
-    current: Arc<Mutex<Vec<u8>>>,
+    current: Arc<Mutex<report::ReportState>>,
 }
 
 struct Server {
@@ -825,8 +826,9 @@ impl Server {
             ));
         }
 
-        let current = Arc::new(Mutex::new(hid::neutral(kind)));
+        let current = Arc::new(Mutex::new(report::ReportState::new(kind)));
         let read_current = current.clone();
+        let read_revision = self.revision.clone();
         let read_token = characteristic.ReadRequested(&TypedEventHandler::<
             GattLocalCharacteristic,
             GattReadRequestedEventArgs,
@@ -837,14 +839,29 @@ impl Server {
                 let result = (|| {
                     let request = args.GetRequestAsync()?.join()?;
                     let offset = request.Offset()? as usize;
+                    // Only a live native session may read its own cached input.
+                    // Identity failures and poisoned state fail closed to neutral.
+                    let requester = args.Session().ok().and_then(|session| {
+                        if session.SessionStatus().ok()? != GattSessionStatus::Active {
+                            return None;
+                        }
+                        session.DeviceId().ok()?.Id().ok().map(|id| id.to_string())
+                    });
+                    let generation = read_revision.load(Ordering::Acquire);
                     let value = read_current
                         .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .clone();
-                    if offset > value.len() {
-                        request.RespondWithProtocolError(7)
+                        .map(|state| state.value(requester.as_deref(), generation))
+                        .unwrap_or_else(|_| hid::neutral(kind));
+                    // A revocation while preparing the response must not expose
+                    // a payload from the previous transport generation.
+                    let value = if generation == read_revision.load(Ordering::Acquire) {
+                        value
                     } else {
-                        request.RespondWithValue(&buffer(&value[offset..])?)
+                        hid::neutral(kind)
+                    };
+                    match report::read_value(&value, offset) {
+                        Ok(bytes) => request.RespondWithValue(&buffer(bytes)?),
+                        Err(error) => request.RespondWithProtocolError(error),
                     }
                 })();
                 deferral.Complete()?;
@@ -879,10 +896,11 @@ impl Server {
     fn reset_report_state(&mut self) {
         self.sender.link.end();
         for report in &self.reports {
-            *report
+            report
                 .current
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()) = hid::neutral(report.kind);
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clear();
         }
     }
 
@@ -1258,6 +1276,7 @@ impl Server {
         sender::Endpoint {
             characteristic: report.characteristic.clone(),
             client: client.clone(),
+            generation: self.state.generation,
             current: report.current.clone(),
         }
     }
@@ -1344,6 +1363,8 @@ impl Server {
     }
     fn select(&mut self, target: Option<String>) -> Result<(), BackendError> {
         tracing::info!(device_id = ?target, "Selected HID receiver changed");
+        // Revoke old cached input before changing receiver ownership.
+        self.revision.fetch_add(1, Ordering::AcqRel);
         self.state.selected = target;
         self.state.ready = false;
         self.release_maintenance();
@@ -1359,7 +1380,6 @@ impl Server {
         self.reset_report_state();
         self.maintenance = maintenance::Maintenance::new(Instant::now());
         self.synced = false;
-        self.revision.fetch_add(1, Ordering::AcqRel);
         self.publish();
         Ok(())
     }

@@ -1,4 +1,4 @@
-use super::{api, buffer};
+use super::{api, buffer, report::ReportState};
 use std::{
     sync::{
         Arc, Mutex,
@@ -22,7 +22,8 @@ use windows::Devices::Bluetooth::GenericAttributeProfile::{
 pub(super) struct Endpoint {
     pub characteristic: GattLocalCharacteristic,
     pub client: GattSubscribedClient,
-    pub current: Arc<Mutex<Vec<u8>>>,
+    pub generation: u64,
+    pub current: Arc<Mutex<ReportState>>,
 }
 
 enum Command {
@@ -409,20 +410,32 @@ impl Worker {
                 } else if refresh && self.link.epoch() != 0 {
                     Ok(())
                 } else {
-                    let bytes = if refresh {
-                        endpoint
-                            .current
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .clone()
-                    } else {
-                        if kind == ReportKind::Consumer {
-                            self.consumer.clear();
-                            self.pulses.clear();
-                        }
-                        hid::neutral(kind)
-                    };
-                    self.notify(kind, &bytes, &endpoint)
+                    (|| {
+                        let bytes = if refresh {
+                            let id = api(
+                                "HID.SessionId",
+                                endpoint
+                                    .client
+                                    .Session()
+                                    .and_then(|session| session.DeviceId())
+                                    .and_then(|id| id.Id()),
+                            )?;
+                            endpoint
+                                .current
+                                .lock()
+                                .map_err(|_| {
+                                    BackendError::Unavailable("HID report state poisoned".into())
+                                })?
+                                .value(Some(&id.to_string()), generation)
+                        } else {
+                            if kind == ReportKind::Consumer {
+                                self.consumer.clear();
+                                self.pulses.clear();
+                            }
+                            hid::neutral(kind)
+                        };
+                        self.notify(kind, &bytes, &endpoint)
+                    })()
                 };
                 // A refresh can wait for its slot while the hook enables
                 // capture. Skipping that refresh must not revoke the new mode.
@@ -592,11 +605,24 @@ impl Worker {
             thread::park_timeout(self.report_wait(kind).min(Duration::from_millis(5)));
         }
         self.schedule.sent(Instant::now());
-        let mut current = bytes.to_vec();
-        if kind == ReportKind::Mouse {
-            current[1..].fill(0);
-        }
-        *endpoint.current.lock().unwrap_or_else(|e| e.into_inner()) = current;
+        let id = api(
+            "HID.SessionId",
+            endpoint
+                .client
+                .Session()
+                .and_then(|session| session.DeviceId())
+                .and_then(|id| id.Id()),
+        )?;
+        endpoint
+            .current
+            .lock()
+            .map_err(|_| BackendError::Unavailable("HID report state poisoned".into()))?
+            .update(
+                id.to_string(),
+                endpoint.generation,
+                self.link.generation(),
+                bytes,
+            );
         let pending = api(
             "HID.Notify",
             endpoint.characteristic.NotifyValueForSubscribedClientAsync(

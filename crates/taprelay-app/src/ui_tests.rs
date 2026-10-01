@@ -42,6 +42,84 @@ struct SoftwareTestPlatform {
     window: std::rc::Rc<slint::platform::software_renderer::MinimalSoftwareWindow>,
 }
 
+#[cfg(windows)]
+#[test]
+fn inputs_hide_placeholder_during_ime_composition() {
+    use i_slint_core::input::{InternalKeyEvent, KeyEventType};
+    use slint::platform::WindowEvent;
+
+    slint::platform::set_platform(Box::new(SoftwareTestPlatform {
+        window: slint::platform::software_renderer::MinimalSoftwareWindow::new(
+            slint::platform::software_renderer::RepaintBufferType::ReusedBuffer,
+        ),
+    }))
+    .unwrap();
+    let ui = AppWindow::new().unwrap();
+    i18n::apply(&ui, "zh-CN");
+    ui.set_mode(2);
+    ui.window().set_size(slint::LogicalSize::new(900., 500.));
+    let mappings = ui.global::<MappingUi>();
+
+    for id in ["mapping-name", "groups-name-input", "mapping-output-search"] {
+        if id == "groups-name-input" {
+            ui.invoke_show_group_editor();
+        } else {
+            ui.set_page(1);
+            mappings.set_open(true);
+            mappings.set_editor(true);
+            if id == "mapping-output-search" {
+                mappings.set_entry_mode(1);
+                ui.window().take_snapshot().unwrap();
+                binding_element(&ui, "mapping-select-output").invoke_accessible_default_action();
+            }
+        }
+        ui.window().take_snapshot().unwrap();
+        let field = binding_element(&ui, id);
+        // Each editor/popup focuses its input when it opens.
+        let assert_placeholder = |visible, stage| {
+            ui.window().take_snapshot().unwrap();
+            assert_eq!(
+                field
+                    .query_descendants()
+                    .match_type_name("Text")
+                    .find_first()
+                    .is_some(),
+                visible,
+                "Unexpected placeholder visibility in {id} after {stage}"
+            );
+        };
+        let compose = |event_type, preedit: &str, committed: &str| {
+            let mut key_event = i_slint_core::items::KeyEvent::default();
+            key_event.text = committed.into();
+            ui.window()
+                .dispatch_event(WindowEvent::internal(InternalKeyEvent {
+                    event_type,
+                    preedit_text: preedit.into(),
+                    key_event,
+                    ..Default::default()
+                }));
+        };
+
+        assert_placeholder(true, "focus");
+        compose(KeyEventType::UpdateComposition, "li", "");
+        assert_placeholder(false, "starting composition");
+        compose(KeyEventType::UpdateComposition, "例", "");
+        assert_placeholder(false, "updating composition");
+        compose(KeyEventType::UpdateComposition, "", "");
+        assert_placeholder(true, "cancelling composition");
+        compose(KeyEventType::UpdateComposition, "li", "");
+        compose(KeyEventType::CommitComposition, "", "例");
+        assert_placeholder(false, "committing composition");
+        field
+            .query_descendants()
+            .match_type_name("TextInput")
+            .find_first()
+            .unwrap()
+            .set_accessible_value("");
+        assert_placeholder(true, "clearing committed text");
+    }
+}
+
 impl slint::platform::Platform for SoftwareTestPlatform {
     fn create_window_adapter(
         &self,

@@ -4,7 +4,7 @@ import { FocusRing } from "focus-ring.slint";
 export component Input inherits Rectangle {
     // Two-way bound to the field contents.
     in-out property <string> text;
-    // Hint shown when the field is empty.
+    // Hint shown when both committed and preedit text are empty.
     in property <string> placeholder;
     // When false, the input dims and stops accepting keystrokes.
     in property <bool> enabled: true;
@@ -74,7 +74,7 @@ export component Input inherits Rectangle {
         init => { if (root.auto-focus) { self.focus(); } }
     }
 
-    if root.text == "": Text {
+    if root.text == "" && input.preedit-text == "": Text {
         x: input.x;
         y: 0;
         width: input.width;

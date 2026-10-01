@@ -8,7 +8,7 @@
 use crate::{
     binding::{BindingIndex, BindingKey},
     function::{FunctionAction, FunctionConfigs, FunctionId, function_definition},
-    input::{InputCode, InputEvent, InputState},
+    input::{InputCode, InputEvent, InputState, MouseButton},
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
@@ -52,6 +52,13 @@ pub enum RoutedInput {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RoutedOutput {
+    Mapping {
+        id: u64,
+        output: crate::mapping::MappingOutput,
+        down: bool,
+        token: u64,
+        created: Instant,
+    },
     Local(PhysicalInput),
     Remote(PhysicalInput),
     EndPassthrough,
@@ -104,6 +111,11 @@ struct ActiveToken {
 /// function lifetimes. Callers publish a new config at a revision
 /// boundary and then feed subsequent physical events through `route`.
 pub struct InputRouter {
+    mappings: Vec<crate::mapping::CustomMapping>,
+    mapping_candidates: BTreeMap<InputCode, Vec<usize>>,
+    mapping_paths: BTreeMap<u64, BTreeSet<String>>,
+    mapping_active: BTreeMap<InputCode, (crate::mapping::CustomMapping, u64)>,
+    mapping_rules: crate::foreground_app::ForegroundAppRules,
     foreground_app_scopes: crate::foreground_app::ScopeIndex,
     foreground: Option<String>,
     index: BindingIndex,
@@ -122,6 +134,11 @@ pub struct InputRouter {
 impl InputRouter {
     pub fn new(configs: &FunctionConfigs, revision: u64) -> Self {
         Self {
+            mappings: Vec::new(),
+            mapping_candidates: Default::default(),
+            mapping_paths: Default::default(),
+            mapping_active: BTreeMap::new(),
+            mapping_rules: Default::default(),
             foreground_app_scopes: Default::default(),
             foreground: None,
             index: BindingIndex::new(configs),
@@ -146,6 +163,8 @@ impl InputRouter {
         &mut self,
         rules: &crate::foreground_app::ForegroundAppRules,
     ) -> RouteResult {
+        self.mapping_rules = rules.clone();
+        self.index_mappings();
         self.foreground_app_scopes = crate::foreground_app::ScopeIndex::new(rules);
         self.cancel_out_of_scope()
     }
@@ -176,6 +195,15 @@ impl InputRouter {
             })
             .collect();
         let mut result = RouteResult::default();
+        let mapped: Vec<_> = self
+            .mapping_active
+            .iter()
+            .filter_map(|(&code, (mapping, _))| (!self.mapping_allows(mapping)).then_some(code))
+            .collect();
+        for code in mapped {
+            self.release_mapping(code, &mut result, Instant::now());
+            self.suppressed_until_up.insert(code);
+        }
         for code in codes {
             let active = self.active.remove(&code).expect("active token");
             if active.hold_started {
@@ -215,13 +243,7 @@ impl InputRouter {
                 self.suppressed_until_up.insert(code);
             }
         }
-        for button in [
-            crate::input::MouseButton::Left,
-            crate::input::MouseButton::Right,
-            crate::input::MouseButton::Middle,
-            crate::input::MouseButton::Side1,
-            crate::input::MouseButton::Side2,
-        ] {
+        for button in MouseButton::ALL {
             let code = InputCode::Mouse(button);
             if self.physical.is_down(code) {
                 self.suppressed_until_up.insert(code);
@@ -291,12 +313,86 @@ impl InputRouter {
         self.stamp(cleanup)
     }
 
+    pub fn update_mappings(&mut self, mappings: &[crate::mapping::CustomMapping]) -> RouteResult {
+        let mut result = RouteResult::default();
+        let changed: Vec<_> = self
+            .mapping_active
+            .iter()
+            .filter_map(|(&code, (active, _))| {
+                mappings
+                    .iter()
+                    .find(|mapping| mapping.id == active.id)
+                    .is_none_or(|mapping| {
+                        !mapping.enabled
+                            || mapping.output != active.output
+                            || mapping.shortcuts != active.shortcuts
+                            || mapping.groups != active.groups
+                    })
+                    .then_some(code)
+            })
+            .collect();
+        for code in changed {
+            self.release_mapping(code, &mut result, Instant::now());
+            self.suppressed_until_up.insert(code);
+        }
+        self.mappings = mappings.to_vec();
+        self.index_mappings();
+        self.stamp(result)
+    }
+
+    fn index_mappings(&mut self) {
+        self.mapping_candidates.clear();
+        self.mapping_paths.clear();
+        for (index, mapping) in self.mappings.iter().enumerate() {
+            if mapping.enabled {
+                for shortcut in &mapping.shortcuts {
+                    self.mapping_candidates
+                        .entry(shortcut.primary_code())
+                        .or_default()
+                        .push(index);
+                }
+            }
+            if !mapping.groups.is_empty() {
+                self.mapping_paths.insert(
+                    mapping.id,
+                    crate::mapping::scope_paths(&self.mapping_rules, &mapping.groups),
+                );
+            }
+        }
+    }
+
+    fn mapping_allows(&self, mapping: &crate::mapping::CustomMapping) -> bool {
+        mapping.groups.is_empty()
+            || self.foreground.as_ref().is_some_and(|path| {
+                self.mapping_paths
+                    .get(&mapping.id)
+                    .is_some_and(|paths| paths.contains(path))
+            })
+    }
+
+    fn release_mapping(&mut self, code: InputCode, result: &mut RouteResult, created: Instant) {
+        if let Some((mapping, token)) = self.mapping_active.remove(&code) {
+            result.outputs.push(RoutedOutput::Mapping {
+                id: mapping.id,
+                output: mapping.output,
+                down: false,
+                token,
+                created,
+            });
+        }
+    }
+
     pub fn terminate(&mut self, _reason: RouterReason) -> RouteResult {
         let mut result = RouteResult {
             revision: self.revision,
             consume: true,
             outputs: Vec::new(),
         };
+        let mapped: Vec<_> = self.mapping_active.keys().copied().collect();
+        for code in mapped {
+            self.release_mapping(code, &mut result, Instant::now());
+            self.suppressed_until_up.insert(code);
+        }
         if self.passthrough {
             self.passthrough = false;
             self.isolate_held();
@@ -367,6 +463,17 @@ impl InputRouter {
                 .is_some()
         {
             return self.route_event(event);
+        }
+        if self.mapping_active.contains_key(&event.code) {
+            self.physical.update(event);
+            let mut result = RouteResult {
+                consume: true,
+                ..Default::default()
+            };
+            if !event.down {
+                self.release_mapping(event.code, &mut result, event.captured);
+            }
+            return self.stamp(result);
         }
         let changed = self.physical.update(event);
         self.cancel_unmatched_repeats();
@@ -445,7 +552,8 @@ impl InputRouter {
                     ..Default::default()
                 });
             }
-            if self.active.contains_key(&event.code)
+            if self.mapping_active.contains_key(&event.code)
+                || self.active.contains_key(&event.code)
                 || self.suppressed_until_up.contains(&event.code)
             {
                 return RouteResult {
@@ -470,6 +578,17 @@ impl InputRouter {
 
         if self.recording {
             return self.normal_input(event);
+        }
+
+        if self.mapping_active.contains_key(&event.code) {
+            let mut result = RouteResult {
+                consume: true,
+                ..Default::default()
+            };
+            if !event.down {
+                self.release_mapping(event.code, &mut result, event.captured);
+            }
+            return result;
         }
 
         if let Some(active) = self.active.get(&event.code).cloned() {
@@ -514,6 +633,39 @@ impl InputRouter {
             return self.activate(binding, event.captured);
         }
 
+        if event.down && self.listening {
+            let mapping = self
+                .mapping_candidates
+                .get(&event.code)
+                .into_iter()
+                .flatten()
+                .map(|index| &self.mappings[*index])
+                .find(|mapping| {
+                    self.mapping_allows(mapping)
+                        && mapping.shortcuts.iter().any(|shortcut| {
+                            shortcut.primary_code() == event.code
+                                && shortcut.modifiers == self.physical.logical_modifiers()
+                        })
+                })
+                .cloned();
+            if let Some(mapping) = mapping {
+                self.next_token = self.next_token.wrapping_add(1).max(1);
+                let token = self.next_token;
+                let output = RoutedOutput::Mapping {
+                    id: mapping.id,
+                    output: mapping.output,
+                    down: true,
+                    token,
+                    created: event.captured,
+                };
+                self.mapping_active.insert(event.code, (mapping, token));
+                return RouteResult {
+                    consume: true,
+                    outputs: vec![output],
+                    ..Default::default()
+                };
+            }
+        }
         self.normal_input(event)
     }
 
@@ -731,6 +883,102 @@ mod tests {
         input::MouseButton,
     };
     use std::time::Instant;
+
+    fn custom_router() -> (InputRouter, crate::mapping::CustomMapping) {
+        let mapping = crate::mapping::CustomMapping {
+            id: 1,
+            name: "Speed".into(),
+            enabled: true,
+            shortcuts: vec![Shortcut::mouse(ModifierSet::empty(), MouseButton::Side1)],
+            output: crate::mapping::MappingOutput::Keyboard {
+                usage: 0x4f,
+                modifiers: 0,
+            },
+            groups: Default::default(),
+        };
+        let mut router = InputRouter::new(&default_configs(), 1);
+        router.update_mappings(std::slice::from_ref(&mapping));
+        router.set_listening(true);
+        (router, mapping)
+    }
+
+    fn mapped(result: &RouteResult) -> Vec<(bool, u64)> {
+        result
+            .outputs
+            .iter()
+            .filter_map(|output| match output {
+                RoutedOutput::Mapping { down, token, .. } => Some((*down, *token)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn mapping_starts_immediately_ignores_repeat_and_releases_in_local_window() {
+        let (mut router, _) = custom_router();
+        let code = InputCode::Mouse(MouseButton::Side1);
+        let press = router.route_event(event(code, true));
+        assert!(press.consume);
+        let token = mapped(&press)[0].1;
+        assert_eq!(mapped(&press), vec![(true, token)]);
+        assert!(mapped(&router.route_event(event(code, true))).is_empty());
+        assert!(router.next_deadline().is_none());
+        assert!(!router.route_motion(20, 20).consume);
+        assert_eq!(
+            mapped(&router.route_local_event(event(code, false))),
+            vec![(false, token)]
+        );
+        assert!(mapped(&router.route_local_event(event(code, true))).is_empty());
+    }
+
+    #[test]
+    fn editing_a_held_mapping_releases_old_output_and_consumes_its_tail() {
+        let (mut router, mut mapping) = custom_router();
+        let code = InputCode::Mouse(MouseButton::Side1);
+        router.route_event(event(code, true));
+        mapping.output = crate::mapping::MappingOutput::Keyboard {
+            usage: 0x50,
+            modifiers: 0,
+        };
+        assert_eq!(mapped(&router.update_mappings(&[mapping])).len(), 1);
+        let tail = router.route_event(event(code, false));
+        assert!(tail.consume && mapped(&tail).is_empty());
+        assert!(mapped(&router.route_event(event(code, true)))[0].0);
+        assert!(!mapped(&router.set_recording(true))[0].0);
+    }
+
+    #[test]
+    fn mapping_scope_exit_releases_and_requires_a_fresh_press() {
+        let (mut router, mut mapping) = custom_router();
+        let rules = scoped_rules(FunctionId::MediaPlayPause);
+        mapping.groups.insert("games".into());
+        router.update_mappings(&[mapping]);
+        router.set_foreground_app_rules(&rules);
+        router.set_foreground(Some("C:\\a.exe"));
+        let code = InputCode::Mouse(MouseButton::Side1);
+        router.route_event(event(code, true));
+        assert!(!mapped(&router.set_foreground(Some("C:\\other.exe")))[0].0);
+        router.set_foreground(Some("C:\\a.exe"));
+        assert!(mapped(&router.route_event(event(code, true))).is_empty());
+        router.route_event(event(code, false));
+        assert!(mapped(&router.route_event(event(code, true)))[0].0);
+        assert!(!mapped(&router.set_listening(false))[0].0);
+    }
+
+    #[test]
+    fn mapped_input_takes_precedence_over_passthrough_without_duplicating_raw_input() {
+        let (mut router, _) = custom_router();
+        router.set_passthrough(true);
+        let result = router.route_event(event(InputCode::Mouse(MouseButton::Side1), true));
+        assert_eq!(mapped(&result).len(), 1);
+        assert!(
+            !result
+                .outputs
+                .iter()
+                .any(|output| matches!(output, RoutedOutput::Remote(_)))
+        );
+        assert!(router.route_motion(10, 0).consume);
+    }
 
     fn event_at(code: InputCode, down: bool, captured: Instant) -> InputEvent {
         InputEvent {

@@ -112,7 +112,7 @@ pub const FUNCTION_CATALOG: [FunctionDefinition; 8] = [
         category: CategoryId::Media,
         tap_action: FunctionAction::Media(MediaCommand::PlayPause),
         hold_action: None,
-        name_key: "function.media.playpause",
+        name_key: MediaCommand::PlayPause.name_key(),
     },
     FunctionDefinition {
         id: FunctionId::MediaPrevious,
@@ -133,21 +133,21 @@ pub const FUNCTION_CATALOG: [FunctionDefinition; 8] = [
         category: CategoryId::Media,
         tap_action: FunctionAction::Media(MediaCommand::Mute),
         hold_action: None,
-        name_key: "function.media.mute",
+        name_key: MediaCommand::Mute.name_key(),
     },
     FunctionDefinition {
         id: FunctionId::MediaVolumeUp,
         category: CategoryId::Media,
         tap_action: FunctionAction::Media(MediaCommand::VolumeUp),
         hold_action: None,
-        name_key: "function.media.volumeup",
+        name_key: MediaCommand::VolumeUp.name_key(),
     },
     FunctionDefinition {
         id: FunctionId::MediaVolumeDown,
         category: CategoryId::Media,
         tap_action: FunctionAction::Media(MediaCommand::VolumeDown),
         hold_action: None,
-        name_key: "function.media.volumedown",
+        name_key: MediaCommand::VolumeDown.name_key(),
     },
     FunctionDefinition {
         id: FunctionId::AppToggleListening,

@@ -17,6 +17,8 @@ use taprelay_core::{function::FunctionConfigs, input::InputEvent, state::Snapsho
 type Command = Box<dyn FnOnce(&mut Runtime) -> Result<()> + Send>;
 
 pub struct View {
+    custom_mappings: Vec<taprelay_core::mapping::CustomMapping>,
+    pub custom_capture_result: Option<(u64, bool, usize, taprelay_core::function::Shortcut)>,
     functions: FunctionConfigs,
     foreground_app_rules: taprelay_core::foreground_app::ForegroundAppRules,
     remembered_device: Option<Device>,
@@ -33,6 +35,8 @@ impl View {
     }
     fn take(runtime: &Runtime) -> Self {
         Self {
+            custom_mappings: runtime.custom_mappings.clone(),
+            custom_capture_result: runtime.custom_capture_result.clone(),
             functions: runtime.functions.clone(),
             foreground_app_rules: runtime.foreground_app_rules.clone(),
             remembered_device: runtime.remembered_device.clone(),
@@ -48,6 +52,7 @@ impl View {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
+    SaveMappings,
     Poll,
     Edit,
     SaveRules,
@@ -103,6 +108,7 @@ impl std::fmt::Display for HandoffError {
 impl std::error::Error for HandoffError {}
 
 pub struct RuntimeHandle {
+    mappings_saved: Option<bool>,
     pub config: Config,
     view: View,
     bindings_changed: bool,
@@ -238,6 +244,7 @@ impl RuntimeHandle {
             })?;
         let view = ready.recv().context("Runtime worker failed to start")?;
         Ok(Self {
+            mappings_saved: None,
             config,
             view,
             bindings_changed: false,
@@ -265,7 +272,7 @@ impl RuntimeHandle {
     fn enqueue(&mut self, kind: Kind, command: Command) -> Result<()> {
         self.poll();
         anyhow::ensure!(!self.stopped && !self.closing, HandoffError::Stopped);
-        if matches!(kind, Kind::Edit | Kind::SaveRules) && self.busy() {
+        if matches!(kind, Kind::Edit | Kind::SaveRules | Kind::SaveMappings) && self.busy() {
             return Err(HandoffError::Busy.into());
         }
         if matches!(kind, Kind::Poll | Kind::Cancel)
@@ -316,6 +323,7 @@ impl RuntimeHandle {
     }
 
     fn apply(&mut self, mut view: View) {
+        self.config.custom_mappings = std::mem::take(&mut view.custom_mappings);
         self.bindings_changed |= view.bindings_revision != self.view.bindings_revision;
         self.config.functions = std::mem::take(&mut view.functions);
         self.config.foreground_app_rules = std::mem::take(&mut view.foreground_app_rules);
@@ -327,6 +335,13 @@ impl RuntimeHandle {
         loop {
             match self.responses.try_recv() {
                 Ok(Response::Completed { id, view, result }) => {
+                    if self
+                        .pending
+                        .get(&id)
+                        .is_some_and(|pending| pending.kind == Kind::SaveMappings)
+                    {
+                        self.mappings_saved = Some(result.is_ok());
+                    }
                     if self
                         .pending
                         .remove(&id)
@@ -369,6 +384,13 @@ impl RuntimeHandle {
     }
 
     fn mark_stopped(&mut self) {
+        if self
+            .pending
+            .values()
+            .any(|pending| pending.kind == Kind::SaveMappings)
+        {
+            self.mappings_saved = Some(false);
+        }
         if self.saving_foreground_app_rules() {
             self.rules_saved = Some(false);
         }
@@ -446,11 +468,16 @@ impl RuntimeHandle {
             Kind::SaveRules,
             Box::new(move |runtime| {
                 config.functions = runtime.functions.clone();
+                config.custom_mappings = runtime.custom_mappings.clone();
+                for mapping in &mut config.custom_mappings {
+                    mapping.groups.retain(|id| rules.groups.contains_key(id));
+                }
                 config.remembered_device = runtime.remembered_device.clone();
                 config.foreground_app_rules = rules;
                 // Save validates against these exact functions before atomically
                 // replacing the file. A failed write never changes live routing.
                 config.save(&path)?;
+                runtime.custom_mappings = config.custom_mappings;
                 runtime.set_foreground_app_rules(config.foreground_app_rules)
             }),
         )?;
@@ -466,6 +493,39 @@ impl RuntimeHandle {
 
     pub fn take_foreground_app_rules_saved(&mut self) -> Option<bool> {
         self.rules_saved.take()
+    }
+
+    pub fn set_custom_mappings(
+        &mut self,
+        mappings: Vec<taprelay_core::mapping::CustomMapping>,
+        path: &std::path::Path,
+    ) -> Result<()> {
+        let mut config = self.config.clone();
+        let path = path.to_owned();
+        self.enqueue(
+            Kind::SaveMappings,
+            Box::new(move |runtime| {
+                config.functions = runtime.functions.clone();
+                config.foreground_app_rules = runtime.foreground_app_rules.clone();
+                config.remembered_device = runtime.remembered_device.clone();
+                config.custom_mappings = mappings;
+                config.save(&path)?;
+                runtime.custom_mappings = config.custom_mappings;
+                runtime.bindings_changed();
+                Ok(())
+            }),
+        )?;
+        self.mappings_saved = None;
+        Ok(())
+    }
+
+    pub fn take_custom_mappings_saved(&mut self) -> Option<bool> {
+        self.mappings_saved.take()
+    }
+    pub fn saving_custom_mappings(&self) -> bool {
+        self.pending
+            .values()
+            .any(|pending| pending.kind == Kind::SaveMappings)
     }
     pub fn shutdown(&mut self) -> Result<()> {
         self.poll();

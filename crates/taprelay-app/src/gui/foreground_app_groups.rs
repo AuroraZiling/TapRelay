@@ -91,6 +91,29 @@ impl Controller {
                 self.tr(function::function_definition(second).name_key)
             );
         }
+        let mut mappings = self.runtime.config.custom_mappings.clone();
+        for mapping in &mut mappings {
+            mapping.groups.retain(|id| rules.groups.contains_key(id));
+        }
+        if let Some((first, second)) =
+            taprelay_core::mapping::conflict(&self.runtime.config.functions, &rules, &mappings)
+        {
+            let name = |id| match id {
+                taprelay_core::mapping::RuleId::Function(id) => {
+                    self.tr(function::function_definition(id).name_key)
+                }
+                taprelay_core::mapping::RuleId::Mapping(id) => mappings
+                    .iter()
+                    .find(|mapping| mapping.id == id)
+                    .map_or_else(String::new, |mapping| mapping.name.clone()),
+            };
+            bail!(
+                "{}: {} / {}",
+                self.tr(keys::GROUPS_CONFLICT),
+                name(first),
+                name(second)
+            );
+        }
         self.runtime.set_foreground_app_rules(rules, &self.path)?;
         ui.global::<ForegroundAppUi>().set_error("".into());
         Ok(())
@@ -146,12 +169,20 @@ impl Controller {
                     rules.groups.contains_key(value),
                     self.tr(keys::GROUPS_INVALID)
                 );
-                let names = rules
+                let mut names = rules
                     .assignments
                     .iter()
                     .filter(|(_, groups)| groups.contains(value))
                     .map(|(id, _)| self.tr(function::function_definition(*id).name_key))
                     .collect::<Vec<_>>();
+                names.extend(
+                    self.runtime
+                        .config
+                        .custom_mappings
+                        .iter()
+                        .filter(|mapping| mapping.groups.contains(value))
+                        .map(|mapping| mapping.name.clone()),
+                );
                 view.set_selected_id(value.into());
                 view.set_selected_name(rules.groups[value].name.clone().into());
                 view.set_deletion_warning(
@@ -277,11 +308,10 @@ impl Controller {
                 && self.runtime.config.foreground_app_rules == expected
             {
                 self.close_group_view(ui);
-                self.say(self.tr(keys::GROUPS_SAVED));
             } else {
                 let view = ui.global::<ForegroundAppUi>();
                 view.set_saving(false);
-                view.set_form_error(self.tr(keys::GROUPS_SAVE_FAILED).into());
+                view.set_form_error(self.tr(keys::COMMON_SAVE_FAILED).into());
             }
         }
     }
@@ -338,7 +368,7 @@ impl Controller {
             .and_then(|id| rules.assignments.get(&id));
         let mut options = vec![crate::ForegroundAppScopeOption {
             id: "".into(),
-            name: self.tr(keys::GROUPS_ALL).into(),
+            name: self.tr(keys::COMMON_ALL_APPS).into(),
             checked: selected.is_none(),
         }];
         options.extend(

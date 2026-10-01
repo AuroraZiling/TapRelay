@@ -15,6 +15,16 @@ pub enum MouseButton {
     Side2,
 }
 
+impl MouseButton {
+    pub const ALL: [Self; 5] = [
+        Self::Left,
+        Self::Right,
+        Self::Middle,
+        Self::Side1,
+        Self::Side2,
+    ];
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum InputCode {
     Key(u8),
@@ -238,6 +248,18 @@ impl InputState {
         self.held.count() == 0 && self.mouse == 0
     }
 
+    /// Physical inputs in display order, without applying any presentation labels.
+    pub fn pressed_inputs(&self) -> Vec<InputCode> {
+        let mut inputs = self.held.keys().map(InputCode::Key).collect::<Vec<_>>();
+        inputs.extend(
+            MouseButton::ALL
+                .into_iter()
+                .map(InputCode::Mouse)
+                .filter(|code| self.is_down(*code)),
+        );
+        inputs
+    }
+
     pub fn description(&self) -> String {
         self.description_with(key_name)
     }
@@ -245,13 +267,7 @@ impl InputState {
     pub fn description_with(&self, key_name: impl Fn(u8) -> String) -> String {
         let mut labels = self.logical_modifiers().labels();
         labels.extend(self.held.keys().filter(|key| !modifier(*key)).map(key_name));
-        for button in [
-            MouseButton::Left,
-            MouseButton::Right,
-            MouseButton::Middle,
-            MouseButton::Side1,
-            MouseButton::Side2,
-        ] {
+        for button in MouseButton::ALL {
             if self.mouse & (1 << button as u8) != 0 {
                 labels.push(PrimaryInput::mouse(button).label());
             }
@@ -277,6 +293,15 @@ pub struct Recorder {
 }
 
 impl Recorder {
+    /// The current chord before release, for immediate recording feedback.
+    pub fn candidate(&self) -> Option<Shortcut> {
+        self.primary
+            .as_ref()
+            .filter(|_| !self.invalid)
+            .cloned()
+            .map(|primary| Shortcut::new(self.modifiers, primary))
+    }
+
     pub fn observe(&mut self, state: &InputState, event: InputEvent) -> Option<Shortcut> {
         self.saw_input = true;
         if event.down {

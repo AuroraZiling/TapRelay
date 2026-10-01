@@ -7,6 +7,7 @@ pub mod function;
 pub mod hid;
 pub mod input;
 pub mod input_router;
+pub mod mapping;
 pub mod metadata;
 pub mod passthrough;
 pub mod ports;

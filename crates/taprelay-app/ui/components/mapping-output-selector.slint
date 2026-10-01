@@ -1,0 +1,93 @@
+import { Input } from "../vendor/components/input.slint";
+import { Button } from "../vendor/components/button.slint";
+import { ScrollArea } from "../vendor/components/scroll-area.slint";
+import { Tokens } from "../vendor/theme/tokens.slint";
+import { ElidedButton } from "elided-button.slint";
+import { Caption } from "primitives.slint";
+import { MappingUi, MappingOutputOption } from "../types.slint";
+import { IconDisplay, IconSet } from "@lucide";
+import { I18n } from "@i18n";
+
+component OutputChoice inherits Button {
+    in property <MappingOutputOption> option;
+    text: "";
+    variant: ghost;
+    height: 32px;
+    accessible-label: (root.option.is-mouse ? I18n.text.input-mouse : I18n.text.input-keyboard) + ": " + root.option.label;
+    accessible-id: "mapping-output-option-" + root.option.value;
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 10px;
+        cross-axis-alignment: center;
+        IconDisplay {
+            icon: root.option.is-mouse ? IconSet.Mouse : IconSet.Keyboard;
+            size: 16px;
+            stroke: root.content-foreground;
+            horizontal-stretch: 0;
+        }
+        Text {
+            text: root.option.label;
+            color: root.content-foreground;
+            font-size: Tokens.typography-body-sm-size;
+            font-weight: Tokens.typography-weight-medium;
+            horizontal-alignment: left;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+    }
+}
+
+export component MappingOutputSelector inherits ElidedButton {
+    display-text: I18n.text.mappings-select-output;
+    variant: outline;
+    disabled: MappingUi.busy;
+    accessible-id: "mapping-select-output";
+    clicked => {
+        MappingUi.command("filter-output", "");
+        choices.show();
+    }
+    choices := PopupWindow {
+        x: 0px;
+        y: root.height;
+        width: root.width;
+        height: 280px;
+        close-policy: close-on-click-outside;
+        Rectangle {
+            background: Tokens.color-card;
+            border-width: 1px;
+            border-color: Tokens.color-border-hairline;
+            border-radius: Tokens.radius-md;
+            VerticalLayout {
+                padding: 8px;
+                spacing: 8px;
+                Input {
+                    auto-focus: true;
+                    text: MappingUi.output-filter;
+                    placeholder: I18n.text.mappings-search-output;
+                    accessible-role: groupbox;
+                    accessible-id: "mapping-output-search";
+                    edited(text) => { MappingUi.command("filter-output", text); }
+                }
+                ScrollArea {
+                    vertical-stretch: 1;
+                    content-height: content.preferred-height;
+                    content := VerticalLayout {
+                        width: parent.width;
+                        alignment: start;
+                        for option in MappingUi.output-options: OutputChoice {
+                            option: option;
+                            clicked => {
+                                MappingUi.command("select-output", option.value);
+                                choices.close();
+                            }
+                        }
+                        if MappingUi.output-options.length == 0: Caption {
+                            text: I18n.text.mappings-no-output-matches;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

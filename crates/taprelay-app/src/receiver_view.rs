@@ -165,16 +165,12 @@ mod tests {
             pairing: Knowledge::Yes,
             ..Default::default()
         };
-        let project = |t: &Target| {
-            row(t, &state, |key| {
-                rust_i18n::t!(key, locale = "en").into_owned()
-            })
-        };
+        let project = |t: &Target| row(t, &state, |key| key.into());
         assert!(project(&target).name.contains("unnamed-endpoint"));
         assert_eq!(project(&target).status, "paired");
         target.link = Knowledge::Yes;
         assert_eq!(project(&target).status, "linked");
-        assert!(project(&target).detail.contains("session not ready"));
+        assert_eq!(project(&target).detail, keys::RECEIVER_LINKED);
         target.connection = Connection::Connected;
         assert_eq!(project(&target).status, "ready");
         target.name = "Artemis iPad".into();

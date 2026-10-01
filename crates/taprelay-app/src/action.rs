@@ -14,6 +14,7 @@ actions! {
     Show => "show", Close => "close", Quit => "quit",
     // Payload: the page number declared in ui/navigation.slint.
     Navigate => "navigate",
+    EditMapping => "edit-mapping",
     Listen => "listen", Test => "test", Refresh => "refresh", Retry => "retry",
     Resume => "resume", BluetoothSettings => "bluetooth-settings",
     DataFolder => "data-folder", LogsFolder => "logs-folder",
@@ -65,8 +66,13 @@ pub struct CaptureTarget {
     pub slot: usize,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum BindingCommand {
+    BeginCustomCapture {
+        output: bool,
+        slot: usize,
+        draft: taprelay_core::mapping::CustomMapping,
+    },
     BeginCapture(CaptureTarget),
     CancelCapture,
     DeleteShortcut(CaptureTarget),

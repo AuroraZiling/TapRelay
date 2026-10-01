@@ -96,14 +96,14 @@ export component WizardPage inherits VerticalLayout {
         alignment: end;
         spacing: 12px;
         Button {
-            text: I18n.text.wizard-skip;
+            text: I18n.text.common-skip;
             variant: ghost;
             clicked=> {
                 root.action("wizard-finish", "");
             }
         }
         Button {
-            text: I18n.text.wizard-back;
+            text: I18n.text.common-previous-step;
             variant: outline;
             disabled: root.step == 0 || BindingUi.capture.function-id != "";
             clicked=> {
@@ -111,7 +111,7 @@ export component WizardPage inherits VerticalLayout {
             }
         }
         Button {
-            text: root.step == 2 ? I18n.text.wizard-finish : I18n.text.wizard-next;
+            text: root.step == 2 ? I18n.text.common-finish : I18n.text.common-next-step;
             disabled: BindingUi.capture.function-id != "" || (root.step == 1 && !root.receiver-next-allowed);
             clicked=> {
                 root.action(root.step == 2 ? "wizard-finish" : "wizard-next", "");

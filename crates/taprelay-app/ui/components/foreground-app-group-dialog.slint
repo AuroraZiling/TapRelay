@@ -55,14 +55,14 @@ export component ForegroundAppGroupDeleteDialog inherits FocusScope {
                 alignment: end;
                 vertical-stretch: 0;
                 cancel-button := Button {
-                    text: I18n.text.groups-cancel;
+                    text: I18n.text.common-cancel;
                     variant: ghost;
                     horizontal-stretch: 0;
                     disabled: ForegroundAppUi.saving;
                     clicked => { ForegroundAppUi.command("cancel", ""); }
                 }
                 Button {
-                    text: ForegroundAppUi.saving ? I18n.text.groups-saving : I18n.text.groups-delete-confirm;
+                    text: ForegroundAppUi.saving ? I18n.text.common-saving : I18n.text.groups-delete-confirm;
                     variant: destructive;
                     horizontal-stretch: 0;
                     disabled: ForegroundAppUi.busy || ForegroundAppUi.saving;

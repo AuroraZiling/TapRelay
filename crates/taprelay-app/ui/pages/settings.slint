@@ -109,7 +109,7 @@ export component SettingsPage inherits ScrollArea {
                     alignment: start;
                     spacing: 6px;
                     for rate in [0, 60, 125, 250, 500, 1000]: Button {
-                        text: rate == 0 ? I18n.text.settings-passthrough-mouse-report-rate-auto : rate + " Hz";
+                        text: rate == 0 ? I18n.text.common-auto : rate + " Hz";
                         accessible-id: "setting-mouse-report-rate-" + rate;
                         variant: root.passthrough-mouse-report-rate == rate ? secondary : outline;
                         clicked => { root.action("set-passthrough-mouse-report-rate", rate); }

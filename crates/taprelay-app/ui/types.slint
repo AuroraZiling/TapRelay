@@ -71,3 +71,35 @@ export struct RelayStatus {
     stage: string,
     input-count: int
 }
+export struct MappingRow { id: string, name: string, input: string, output: string, scope: string, enabled: bool }
+export struct MappingOutputOption { label: string, value: string, is-mouse: bool }
+export global MappingUi {
+    in property <[MappingRow]> rows;
+    in property <bool> open;
+    in property <bool> editor;
+    in property <bool> new-mapping;
+    in-out property <int> focus-request;
+    in-out property <int> leave-focus-request;
+    in property <bool> busy;
+    in property <bool> saving;
+    in-out property <string> name;
+    in property <[string]> inputs;
+    in property <[MappingOutputOption]> output-options;
+    in property <MappingOutputOption> selected-output;
+    in property <string> output-filter;
+    in-out property <int> entry-mode;
+    in-out property <bool> ctrl;
+    in-out property <bool> shift;
+    in-out property <bool> alt;
+    in-out property <bool> meta;
+    in property <[ForegroundAppScopeOption]> scopes;
+    in property <string> scope-label;
+    in property <string> input-error;
+    in property <string> capture-error;
+    in property <string> error;
+    in property <string> conflict-target;
+    in property <string> capture-text;
+    in property <int> capture-slot: -1;
+    in property <bool> can-undo;
+    callback command(string, string);
+}

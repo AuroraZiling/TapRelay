@@ -53,10 +53,14 @@ pub fn run() -> Result<()> {
             Ok(Command::Pair(id)) => handle.request(Request::Pair(id))?,
             Ok(Command::Invalidate) => {
                 handle.invalidate_commands();
+                link.set_mapping_profile(false);
                 link.end();
             }
             Ok(Command::Arm { generation }) => {
-                let accepted = generation == link.generation() && link.begin();
+                let accepted = generation == link.generation() && link.ready();
+                if accepted {
+                    link.set_mapping_profile(true);
+                }
                 protocol::write(
                     &Message::Armed {
                         generation,
@@ -73,14 +77,14 @@ pub fn run() -> Result<()> {
                 mouse_report_rate,
                 reverse_scroll,
             }) => {
-                if generation == link.generation() && link.epoch() != 0 {
+                if generation == link.generation() && link.mapping_epoch() != 0 {
                     if let Some(age) =
                         protocol::age(captured_ms).filter(|age| *age <= MAX_INPUT_AGE)
                     {
                         link.set_mouse_percent(mouse_percent);
                         link.set_mouse_report_rate(mouse_report_rate);
                         link.set_reverse_scroll(reverse_scroll);
-                        link.submit(event, Instant::now() - age);
+                        link.submit_forwarded(event, Instant::now() - age);
                     } else {
                         link.fail("Bluetooth worker input exceeded 250 ms");
                     }
@@ -172,6 +176,7 @@ pub fn run() -> Result<()> {
             bail!("Native Bluetooth worker stopped");
         }
     }
+    link.set_mapping_profile(false);
     link.end();
     drop(handle);
     Ok(())

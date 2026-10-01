@@ -1,0 +1,129 @@
+import { Button } from "../vendor/components/button.slint";
+import { ScrollArea } from "../vendor/components/scroll-area.slint";
+import { Tokens } from "../vendor/theme/tokens.slint";
+import { Caption, Label } from "../components/primitives.slint";
+import { IconButton } from "../components/icon-button.slint";
+import { SwitchRow } from "../components/switch-row.slint";
+import { IconSet } from "@lucide";
+import { MappingUi } from "../types.slint";
+import { I18n } from "@i18n";
+
+export component CustomMappingsPage inherits VerticalLayout {
+    property <length> row-padding: 16px;
+    property <length> column-spacing: 16px;
+    property <length> switch-width: 36px;
+    property <length> scope-column-width: 124px;
+    property <length> actions-column-width: 2 * Tokens.density-button-default + 8px;
+    property <length> flexible-columns-width: max(0px,
+        root.width - 2 * root.row-padding - 4 * root.column-spacing
+        - root.switch-width - root.scope-column-width - root.actions-column-width);
+    property <length> description-column-width: root.flexible-columns-width * 0.4;
+    property <length> mapping-column-width: root.flexible-columns-width - root.description-column-width;
+    vertical-stretch: 1;
+    spacing: 24px;
+    Caption { text: I18n.text.mappings-help; vertical-stretch: 0; }
+    if MappingUi.error != "": Label { text: MappingUi.error; color: Tokens.color-destructive; vertical-stretch: 0; }
+    if MappingUi.can-undo && MappingUi.rows.length > 0: HorizontalLayout {
+        vertical-stretch: 0;
+        Caption { text: I18n.text.mappings-deleted; horizontal-stretch: 1; }
+        Button { text: I18n.text.common-undo; variant: ghost; disabled: MappingUi.busy; clicked => { MappingUi.command("undo", ""); } }
+    }
+    if MappingUi.rows.length == 0: Caption {
+        text: I18n.text.mappings-empty;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        vertical-stretch: 1;
+        accessible-id: "mappings-empty";
+    }
+    if MappingUi.rows.length > 0: ScrollArea {
+        vertical-stretch: 1;
+        drag-to-scroll: false;
+        content-height: max(self.height, content.preferred-height);
+        content := VerticalLayout {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: self.preferred-height;
+            spacing: 8px;
+            alignment: start;
+            HorizontalLayout {
+                height: 28px;
+                padding-left: root.row-padding;
+                padding-right: root.row-padding;
+                spacing: root.column-spacing;
+                Caption { text: I18n.text.common-enabled; width: root.switch-width; accessible-id: "mappings-column-enabled"; }
+                Caption { text: I18n.text.common-description; width: root.description-column-width; accessible-id: "mappings-column-description"; }
+                Caption { text: I18n.text.common-mapping; width: root.mapping-column-width; accessible-id: "mappings-column-mapping"; }
+                Caption { text: I18n.text.common-scope; width: root.scope-column-width; accessible-id: "mappings-column-scope"; }
+                Caption { text: I18n.text.common-actions; width: root.actions-column-width; accessible-id: "mappings-column-actions"; }
+            }
+            for row in MappingUi.rows: Rectangle {
+                height: max(64px, mapping-label.preferred-height + 32px);
+                background: Tokens.color-card;
+                border-radius: Tokens.radius-md;
+                accessible-role: groupbox;
+                accessible-id: "mapping-row-" + row.id;
+                accessible-label: row.name;
+                HorizontalLayout {
+                    padding-left: root.row-padding;
+                    padding-right: root.row-padding;
+                    spacing: root.column-spacing;
+                    cross-axis-alignment: center;
+                    SwitchRow {
+                        width: root.switch-width;
+                        checked: row.enabled;
+                        disabled: MappingUi.busy;
+                        accessibility-id: "mapping-enabled-" + row.id;
+                        accessibility-label: row.name;
+                        toggled(value) => { MappingUi.command("toggle", row.id); }
+                    }
+                    Label {
+                        width: root.description-column-width;
+                        text: row.name;
+                        wrap: no-wrap;
+                        overflow: elide;
+                        accessible-id: "mapping-description-" + row.id;
+                        Tooltip { text: @markdown("\{row.name}"); }
+                    }
+                    mapping-label := Caption {
+                        width: root.mapping-column-width;
+                        text: row.input + " → " + row.output;
+                        accessible-id: "mapping-output-" + row.id;
+                    }
+                    Caption {
+                        width: root.scope-column-width;
+                        text: row.scope;
+                        wrap: no-wrap;
+                        overflow: elide;
+                        accessible-id: "mapping-scope-" + row.id;
+                        Tooltip { text: @markdown("\{row.scope}"); }
+                    }
+                    HorizontalLayout {
+                        width: root.actions-column-width;
+                        spacing: 8px;
+                        cross-axis-alignment: center;
+                        IconButton {
+                            icon: IconSet.Pencil;
+                            hint: I18n.text.common-edit;
+                            size: icon;
+                            variant: outline;
+                            disabled: MappingUi.busy;
+                            accessible-id: "mapping-edit-" + row.id;
+                            clicked => { MappingUi.command("edit", row.id); }
+                        }
+                        IconButton {
+                            icon: IconSet.Trash2;
+                            hint: I18n.text.common-delete;
+                            size: icon;
+                            variant: destructive;
+                            destructive-outline: true;
+                            disabled: MappingUi.busy;
+                            accessible-id: "mapping-delete-" + row.id;
+                            clicked => { MappingUi.command("delete", row.id); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

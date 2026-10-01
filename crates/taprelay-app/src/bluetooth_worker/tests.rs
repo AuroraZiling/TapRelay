@@ -304,6 +304,68 @@ fn replacement_retires_receipts_and_revokes_input_before_stop_then_starts_full()
 }
 
 #[test]
+fn mappings_forward_without_capture_and_capture_exit_releases_physical_input_on_the_same_profile() {
+    let h = Harness::new();
+    h.connected();
+    h.handle.link.set_mapping_profile(true);
+    h.step();
+    h.status(3, "phone", true);
+    h.message(
+        h.current(),
+        Message::Armed {
+            generation: 3,
+            accepted: true,
+        },
+    );
+    h.step();
+    assert!(h.handle.link.ready());
+    assert_eq!(h.handle.link.epoch(), 0);
+    assert!(!h.handle.link.capture_requested());
+    let process = h.current();
+    let output = taprelay_core::mapping::MappingOutput::Keyboard {
+        usage: 0x4f,
+        modifiers: 0,
+    };
+    for down in [true, false] {
+        assert!(
+            h.handle
+                .link
+                .submit_mapping(output, 11, down, Instant::now())
+        );
+        h.step();
+        assert!(h.state.lock().unwrap().calls.iter().any(|call| matches!(call,
+            Call::Send(id, Command::Input { event: Event::Mapping { token: 11, down: sent_down, .. }, .. })
+                if *id == process && *sent_down == down)));
+    }
+    assert!(h.handle.link.request_profile());
+    assert!(h.handle.link.begin());
+    h.step();
+    h.handle.link.end();
+    h.step();
+    assert_eq!(h.current(), process);
+    assert!(h.handle.link.ready());
+    assert!(!h.handle.link.capture_requested());
+    assert!(
+        h.state
+            .lock()
+            .unwrap()
+            .calls
+            .iter()
+            .any(|call| matches!(call,
+        Call::Send(id, Command::Input { event: Event::ReleasePhysical, .. }) if *id == process))
+    );
+    assert!(
+        h.handle
+            .link
+            .submit_mapping(output, 12, true, Instant::now())
+    );
+    h.step();
+    h.handle.link.set_mapping_profile(false);
+    h.step();
+    assert_eq!(h.snapshot().hid_profile, Profile::MediaOnly);
+}
+
+#[test]
 fn only_matching_arm_authorizes_capture_and_losing_input_returns_to_media() {
     let h = Harness::new();
     h.connected();

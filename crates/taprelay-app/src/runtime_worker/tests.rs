@@ -18,6 +18,57 @@ fn idle(handle: &mut RuntimeHandle) {
 }
 
 #[test]
+fn mapping_write_failures_preserve_live_rules_and_success_publishes_the_saved_revision() {
+    use taprelay_core::{
+        function::{ModifierSet, Shortcut},
+        input::MouseButton,
+        mapping::{CustomMapping, MappingOutput},
+    };
+    let mut handle = RuntimeHandle::new(Config::default()).unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config.json");
+    let mapping = CustomMapping {
+        id: 7,
+        name: "Hold Right".into(),
+        enabled: true,
+        shortcuts: vec![Shortcut::mouse(ModifierSet::empty(), MouseButton::Side1)],
+        output: MappingOutput::Keyboard {
+            usage: 0x4f,
+            modifiers: 0,
+        },
+        groups: Default::default(),
+    };
+    let revision = handle.bindings_revision;
+    std::fs::create_dir(&path).unwrap();
+    handle
+        .set_custom_mappings(vec![mapping.clone()], &path)
+        .unwrap();
+    idle(&mut handle);
+    assert_eq!(handle.take_custom_mappings_saved(), Some(false));
+    assert!(handle.config.custom_mappings.is_empty());
+    assert_eq!(handle.bindings_revision, revision);
+    assert!(matches!(handle.take_notice(), Some(Notice::Error(_))));
+    std::fs::remove_dir(&path).unwrap();
+    handle
+        .set_custom_mappings(vec![mapping.clone()], &path)
+        .unwrap();
+    idle(&mut handle);
+    assert_eq!(handle.take_custom_mappings_saved(), Some(true));
+    assert_eq!(handle.config.custom_mappings, vec![mapping.clone()]);
+    assert_eq!(
+        Config::load(&path).unwrap().custom_mappings,
+        vec![mapping.clone()]
+    );
+    assert!(handle.take_bindings_changed());
+    // Failed deletion must also keep the current routing intact.
+    let missing_parent = directory.path().join("missing").join("config.json");
+    handle.set_custom_mappings(vec![], &missing_parent).unwrap();
+    idle(&mut handle);
+    assert_eq!(handle.take_custom_mappings_saved(), Some(false));
+    assert_eq!(handle.config.custom_mappings, vec![mapping]);
+}
+
+#[test]
 fn foreground_app_group_edits_publish_only_valid_revisions_and_persist_in_config() {
     use taprelay_core::foreground_app::ForegroundAppGroup;
     let mut handle = RuntimeHandle::new(Config::default()).unwrap();

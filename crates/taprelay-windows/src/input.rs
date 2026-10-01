@@ -162,6 +162,7 @@ impl HookPolicy {
     fn configure(
         &mut self,
         configs: &FunctionConfigs,
+        mappings: &[taprelay_core::mapping::CustomMapping],
         rules: &taprelay_core::foreground_app::ForegroundAppRules,
         listening: bool,
         recording: bool,
@@ -169,7 +170,8 @@ impl HookPolicy {
     ) -> RouteResult {
         let mut result = RouteResult::default();
         if revision != self.revision {
-            self.scoped = !rules.assignments.is_empty();
+            self.scoped = !rules.assignments.is_empty()
+                || mappings.iter().any(|mapping| !mapping.groups.is_empty());
             // Only applications with scoped bindings need idle monitoring.
             // With no HWND, Windows assigns the timer ID; keep the returned ID.
             unsafe {
@@ -187,6 +189,7 @@ impl HookPolicy {
                 }
             }
             append(&mut result, self.router.update_config(configs, revision));
+            append(&mut result, self.router.update_mappings(mappings));
             append(&mut result, self.router.set_foreground_app_rules(rules));
             append(&mut result, self.refresh_foreground());
             self.revision = revision;
@@ -358,6 +361,7 @@ impl InputHandle {
     pub fn configure(
         &self,
         configs: &FunctionConfigs,
+        mappings: &[taprelay_core::mapping::CustomMapping],
         rules: &taprelay_core::foreground_app::ForegroundAppRules,
         listening: bool,
         recording: bool,
@@ -370,18 +374,20 @@ impl InputHandle {
         }
         *previous = Some(next);
         let configs = configs.clone();
+        let mappings = mappings.to_vec();
         let rules = rules.clone();
         self.request(
             Box::new(move |policy| {
                 PASSTHROUGH.with(|link| {
                     if let Some(link) = link.borrow().as_ref()
-                        && link.profile_requested()
+                        && link.capture_requested()
+                        && link.mapping_epoch() == 0
                         && link.epoch() == 0
                     {
                         link.end();
                     }
                 });
-                policy.configure(&configs, &rules, listening, recording, revision)
+                policy.configure(&configs, &mappings, &rules, listening, recording, revision)
             }),
             true,
         )
@@ -392,17 +398,30 @@ impl InputHandle {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .as_ref()
+            && link.mapping_epoch() == 0
         {
             link.end();
         }
         self.request(
             Box::new(move |policy| {
+                let mut result = policy.terminate(reason);
                 PASSTHROUGH.with(|link| {
                     if let Some(link) = link.borrow().as_ref() {
-                        link.end();
+                        if link.mapping_epoch() == 0 {
+                            link.end();
+                        } else if link.capture_requested()
+                            && !result
+                                .outputs
+                                .iter()
+                                .any(|output| matches!(output, RoutedOutput::EndPassthrough))
+                        {
+                            // Mapping releases must reach the queue before ending
+                            // capture closes admission to the shared profile.
+                            result.outputs.push(RoutedOutput::EndPassthrough);
+                        }
                     }
                 });
-                policy.terminate(reason)
+                result
             }),
             false,
         )
@@ -838,7 +857,7 @@ fn sync_passthrough() {
         && PASSTHROUGH.with(|link| {
             link.borrow()
                 .as_ref()
-                .is_some_and(|link| link.profile_requested() && link.ready())
+                .is_some_and(|link| link.capture_requested() && link.ready())
         })
     {
         start_passthrough();
@@ -854,7 +873,7 @@ fn toggle_passthrough() {
     let Some(link) = link else {
         return;
     };
-    if link.profile_requested() {
+    if link.capture_requested() {
         link.end();
         return;
     }
@@ -1035,6 +1054,26 @@ fn prepare_hook_result_at(result: &mut RouteResult, captured: Instant) -> bool {
                     }
                 });
                 raw::disable();
+            }
+            RoutedOutput::Mapping {
+                id,
+                output,
+                token,
+                down,
+                created,
+            } => {
+                PASSTHROUGH.with(|link| {
+                    if let Some(link) = link.borrow().as_ref() {
+                        link.submit_mapping(output, token, down, created);
+                    }
+                });
+                kept.push(RoutedOutput::Mapping {
+                    id,
+                    output,
+                    token,
+                    down,
+                    created,
+                });
             }
             RoutedOutput::Remote(input) => {
                 send_remote(input, captured);

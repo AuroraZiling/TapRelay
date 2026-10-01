@@ -16,6 +16,7 @@ pub trait InputSource {
     fn configure(
         &self,
         _functions: &FunctionConfigs,
+        _mappings: &[taprelay_core::mapping::CustomMapping],
         _rules: &taprelay_core::foreground_app::ForegroundAppRules,
         _listening: bool,
         _recording: bool,
@@ -70,24 +71,25 @@ impl InputSource for taprelay_windows::input::InputHandle {
     fn is_finished(&self) -> bool {
         self.is_finished()
     }
-    fn failure(&self) -> Option<String> {
-        self.failure()
-    }
-    fn replay(&self, input: PhysicalInput) -> Result<()> {
-        Ok(self.replay(input)?)
-    }
     fn configure(
         &self,
         functions: &FunctionConfigs,
+        mappings: &[taprelay_core::mapping::CustomMapping],
         rules: &taprelay_core::foreground_app::ForegroundAppRules,
         listening: bool,
         recording: bool,
         revision: u64,
     ) -> RouteResult {
-        self.configure(functions, rules, listening, recording, revision)
+        self.configure(functions, mappings, rules, listening, recording, revision)
     }
     fn terminate(&self, reason: RouterReason) -> RouteResult {
         self.terminate(reason)
+    }
+    fn replay(&self, input: PhysicalInput) -> Result<()> {
+        Ok(self.replay(input)?)
+    }
+    fn failure(&self) -> Option<String> {
+        self.failure()
     }
 }
 /// A closed watch can still contain an unread terminal error. Always read it,

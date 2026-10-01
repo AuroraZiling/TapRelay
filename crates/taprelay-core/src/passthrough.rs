@@ -23,6 +23,13 @@ pub enum KeyUsage {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Event {
+    /// End whole-device capture while keeping custom mapping ownership.
+    ReleasePhysical,
+    Mapping {
+        output: crate::mapping::MappingOutput,
+        token: u64,
+        down: bool,
+    },
     Key {
         usage: KeyUsage,
         down: bool,
@@ -60,6 +67,7 @@ pub struct Packet {
 }
 
 struct Shared {
+    mapping_epoch: AtomicU64,
     revision: Arc<AtomicU64>,
     ready: AtomicU64,
     mouse_percent: AtomicU64,
@@ -96,6 +104,7 @@ impl InputLink {
             Self {
                 sender,
                 shared: Arc::new(Shared {
+                    mapping_epoch: AtomicU64::new(0),
                     revision,
                     ready: AtomicU64::new(0),
                     mouse_percent: AtomicU64::new(100),
@@ -203,6 +212,9 @@ impl InputLink {
     }
 
     pub fn end(&self) {
+        if self.epoch() != 0 && self.mapping_epoch() != 0 {
+            self.submit_mapping_event(Event::ReleasePhysical, Instant::now());
+        }
         self.update_profile_request(false);
         self.suspend();
     }
@@ -242,6 +254,79 @@ impl InputLink {
         self.profile_request() != 0
     }
 
+    pub fn capture_requested(&self) -> bool {
+        !self
+            .shared
+            .requested
+            .load(Ordering::Acquire)
+            .is_multiple_of(2)
+    }
+
+    /// Request the full HID profile without capturing all keyboard/mouse input.
+    pub fn set_mapping_profile(&self, enabled: bool) {
+        let current = self.mapping_epoch();
+        if enabled && current == 0 {
+            let next = self.shared.next_epoch.fetch_add(2, Ordering::AcqRel) | (1 << 63);
+            self.shared.mapping_epoch.store(next, Ordering::Release);
+            self.wake();
+        } else if !enabled && current != 0 {
+            self.shared.mapping_epoch.store(0, Ordering::Release);
+            self.wake();
+        }
+    }
+
+    pub fn mapping_epoch(&self) -> u64 {
+        self.shared.mapping_epoch.load(Ordering::Acquire)
+    }
+
+    pub fn submit_mapping(
+        &self,
+        output: crate::mapping::MappingOutput,
+        token: u64,
+        down: bool,
+        captured: Instant,
+    ) -> bool {
+        self.submit_mapping_event(
+            Event::Mapping {
+                output,
+                token,
+                down,
+            },
+            captured,
+        )
+    }
+
+    /// A child process receives input already routed by its supervisor. Keep
+    /// admission independent of whole-device capture so media can coexist.
+    pub fn submit_forwarded(&self, event: Event, captured: Instant) -> bool {
+        self.submit_mapping_event(event, captured)
+    }
+
+    fn submit_mapping_event(&self, event: Event, captured: Instant) -> bool {
+        let epoch = self.mapping_epoch();
+        if epoch == 0
+            || self.shared.mode.load(Ordering::Acquire) == 0
+            || self.shared.ready.load(Ordering::Acquire) != self.generation()
+        {
+            return false;
+        }
+        let packet = Packet {
+            epoch,
+            generation: self.generation(),
+            captured,
+            event,
+        };
+        if self.sender.try_send(packet).is_err() {
+            // Prevent fail -> end -> ReleasePhysical from recursively trying a
+            // full queue, and revoke held mapping admission until restarted.
+            self.set_mapping_profile(false);
+            self.fail("Mapping input queue unavailable; listener must be restarted");
+            return false;
+        }
+        self.wake();
+        true
+    }
+
     fn update_profile_request(&self, requested: bool) {
         let mut token = self.shared.requested.load(Ordering::Acquire);
         while !token.is_multiple_of(2) != requested {
@@ -259,7 +344,15 @@ impl InputLink {
 
     pub fn profile_request(&self) -> u64 {
         let token = self.shared.requested.load(Ordering::Acquire);
-        if token.is_multiple_of(2) { 0 } else { token }
+        // Mapping ownership keeps the profile stable across passthrough toggles.
+        let mapping = self.mapping_epoch();
+        if mapping != 0 {
+            mapping
+        } else if token.is_multiple_of(2) {
+            0
+        } else {
+            token
+        }
     }
 
     pub fn suspend(&self) {
@@ -329,6 +422,10 @@ impl InputLink {
     }
 
     pub fn accepts(&self, packet: &Packet) -> bool {
+        if packet.epoch != 0 && packet.epoch == self.mapping_epoch() {
+            return packet.generation == self.generation()
+                && self.shared.mode.load(Ordering::Acquire) != 0;
+        }
         packet.epoch != 0 && packet.epoch == self.epoch() && packet.generation == self.generation()
     }
 
@@ -342,6 +439,94 @@ impl InputLink {
 #[cfg(test)]
 mod observation_tests {
     use super::*;
+
+    #[test]
+    fn forwarded_keyboard_and_mouse_admission_keeps_media_controls_available() {
+        let (link, rx) = InputLink::channel(Arc::new(AtomicU64::new(1)));
+        link.set_ready(1);
+        link.set_mapping_profile(true);
+        for event in [
+            Event::Mapping {
+                output: crate::mapping::MappingOutput::Keyboard {
+                    usage: 0x4f,
+                    modifiers: 0,
+                },
+                token: 5,
+                down: true,
+            },
+            Event::Key {
+                usage: KeyUsage::Keyboard(0x4f),
+                down: true,
+            },
+            Event::Button {
+                button: MouseButton::Left,
+                down: true,
+            },
+            Event::ReleasePhysical,
+        ] {
+            assert!(link.submit_forwarded(event, Instant::now()));
+            assert!(link.accepts(&rx.try_recv().unwrap()));
+        }
+        assert_eq!(link.epoch(), 0);
+        assert!(link.accepts_media(Instant::now()));
+        assert!(link.submit_forwarded(Event::Motion { dx: 5, dy: 0 }, Instant::now()));
+        let old = rx.try_recv().unwrap();
+        link.set_mapping_profile(false);
+        link.set_mapping_profile(true);
+        assert!(!link.accepts(&old));
+    }
+
+    #[test]
+    fn full_mapping_queue_revokes_ownership_without_recursive_failure() {
+        let (link, _rx) = InputLink::channel(Arc::new(AtomicU64::new(1)));
+        link.set_mapping_profile(true);
+        link.set_ready(1);
+        assert!(link.begin());
+        let output = crate::mapping::MappingOutput::Keyboard {
+            usage: 0x4f,
+            modifiers: 0,
+        };
+        for token in 1..=QUEUE_CAPACITY as u64 {
+            assert!(link.submit_mapping(output, token, true, Instant::now()));
+        }
+        assert!(!link.submit_mapping(output, 2000, false, Instant::now()));
+        assert_eq!(link.mapping_epoch(), 0);
+        assert_eq!(link.epoch(), 0);
+        assert!(link.take_failure().is_some());
+    }
+
+    #[test]
+    fn mappings_request_full_hid_without_requesting_input_capture_and_reject_old_sessions() {
+        let (link, input) = InputLink::channel(Arc::new(AtomicU64::new(1)));
+        link.set_mapping_profile(true);
+        assert!(link.profile_requested());
+        assert!(!link.capture_requested());
+        assert_eq!(link.epoch(), 0);
+        let output = crate::mapping::MappingOutput::Keyboard {
+            usage: 0x4f,
+            modifiers: 0,
+        };
+        assert!(!link.submit_mapping(output, 1, true, Instant::now()));
+        link.set_ready(1);
+        assert!(link.submit_mapping(output, 1, true, Instant::now()));
+        let old = input.try_recv().unwrap();
+        assert!(link.accepts(&old));
+        let request = link.profile_request();
+        link.set_profile_available(true);
+        assert!(link.request_profile());
+        assert!(link.capture_requested());
+        assert_eq!(link.profile_request(), request);
+        assert!(link.begin());
+        link.end();
+        link.set_ready(1);
+        let cleanup = input.try_recv().unwrap();
+        assert_eq!(cleanup.event, Event::ReleasePhysical);
+        assert!(link.accepts(&cleanup));
+        assert!(link.profile_requested() && !link.capture_requested());
+        link.set_mapping_profile(false);
+        link.set_mapping_profile(true);
+        assert!(!link.accepts(&old));
+    }
 
     #[test]
     fn transport_loss_is_retained_for_its_epoch_but_normal_stops_do_not_mark_loss() {

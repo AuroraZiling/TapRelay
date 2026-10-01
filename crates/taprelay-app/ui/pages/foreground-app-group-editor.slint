@@ -135,7 +135,7 @@ component ForegroundAppEntry inherits Rectangle {
             }
         }
         Button {
-            text: root.adding ? I18n.text.groups-add : I18n.text.groups-remove;
+            text: root.adding ? I18n.text.common-add : I18n.text.common-remove;
             variant: ghost;
             horizontal-stretch: 0;
             disabled: ForegroundAppUi.busy || ForegroundAppUi.saving;
@@ -159,7 +159,7 @@ export component ForegroundAppGroupEditor inherits FocusScope {
     }
     accessible-role: form;
     accessible-id: "groups-editor";
-    accessible-label: ForegroundAppUi.selected-id == "" ? I18n.text.groups-create : I18n.text.groups-edit;
+    accessible-label: ForegroundAppUi.selected-id == "" ? I18n.text.common-new : I18n.text.groups-edit;
     VerticalLayout {
         spacing: 12px;
         HorizontalLayout {
@@ -239,7 +239,7 @@ export component ForegroundAppGroupEditor inherits FocusScope {
                 }
             }
             Button {
-                text: ForegroundAppUi.saving ? I18n.text.groups-saving : I18n.text.groups-save;
+                text: ForegroundAppUi.saving ? I18n.text.common-saving : I18n.text.groups-save;
                 horizontal-stretch: 0;
                 disabled: ForegroundAppUi.busy || ForegroundAppUi.saving;
                 accessible-id: "groups-editor-save";

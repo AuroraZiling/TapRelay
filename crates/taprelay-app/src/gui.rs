@@ -8,7 +8,7 @@ use crate::{
     i18n::{self, keys},
     logging,
     platform::desktop::{self, Desktop, DesktopEvent},
-    runtime::{CaptureError, CapturePhase},
+    runtime::{CaptureError, CaptureKind, CapturePhase},
     runtime_worker::{HandoffError, Notice, RuntimeHandle},
 };
 use anyhow::{Context, Result, bail};
@@ -23,6 +23,7 @@ use taprelay_core::{
     function::{self, FunctionId},
     state::{Target, TransportActivity},
 };
+mod custom_mappings;
 mod foreground_app_groups;
 
 /// Refresh data without destroying delegates that own keyboard focus or an open popup.
@@ -153,6 +154,7 @@ pub fn run() -> Result<()> {
     controller.present_startup(&ui)?;
     let controller = Rc::new(RefCell::new(controller));
     foreground_app_groups::connect(&controller, &ui);
+    custom_mappings::connect(&controller, &ui);
     let action_controller = controller.clone();
     let action_window = ui.as_weak();
     ui.on_action(move |name, value| match Action::try_from(name.as_str()) {
@@ -436,6 +438,14 @@ enum ExitIntent {
 }
 
 struct Controller {
+    mapping_draft: Option<custom_mappings::MappingDraft>,
+    pending_mappings: Option<(
+        Vec<taprelay_core::mapping::CustomMapping>,
+        custom_mappings::MappingSave,
+    )>,
+    mapping_navigation: Option<(Action, String)>,
+    mapping_undo: Option<(Vec<taprelay_core::mapping::CustomMapping>, Instant)>,
+    last_mapping_capture: u64,
     #[cfg(windows)]
     overlay: crate::passthrough_overlay::Overlay,
     foreground_app_icons: Rc<RefCell<foreground_app_groups::IconCache>>,
@@ -491,6 +501,11 @@ impl Controller {
         let persisted_remembered_device = config.remembered_device.clone();
         let now = Instant::now();
         Ok(Self {
+            mapping_draft: None,
+            pending_mappings: None,
+            mapping_navigation: None,
+            mapping_undo: None,
+            last_mapping_capture: 0,
             #[cfg(windows)]
             overlay: crate::passthrough_overlay::Overlay::default(),
             group_draft: None,
@@ -567,7 +582,10 @@ impl Controller {
     }
     fn flush(&mut self, force: bool) {
         // Do not race the worker's atomic group save with an older UI snapshot.
-        if self.fatal.is_some() || self.runtime.saving_foreground_app_rules() {
+        if self.fatal.is_some()
+            || self.runtime.saving_foreground_app_rules()
+            || self.runtime.saving_custom_mappings()
+        {
             return;
         }
         self.track_remembered_device();
@@ -619,7 +637,24 @@ impl Controller {
         {
             return Ok(());
         }
+        if self.mapping_draft.is_some()
+            && matches!(
+                name,
+                Action::Navigate
+                    | Action::EditMapping
+                    | Action::Close
+                    | Action::Quit
+                    | Action::Wizard
+                    | Action::Elevate
+            )
+            && !self.mapping_leave(ui, Some((name, value.to_owned())))?
+        {
+            return Ok(());
+        }
         match name {
+            Action::EditMapping => {
+                self.mapping_command(ui, "edit", value)?;
+            }
             Action::Show => {
                 self.show_window(ui)?;
                 ui.window().set_minimized(false);
@@ -650,6 +685,7 @@ impl Controller {
                 if !self.runtime.stopped() {
                     self.cancel_capture()?;
                 }
+                ui.global::<crate::MappingUi>().set_open(false);
                 ui.set_page(action::page(value)?.clamp(0, 4));
                 ui.global::<crate::ForegroundAppUi>().set_error("".into());
                 ui.global::<crate::ForegroundAppUi>()
@@ -977,6 +1013,7 @@ impl Controller {
         let locale = self.locale();
         i18n::apply(ui, locale);
         self.sync_group_operation(ui);
+        self.sync_mapping_operation(ui);
         let icons_changed = self.foreground_app_icons.borrow_mut().poll();
         if icons_changed {
             let view = ui.global::<crate::ForegroundAppUi>();
@@ -1119,6 +1156,13 @@ impl Controller {
                 .functions
                 .values()
                 .any(|function| function.enabled && !function.shortcuts.is_empty())
+            || (s.ready
+                && self
+                    .runtime
+                    .config
+                    .custom_mappings
+                    .iter()
+                    .any(|mapping| mapping.enabled))
         {
             0
         } else {
@@ -1151,6 +1195,7 @@ impl Controller {
             self.previous_bindings =
                 Some((self.runtime.bindings_revision, locale, keyboard_layout));
             self.sync_foreground_app_groups(ui);
+            self.sync_mapping_rows(ui);
             let mut rows = Vec::new();
             let mut summary = Vec::new();
             for definition in taprelay_core::function::FUNCTION_CATALOG {
@@ -1181,7 +1226,7 @@ impl Controller {
                     .iter()
                     .enumerate()
                     .map(|(slot, shortcut)| {
-                        let keys = shortcut.key_labels_with(crate::platform::key_name);
+                        let keys = i18n::shortcut_labels(self.locale(), shortcut);
                         ShortcutItem {
                             text: keys.join("+").into(),
                             keys: ModelRc::new(VecModel::from(
@@ -1196,7 +1241,7 @@ impl Controller {
                     .collect::<Vec<_>>();
                 if config.enabled {
                     for shortcut in &config.shortcuts {
-                        let keys = shortcut.key_labels_with(crate::platform::key_name);
+                        let keys = i18n::shortcut_labels(self.locale(), shortcut);
                         summary.push(BindingRow {
                             text: keys.join("+").into(),
                             function_name: self.tr(definition.name_key).into(),
@@ -1225,7 +1270,7 @@ impl Controller {
                                 .collect::<Vec<_>>()
                                 .join(" / ")
                         })
-                        .unwrap_or_else(|| self.tr(keys::GROUPS_ALL))
+                        .unwrap_or_else(|| self.tr(keys::COMMON_ALL_APPS))
                         .into(),
                     scope_editable: definition.category == function::CategoryId::Media,
                     id: definition.id.stable_id().into(),
@@ -1238,6 +1283,23 @@ impl Controller {
             }
             ui.global::<BindingUi>()
                 .set_rows(update_model(ui.global::<BindingUi>().get_rows(), rows));
+            for mapping in &self.runtime.config.custom_mappings {
+                if mapping.enabled {
+                    for shortcut in &mapping.shortcuts {
+                        let keys = i18n::shortcut_labels(self.locale(), shortcut);
+                        summary.push(BindingRow {
+                            text: keys.join("+").into(),
+                            function_name: mapping.name.clone().into(),
+                            keys: ModelRc::new(VecModel::from(
+                                keys.into_iter()
+                                    .map(Into::into)
+                                    .collect::<Vec<slint::SharedString>>(),
+                            )),
+                            enabled: true,
+                        });
+                    }
+                }
+            }
             ui.set_bindings(ModelRc::new(VecModel::from(summary)));
         }
         if self
@@ -1268,20 +1330,27 @@ impl Controller {
                     .collect::<Vec<_>>(),
             )));
         }
-        let capture = self.runtime.capture();
+        let capture = self
+            .runtime
+            .capture()
+            .filter(|capture| matches!(capture.kind, CaptureKind::Function(_)));
+        let target = capture.and_then(|session| match session.kind {
+            CaptureKind::Function(target) => Some(target),
+            _ => None,
+        });
         ui.global::<BindingUi>().set_capture(BindingCaptureState {
-            function_id: capture
-                .map(|session| session.target.id.stable_id())
+            function_id: target
+                .map(|target| target.id.stable_id())
                 .unwrap_or("")
                 .into(),
-            slot: capture
-                .map(|session| session.target.slot as i32)
-                .unwrap_or(-1),
+            slot: target.map_or(-1, |target| target.slot as i32),
             text: match capture {
                 Some(session) if session.phase == CapturePhase::WaitingForRelease => {
                     self.tr(keys::CAPTURE_RELEASE)
                 }
-                Some(session) if !session.preview.is_empty() => session.preview.clone(),
+                Some(session) if !session.preview.is_empty() => {
+                    i18n::capture_preview(self.locale(), session)
+                }
                 _ => self.tr(keys::CAPTURE_RECORDING),
             }
             .into(),
@@ -1293,6 +1362,9 @@ impl Controller {
                     self.tr(function::function_definition(*id).name_key)
                 ),
                 Some(CaptureError::Commit(error)) => error.clone(),
+                Some(CaptureError::DuplicateMapping(name)) => {
+                    format!("{}: {}", self.tr(keys::CAPTURE_DUPLICATE), name)
+                }
                 None => String::new(),
             }
             .into(),

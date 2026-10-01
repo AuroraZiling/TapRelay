@@ -398,6 +398,11 @@ impl<E: Execution> Supervisor<E> {
             .as_mut()
             .context("Bluetooth worker unavailable")?
             .check()?;
+        // Mappings retain the armed profile after whole-device capture ends.
+        // Reopen packet admission without automatically capturing local input.
+        if self.armed && self.link.mapping_epoch() != 0 {
+            self.link.set_ready(self.revision.load(Ordering::Acquire));
+        }
         if self.pairing.as_ref().is_some_and(|(_, since)| {
             self.execution.now().saturating_duration_since(*since) >= Duration::from_secs(30)
         }) {

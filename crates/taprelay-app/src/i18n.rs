@@ -46,6 +46,58 @@ pub fn foreground_app_count(locale_id: &str, count: usize) -> String {
     }
 }
 
+pub fn shortcut_labels(
+    locale_id: &str,
+    shortcut: &taprelay_core::function::Shortcut,
+) -> Vec<String> {
+    let mut labels = shortcut.modifiers.labels();
+    labels.push(input_label(locale_id, shortcut.primary_code()));
+    labels
+}
+
+pub fn capture_preview(locale_id: &str, capture: &crate::runtime::CaptureSession) -> String {
+    use taprelay_core::{
+        function::ModifierSet,
+        input::{InputCode, modifier},
+    };
+    let mut labels = ModifierSet::from_keys(capture.preview.iter().filter_map(|code| match code {
+        InputCode::Key(key) => Some(*key),
+        InputCode::Mouse(_) => None,
+    }))
+    .labels();
+    labels.extend(
+        capture
+            .preview
+            .iter()
+            .filter(|code| !matches!(code, InputCode::Key(key) if modifier(*key)))
+            .map(|code| input_label(locale_id, *code)),
+    );
+    labels.join("+")
+}
+
+fn input_label(locale_id: &str, input: taprelay_core::input::InputCode) -> String {
+    match input {
+        taprelay_core::input::InputCode::Key(key) => crate::platform::key_name(key),
+        taprelay_core::input::InputCode::Mouse(button) => mouse_button_label(locale_id, button),
+    }
+}
+
+pub fn mouse_button_label(locale_id: &str, button: taprelay_core::input::MouseButton) -> String {
+    use taprelay_core::input::MouseButton;
+    let locale = resolve(locale_id).unwrap_or(locale::SOURCE);
+    t!(
+        match button {
+            MouseButton::Left => keys::INPUT_MOUSE_LEFT,
+            MouseButton::Right => keys::INPUT_MOUSE_RIGHT,
+            MouseButton::Middle => keys::INPUT_MOUSE_MIDDLE,
+            MouseButton::Side1 => keys::INPUT_MOUSE_SIDE1,
+            MouseButton::Side2 => keys::INPUT_MOUSE_SIDE2,
+        },
+        locale = locale
+    )
+    .into_owned()
+}
+
 pub fn apply(ui: &crate::AppWindow, locale_id: &str) {
     let locale_id = resolve(locale_id).unwrap_or(locale::SOURCE);
     let global = ui.global::<crate::I18n>();
@@ -99,6 +151,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn mouse_shortcuts_and_in_progress_capture_use_the_same_localized_labels() {
+        use crate::runtime::{CaptureKind, CapturePhase, CaptureSession};
+        use taprelay_core::{
+            function::{ModifierSet, Shortcut},
+            input::{InputCode, MouseButton},
+        };
+        for (button, zh, en) in [
+            (MouseButton::Left, "左键", "Left button"),
+            (MouseButton::Right, "右键", "Right button"),
+            (MouseButton::Middle, "中键", "Middle button"),
+            (MouseButton::Side1, "侧键 1", "Side button 1"),
+            (MouseButton::Side2, "侧键 2", "Side button 2"),
+        ] {
+            let shortcut = Shortcut::mouse(ModifierSet::empty(), button);
+            let capture = CaptureSession {
+                kind: CaptureKind::MappingOutput,
+                phase: CapturePhase::Recording,
+                preview: vec![InputCode::Mouse(button)],
+                error: None,
+            };
+            for (locale, expected) in [("zh-CN", zh), ("en", en)] {
+                assert_eq!(
+                    capture_preview(locale, &capture),
+                    expected,
+                    "Recording must be localized before release"
+                );
+                assert_eq!(shortcut_labels(locale, &shortcut), vec![expected]);
+            }
+        }
+    }
+
+    #[test]
     fn every_catalog_key_is_loaded_by_the_shared_backend() {
         for (id, source) in [
             ("en", include_str!("../locales/en.json")),
@@ -107,6 +191,22 @@ mod tests {
             let mut catalog: std::collections::BTreeMap<String, serde_json::Value> =
                 serde_json::from_str(source).unwrap();
             assert_eq!(catalog.remove("_version"), Some(1.into()));
+            // Core definitions supply keys dynamically rather than through generated bindings.
+            for function in taprelay_core::function::FUNCTION_CATALOG {
+                for key in [
+                    Some(function.name_key),
+                    Some(function.tap_action.name_key()),
+                    function.hold_action.map(|action| action.name_key()),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    assert!(
+                        catalog.contains_key(key),
+                        "Missing function translation: {id}/{key}"
+                    );
+                }
+            }
             for (key, value) in catalog {
                 assert_eq!(t!(&key, locale = id), value.as_str().unwrap(), "{id}/{key}");
             }

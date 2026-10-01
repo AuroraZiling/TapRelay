@@ -1,0 +1,276 @@
+import { CheckBox } from "std-widgets.slint";
+import { Button } from "../vendor/components/button.slint";
+import { Input } from "../vendor/components/input.slint";
+import { ScrollArea } from "../vendor/components/scroll-area.slint";
+import { Tokens } from "../vendor/theme/tokens.slint";
+import { Caption, Label, Heading } from "../components/primitives.slint";
+import { ScopeSelector } from "../components/foreground-app-scope.slint";
+import { BindingChip, AddBindingButton } from "bindings.slint";
+import { MappingOutputSelector } from "../components/mapping-output-selector.slint";
+import { MappingUi, BindingUi } from "../types.slint";
+import { I18n } from "@i18n";
+
+export component CustomMappingEditor inherits FocusScope {
+    enabled: !MappingUi.saving;
+    accessible-role: form;
+    accessible-id: "mapping-editor";
+    forward-focus: name-field;
+    property <int> focus-request: MappingUi.focus-request;
+    changed focus-request => { name-field.focus(); }
+    property <int> capture-slot: MappingUi.capture-slot;
+    changed capture-slot => { if self.capture-slot >= 0 { capture-focus.focus(); } else { name-field.focus(); } }
+    property <string> preview-label: MappingUi.selected-output.value == "" ? I18n.text.capture-pending
+        : MappingUi.selected-output.is-mouse ? MappingUi.selected-output.label : (MappingUi.ctrl ? "Ctrl+" : "") + (MappingUi.shift ? "Shift+" : "")
+        + (MappingUi.alt ? "Alt+" : "") + (MappingUi.meta ? "Win / Command+" : "")
+        + MappingUi.selected-output.label;
+    property <string> local-error: MappingUi.capture-slot >= 0 && MappingUi.capture-slot < 2 && MappingUi.capture-error != ""
+        ? MappingUi.capture-error : MappingUi.input-error;
+    capture-focus := FocusScope { width: 0px; height: 0px; }
+    capture-key-pressed(event) => {
+        if MappingUi.saving { return accept; }
+        if MappingUi.capture-slot >= 0 {
+            if event.text == Key.Escape && MappingUi.capture-slot != 2 { MappingUi.command("cancel-capture", ""); }
+            else { BindingUi.key-input(event.text, true); }
+            return accept;
+        }
+        if event.text == Key.Escape { MappingUi.command("back", ""); return accept; }
+        return reject;
+    }
+    capture-key-released(event) => {
+        if MappingUi.saving { return accept; }
+        if MappingUi.capture-slot >= 0 { BindingUi.key-input(event.text, false); return accept; }
+        return reject;
+    }
+    VerticalLayout {
+        spacing: 12px;
+        ScrollArea {
+            vertical-stretch: 1;
+            drag-to-scroll: false;
+            content-height: max(self.height, form-content.preferred-height);
+            form-content := VerticalLayout {
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                height: self.preferred-height;
+                spacing: 24px;
+                alignment: start;
+                HorizontalLayout {
+                    spacing: 24px;
+                    left-column := VerticalLayout {
+                        width: (form-content.width - 24px) / 2;
+                        spacing: 24px;
+                        alignment: start;
+                        accessible-role: groupbox;
+                        accessible-id: "mapping-local-column";
+                        VerticalLayout {
+                            spacing: 12px;
+                            alignment: start;
+                            Label { text: I18n.text.common-description; vertical-stretch: 0; accessible-id: "mapping-name-label"; }
+                            name-field := Input {
+                                auto-focus: true;
+                                text <=> MappingUi.name;
+                                placeholder: I18n.text.mappings-name-example;
+                                vertical-stretch: 0;
+                                enabled: !MappingUi.busy;
+                                accessible-role: groupbox;
+                                accessible-id: "mapping-name";
+                                accessible-label: I18n.text.common-description;
+                            }
+                        }
+                        VerticalLayout {
+                            spacing: 12px;
+                            alignment: start;
+                            Label { text: I18n.text.common-effective-scope; vertical-stretch: 0; accessible-id: "mapping-scope-label"; }
+                            ScopeSelector {
+                                size: default;
+                                vertical-stretch: 0;
+                                scope-label: MappingUi.scope-label;
+                                options: MappingUi.scopes;
+                                disabled: MappingUi.busy;
+                                accessible-id: "mapping-scope";
+                                select-option(id) => { MappingUi.command("scope", id); }
+                            }
+                        }
+                        VerticalLayout {
+                            spacing: 12px;
+                            alignment: start;
+                            Label { text: I18n.text.mappings-input; vertical-stretch: 0; accessible-id: "mapping-input-label"; }
+                            HorizontalLayout {
+                                spacing: 8px;
+                                alignment: start;
+                                cross-axis-alignment: center;
+                                vertical-stretch: 0;
+                                for input[index] in MappingUi.inputs: BindingChip {
+                                    available-width: (left-column.width - 8px) / 2;
+                                    label: MappingUi.capture-slot == index ? MappingUi.capture-text : input;
+                                    recording: MappingUi.capture-slot == index;
+                                    disabled: MappingUi.busy && MappingUi.capture-slot != index;
+                                    accessibility-id: "mapping-input-" + index;
+                                    remove-accessibility-id: "mapping-delete-input-" + index;
+                                    cancel-accessibility-id: "mapping-cancel-input-" + index;
+                                    begin => { MappingUi.command("capture-input", "" + index); }
+                                    cancel => { MappingUi.command("cancel-capture", ""); }
+                                    remove => { MappingUi.command("remove-input", "" + index); }
+                                    key-input(text, down) => { BindingUi.key-input(text, down); }
+                                }
+                                if MappingUi.inputs.length < 2 && MappingUi.capture-slot != MappingUi.inputs.length: AddBindingButton {
+                                    label: I18n.text.shortcuts-unset;
+                                    disabled: MappingUi.busy;
+                                    accessible-id: "mapping-add-input";
+                                    accessible-label: I18n.text.shortcuts-add;
+                                    clicked => { MappingUi.command("capture-input", "" + MappingUi.inputs.length); }
+                                }
+                                if MappingUi.inputs.length < 2 && MappingUi.capture-slot == MappingUi.inputs.length: BindingChip {
+                                    available-width: (left-column.width - 8px) / 2;
+                                    label: MappingUi.capture-text;
+                                    recording: true;
+                                    removable: false;
+                                    accessibility-id: "mapping-input-" + MappingUi.inputs.length;
+                                    accessibility-description: MappingUi.capture-error;
+                                    cancel-accessibility-id: "mapping-cancel-input-" + MappingUi.inputs.length;
+                                    cancel => { MappingUi.command("cancel-capture", ""); }
+                                    key-input(text, down) => { BindingUi.key-input(text, down); }
+                                }
+                            }
+                            if root.local-error != "": Label {
+                                text: root.local-error;
+                                color: Tokens.color-destructive;
+                                wrap: word-wrap;
+                                vertical-stretch: 0;
+                                accessible-id: "mapping-input-error";
+                                accessible-live-region: polite;
+                            }
+                        }
+                    }
+                    right-column := VerticalLayout {
+                        width: (form-content.width - 24px) / 2;
+                        spacing: 12px;
+                        alignment: start;
+                        accessible-role: groupbox;
+                        accessible-id: "mapping-receiver-column";
+                        Label { text: I18n.text.mappings-output; vertical-stretch: 0; }
+                        Rectangle {
+                            height: 40px;
+                            background: Tokens.color-card;
+                            border-radius: Tokens.radius-md;
+                            HorizontalLayout {
+                                padding: 4px;
+                                spacing: 4px;
+                                Button { text: I18n.text.mappings-entry-record; height: 32px; width: (right-column.width - 12px) / 2; variant: MappingUi.entry-mode == 0 ? secondary : ghost; disabled: MappingUi.busy; accessible-id: "mapping-entry-record"; clicked => { MappingUi.entry-mode = 0; } }
+                                Button { text: I18n.text.mappings-entry-manual; height: 32px; width: (right-column.width - 12px) / 2; variant: MappingUi.entry-mode == 1 ? secondary : ghost; disabled: MappingUi.busy; accessible-id: "mapping-entry-manual"; clicked => { MappingUi.entry-mode = 1; } }
+                            }
+                        }
+                        Rectangle {
+                            height: 64px;
+                            background: Tokens.color-surface-1;
+                            border-width: 1px;
+                            border-color: Tokens.color-border-hairline;
+                            border-radius: Tokens.radius-md;
+                            Caption {
+                                x: 12px;
+                                width: parent.width - 24px;
+                                height: parent.height;
+                                text: MappingUi.capture-slot == 2 ? MappingUi.capture-text : root.preview-label;
+                                font-size: 18px;
+                                color: Tokens.color-foreground;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                accessible-id: "mapping-output-preview";
+                            }
+                        }
+                        if MappingUi.entry-mode == 0: Button {
+                            text: MappingUi.capture-slot == 2 ? I18n.text.capture-cancel : I18n.text.mappings-record-output;
+                            activate-on-press: true;
+                            variant: outline;
+                            disabled: MappingUi.busy && MappingUi.capture-slot != 2;
+                            vertical-stretch: 0;
+                            clicked => { MappingUi.command(MappingUi.capture-slot == 2 ? "cancel-capture" : "capture-output", ""); }
+                            accessible-id: "mapping-record-output";
+                        }
+                        if MappingUi.entry-mode == 1: MappingOutputSelector {
+                            vertical-stretch: 0;
+                        }
+                        if !MappingUi.selected-output.is-mouse: HorizontalLayout {
+                            spacing: 8px;
+                            vertical-stretch: 0;
+                            CheckBox { text: "Ctrl"; checked <=> MappingUi.ctrl; enabled: !MappingUi.busy; accessible-id: "mapping-output-ctrl"; }
+                            CheckBox { text: "Shift"; checked <=> MappingUi.shift; enabled: !MappingUi.busy; accessible-id: "mapping-output-shift"; }
+                            CheckBox { text: "Alt"; checked <=> MappingUi.alt; enabled: !MappingUi.busy; accessible-id: "mapping-output-alt"; }
+                            CheckBox { text: "Win / Command"; checked <=> MappingUi.meta; enabled: !MappingUi.busy; accessible-id: "mapping-output-meta"; }
+                        }
+                        if MappingUi.capture-slot == 2 && MappingUi.capture-error != "": Label {
+                            text: MappingUi.capture-error;
+                            color: Tokens.color-destructive;
+                            vertical-stretch: 0;
+                            accessible-id: "mapping-output-error";
+                            accessible-live-region: polite;
+                        }
+                        Caption {
+                            text: MappingUi.entry-mode == 1 ? I18n.text.mappings-manual-output-help : MappingUi.selected-output.is-mouse ? I18n.text.mappings-mouse-output-help : I18n.text.mappings-output-help;
+                            vertical-stretch: 0;
+                            accessible-id: "mapping-output-help";
+                        }
+                    }
+                }
+            }
+        }
+        if MappingUi.error != "": Label {
+            text: MappingUi.error;
+            color: Tokens.color-destructive;
+            vertical-stretch: 0;
+            wrap: word-wrap;
+            accessible-id: "mapping-error";
+            accessible-live-region: polite;
+        }
+        if MappingUi.error != "" && MappingUi.conflict-target != "": Button {
+            text: I18n.text.mappings-edit-conflict;
+            variant: ghost;
+            vertical-stretch: 0;
+            disabled: MappingUi.busy;
+            clicked => { MappingUi.command("conflict", MappingUi.conflict-target); }
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: end;
+            vertical-stretch: 0;
+            Button { text: MappingUi.saving ? I18n.text.common-saving : I18n.text.mappings-save; disabled: MappingUi.busy || MappingUi.input-error != "" || MappingUi.selected-output.value == ""; accessible-id: "mapping-save"; clicked => { MappingUi.command("save", ""); } }
+        }
+    }
+}
+
+export component MappingLeaveDialog inherits FocusScope {
+    forward-focus: stay;
+    property <int> focus-request: MappingUi.leave-focus-request;
+    changed focus-request => { stay.focus(); }
+    capture-key-pressed(event) => { if event.text == Key.Escape { MappingUi.command("stay", ""); return accept; } return reject; }
+    Rectangle { background: Tokens.color-scrim-2; TouchArea { } }
+    Rectangle {
+        width: min(520px, parent.width - 48px);
+        height: 210px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: Tokens.color-background;
+        border-radius: Tokens.radius-xl;
+        accessible-role: groupbox;
+        accessible-id: "mapping-leave-dialog";
+        VerticalLayout {
+            padding: 24px;
+            spacing: 16px;
+            VerticalLayout {
+                spacing: 16px;
+                vertical-stretch: 0;
+                Heading { text: I18n.text.common-save-changes; vertical-stretch: 0; }
+                Caption { text: I18n.text.mappings-unsaved-help; vertical-stretch: 0; }
+            }
+            Rectangle { vertical-stretch: 1; }
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: end;
+                vertical-stretch: 0;
+                stay := Button { text: I18n.text.common-keep-editing; variant: ghost; clicked => { MappingUi.command("stay", ""); } }
+                Button { text: I18n.text.common-discard-changes; variant: outline; clicked => { MappingUi.command("discard", ""); } }
+                Button { text: I18n.text.mappings-save; clicked => { MappingUi.command("save-leave", ""); } }
+            }
+        }
+    }
+}

@@ -37,7 +37,7 @@ impl MediaCommand {
     }
 
     /// Localization key for this command used on its own, as one gesture of a
-    /// function. The function's own label is a separate key: a merged
+    /// function. Merged functions use a separate label key: a merged
     /// press/hold function reads as "Previous / Rewind" while the tap gesture
     /// still reads as plain "Previous".
     pub const fn name_key(self) -> &'static str {

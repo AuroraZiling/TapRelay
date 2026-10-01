@@ -83,6 +83,8 @@ impl Sender {
                         authorized: false,
                         epoch: 0,
                         reports: InputReports::default(),
+                        owners: Default::default(),
+                        mapping_epoch: 0,
                         consumer: ConsumerState::default(),
                         pulses: Vec::new(),
                         next_owner: 0,
@@ -203,6 +205,8 @@ impl Drop for Sender {
 }
 
 struct Worker {
+    owners: taprelay_core::mapping::OutputOwners,
+    mapping_epoch: u64,
     link: InputLink,
     revision: Arc<AtomicU64>,
     stopping: Arc<AtomicBool>,
@@ -228,6 +232,7 @@ impl Worker {
 
     fn reset(&mut self) -> Result<(), BackendError> {
         self.reports = InputReports::default();
+        self.owners = Default::default();
         self.consumer = ConsumerState::default();
         self.pulses.clear();
         self.schedule.clear_input();
@@ -243,6 +248,25 @@ impl Worker {
     }
 
     fn reconcile(&mut self) {
+        let mapping_epoch = self.link.mapping_epoch();
+        if self.mapping_epoch != mapping_epoch {
+            self.mapping_epoch = mapping_epoch;
+            self.owners.clear_mappings();
+            let (keys, buttons) = self.owners.state();
+            if self.authorized {
+                let result = self
+                    .reports
+                    .owned_keyboard(keys, buttons)
+                    .map_err(|error| BackendError::Unavailable(error.into()))
+                    .and_then(|bytes| self.send_report(ReportKind::Keyboard, &bytes))
+                    .and_then(|()| {
+                        self.send_report(ReportKind::Mouse, &self.reports.mouse_neutral())
+                    });
+                if let Err(error) = result {
+                    self.fail(&error);
+                }
+            }
+        }
         if self.detaching.load(Ordering::Acquire) {
             self.authorized = false;
             self.link.end();
@@ -270,6 +294,7 @@ impl Worker {
                 self.link.end();
                 self.generation = self.link.generation();
                 self.reports = InputReports::default();
+                self.owners = Default::default();
                 self.consumer.clear();
                 self.pulses.clear();
                 self.schedule.clear_input();
@@ -321,7 +346,9 @@ impl Worker {
                     if !self.link.accepts(&packet) {
                         continue;
                     }
-                    self.epoch = packet.epoch;
+                    if packet.epoch == self.link.epoch() {
+                        self.epoch = packet.epoch;
+                    }
                     if let Err(e) = self.event(packet.event) {
                         self.fail(&e);
                     }
@@ -358,6 +385,7 @@ impl Worker {
                 self.epoch = 0;
                 self.endpoints = std::array::from_fn(|_| None);
                 self.reports = InputReports::default();
+                self.owners = Default::default();
                 self.consumer.clear();
                 self.pulses.clear();
                 self.schedule.clear_input();
@@ -377,6 +405,7 @@ impl Worker {
                     self.link.end();
                     self.epoch = 0;
                     self.reports = InputReports::default();
+                    self.owners = Default::default();
                     self.consumer = ConsumerState::default();
                     self.pulses.clear();
                 }
@@ -504,15 +533,58 @@ impl Worker {
 
     fn event(&mut self, event: Event) -> Result<(), BackendError> {
         let report = match event {
+            Event::ReleasePhysical => {
+                self.owners.clear_physical();
+                let (keys, buttons) = self.owners.state();
+                let keyboard = self
+                    .reports
+                    .owned_keyboard(keys, buttons)
+                    .map_err(|error| BackendError::Unavailable(error.into()))?;
+                self.consumer.clear();
+                self.pulses.clear();
+                self.send_report(ReportKind::Keyboard, &keyboard)?;
+                self.send_report(ReportKind::Mouse, &self.reports.mouse_neutral())?;
+                self.send_report(ReportKind::Consumer, &self.consumer.report())?;
+                return Ok(());
+            }
+            Event::Mapping {
+                output,
+                token,
+                down,
+            } => {
+                let (keys, buttons) = self.owners.update(token | (1 << 63), output, down);
+                let keyboard = self
+                    .reports
+                    .owned_keyboard(keys, buttons)
+                    .map_err(|error| BackendError::Unavailable(error.into()))?;
+                Some(match output {
+                    taprelay_core::mapping::MappingOutput::Keyboard { .. } => {
+                        (ReportKind::Keyboard, keyboard)
+                    }
+                    taprelay_core::mapping::MappingOutput::Mouse { .. } => {
+                        (ReportKind::Mouse, self.reports.mouse_neutral())
+                    }
+                })
+            }
             Event::Key {
                 usage: KeyUsage::Keyboard(usage),
                 down,
-            } => Some((
-                ReportKind::Keyboard,
-                self.reports
-                    .key(usage, down)
-                    .map_err(|e| BackendError::Unavailable(e.into()))?,
-            )),
+            } => {
+                let (keys, buttons) = self.owners.update(
+                    u64::from(usage),
+                    taprelay_core::mapping::MappingOutput::Keyboard {
+                        usage,
+                        modifiers: 0,
+                    },
+                    down,
+                );
+                Some((
+                    ReportKind::Keyboard,
+                    self.reports
+                        .owned_keyboard(keys, buttons)
+                        .map_err(|e| BackendError::Unavailable(e.into()))?,
+                ))
+            }
             Event::Key {
                 usage: KeyUsage::Consumer(usage),
                 down,
@@ -526,7 +598,15 @@ impl Worker {
                 Some((ReportKind::Consumer, self.consumer.report()))
             }
             Event::Button { button, down } => {
-                Some((ReportKind::Mouse, self.reports.button(button, down)))
+                let (keys, buttons) = self.owners.update(
+                    0x1000 + button as u64,
+                    taprelay_core::mapping::MappingOutput::Mouse { button },
+                    down,
+                );
+                self.reports
+                    .owned_keyboard(keys, buttons)
+                    .map_err(|e| BackendError::Unavailable(e.into()))?;
+                Some((ReportKind::Mouse, self.reports.mouse_neutral()))
             }
             Event::Motion { dx, dy } => Some((
                 ReportKind::Mouse,

@@ -18,8 +18,21 @@ impl Default for InputReports {
 }
 
 impl InputReports {
+    pub fn owned_keyboard(
+        &mut self,
+        keys: [bool; 256],
+        buttons: u8,
+    ) -> Result<Vec<u8>, &'static str> {
+        self.keys = keys;
+        self.buttons = buttons;
+        self.keyboard_report()
+    }
     pub fn key(&mut self, usage: u8, down: bool) -> Result<Vec<u8>, &'static str> {
         self.keys[usage as usize] = down;
+        self.keyboard_report()
+    }
+
+    fn keyboard_report(&self) -> Result<Vec<u8>, &'static str> {
         let mut report = vec![0; ReportKind::Keyboard.payload_len()];
         for modifier in 0..8 {
             if self.keys[0xe0 + modifier] {

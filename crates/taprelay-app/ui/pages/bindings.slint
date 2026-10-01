@@ -112,7 +112,7 @@ component ShortcutCapture inherits Rectangle {
     }
 }
 
-component BindingChip inherits Rectangle {
+export component BindingChip inherits Rectangle {
     in property <string> label;
     in property <bool> recording: false;
     in property <bool> removable: true;
@@ -121,6 +121,7 @@ component BindingChip inherits Rectangle {
     in property <string> accessibility-label: root.label;
     in property <string> accessibility-description;
     in property <string> remove-accessibility-id;
+    in property <string> cancel-accessibility-id;
     callback begin();
     callback cancel();
     callback remove();
@@ -183,6 +184,7 @@ component BindingChip inherits Rectangle {
             key-input(text, down) => { root.key-input(text, down); }
         }
         cancel_button := IconButton {
+            accessible-id: root.cancel-accessibility-id;
             activate-on-press: true;
             foreground-only: true;
             width: root.recording ? 24px : 0px;
@@ -190,7 +192,7 @@ component BindingChip inherits Rectangle {
             size: icon-xs;
             variant: ghost;
             icon: IconSet.X;
-            hint: I18n.text.bindings-cancel;
+            hint: I18n.text.capture-cancel-shortcut;
             accessible-enabled: root.recording;
             clicked => { root.cancel(); }
         }
@@ -212,7 +214,7 @@ component BindingChip inherits Rectangle {
     }
 }
 
-component AddBindingButton inherits Button {
+export component AddBindingButton inherits Button {
     in property <string> label;
     text: "";
     size: sm;
@@ -352,9 +354,9 @@ component FunctionBindingRowView inherits Rectangle {
                     }
                     if root.binding-row.shortcuts.length < 2
                             && !root.captures-new-slot: AddBindingButton {
-                        label: I18n.text.bindings-unset;
+                        label: I18n.text.shortcuts-unset;
                         accessible-id: "binding-add-" + root.binding-row.id;
-                        accessible-label: I18n.text.bindings-add + ": " + root.binding-row.label;
+                        accessible-label: I18n.text.shortcuts-add + ": " + root.binding-row.label;
                         disabled: root.capture-busy;
                         clicked => {
                             root.begin-binding-capture(
@@ -380,7 +382,7 @@ component FunctionBindingRowView inherits Rectangle {
                     alignment: start;
                     cross-axis-alignment: center;
                     if root.binding-row.shortcuts.length == 0: Caption {
-                        text: I18n.text.bindings-unset;
+                        text: I18n.text.shortcuts-unset;
                         opacity: 0.5;
                     }
                     for shortcut in root.binding-row.shortcuts: DisabledShortcutChip {
@@ -449,7 +451,7 @@ component FunctionBindingRowView inherits Rectangle {
             if !root.binding-row.scope-editable: Caption {
                 width: parent.width;
                 height: parent.height;
-                text: I18n.text.groups-all;
+                text: I18n.text.common-all-apps;
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
@@ -482,11 +484,11 @@ export component FunctionBindingsPage inherits VerticalLayout {
                 padding-left: root.row-padding;
                 padding-right: root.row-padding;
                 spacing: root.column-spacing;
-                Caption { text: I18n.text.bindings-column-enabled; width: root.switch-width; }
-                Caption { text: I18n.text.bindings-column-shortcut; horizontal-stretch: 1; }
-                Caption { text: I18n.text.bindings-column-function; width: root.function-column-width; }
+                Caption { text: I18n.text.common-enabled; width: root.switch-width; }
+                Caption { text: I18n.text.common-shortcut; horizontal-stretch: 1; }
+                Caption { text: I18n.text.common-function; width: root.function-column-width; }
                 Caption {
-                    text: I18n.text.groups-scope;
+                    text: I18n.text.common-effective-scope;
                     width: root.scope-column-width;
                     horizontal-alignment: left;
                     accessible-id: "bindings-column-scope";

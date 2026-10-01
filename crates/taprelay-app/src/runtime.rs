@@ -30,14 +30,25 @@ pub enum CapturePhase {
 pub enum CaptureError {
     Invalid,
     Duplicate(FunctionId),
+    DuplicateMapping(String),
     Commit(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CaptureKind {
+    Function(CaptureTarget),
+    MappingInput {
+        slot: usize,
+        draft: taprelay_core::mapping::CustomMapping,
+    },
+    MappingOutput,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CaptureSession {
-    pub target: CaptureTarget,
+    pub kind: CaptureKind,
     pub phase: CapturePhase,
-    pub preview: String,
+    pub preview: Vec<InputCode>,
     pub error: Option<CaptureError>,
 }
 
@@ -50,6 +61,9 @@ struct Receipt {
 
 pub struct Runtime {
     pub functions: FunctionConfigs,
+    pub custom_mappings: Vec<taprelay_core::mapping::CustomMapping>,
+    pub custom_capture_result: Option<(u64, bool, usize, Shortcut)>,
+    next_capture_result: u64,
     pub foreground_app_rules: taprelay_core::foreground_app::ForegroundAppRules,
     pub remembered_device: Option<Device>,
     pub state: Snapshot,
@@ -112,6 +126,9 @@ impl Runtime {
         let (sender, events) = mpsc::channel(1024);
         Self {
             functions: config.functions,
+            custom_mappings: config.custom_mappings,
+            custom_capture_result: None,
+            next_capture_result: 0,
             foreground_app_rules: config.foreground_app_rules,
             remembered_device: config.remembered_device,
             state: Snapshot::default(),
@@ -314,20 +331,36 @@ impl Runtime {
     }
 
     fn configure_input(&mut self) {
-        if let Some(input) = &self.input {
-            input.attach_passthrough(
-                self.transport
-                    .as_ref()
-                    .and_then(|transport| transport.input_link())
-                    .inspect(|link| {
-                        link.set_mouse_percent(self.passthrough_mouse_percent);
-                        link.set_mouse_report_rate(self.passthrough_mouse_report_rate);
-                        link.set_reverse_scroll(self.passthrough_reverse_scroll);
-                    }),
+        let mut input_error = None;
+        let link = self
+            .transport
+            .as_ref()
+            .and_then(|transport| transport.input_link());
+        if let Some(link) = &link {
+            link.set_mapping_profile(
+                self.listening && self.custom_mappings.iter().any(|mapping| mapping.enabled),
             );
+            link.set_mouse_percent(self.passthrough_mouse_percent);
+            link.set_mouse_report_rate(self.passthrough_mouse_report_rate);
+            link.set_reverse_scroll(self.passthrough_reverse_scroll);
+        }
+        if let Some(input) = &self.input {
+            input.attach_passthrough(link);
             if let Some(error) = input.passthrough_error() {
-                self.error = Some(error);
+                input_error = Some(error);
             }
+        }
+        if let Some(error) = input_error {
+            self.listening = false;
+            self.error = Some(error);
+            if let Some(link) = self
+                .transport
+                .as_ref()
+                .and_then(|transport| transport.input_link())
+            {
+                link.set_mapping_profile(false);
+            }
+            self.invalidate(RouterReason::TransportLost);
         }
         let result = self
             .input
@@ -335,6 +368,7 @@ impl Runtime {
             .map_or_else(RouteResult::default, |input| {
                 input.configure(
                     &self.functions,
+                    &self.custom_mappings,
                     &self.foreground_app_rules,
                     self.listening,
                     self.recording(),
@@ -427,12 +461,12 @@ impl Runtime {
         self.state.ready = false;
     }
 
-    fn record(&mut self, target: CaptureTarget) -> Result<()> {
+    fn record(&mut self, kind: CaptureKind) -> Result<()> {
         self.ensure_input()?;
         self.capture = Some(CaptureSession {
-            target,
+            kind,
             phase: CapturePhase::WaitingForRelease,
-            preview: String::new(),
+            preview: Vec::new(),
             error: None,
         });
         self.configure_input();
@@ -446,6 +480,22 @@ impl Runtime {
     pub fn apply_binding_command(&mut self, command: BindingCommand) -> Result<()> {
         self.consume_ui_input();
         match command {
+            BindingCommand::BeginCustomCapture {
+                output,
+                slot,
+                draft,
+            } => {
+                anyhow::ensure!(
+                    output || (slot <= draft.shortcuts.len() && slot < 2),
+                    "Shortcut slot unavailable"
+                );
+                self.finish_recording();
+                self.record(if output {
+                    CaptureKind::MappingOutput
+                } else {
+                    CaptureKind::MappingInput { slot, draft }
+                })
+            }
             BindingCommand::BeginCapture(target) => {
                 let config = self
                     .functions
@@ -457,7 +507,7 @@ impl Runtime {
                     "Shortcut slot unavailable"
                 );
                 self.finish_recording();
-                self.record(target)
+                self.record(CaptureKind::Function(target))
             }
             BindingCommand::CancelCapture => {
                 self.finish_recording();
@@ -528,9 +578,58 @@ impl Runtime {
             .is_some_and(|capture| capture.phase == CapturePhase::WaitingForRelease)
     }
 
+    fn custom_capture_error(&self, shortcut: &Shortcut) -> Option<CaptureError> {
+        use taprelay_core::mapping::{self, MappingOutput, RuleId};
+        let capture = self.capture.as_ref()?;
+        if capture.kind == CaptureKind::MappingOutput {
+            return MappingOutput::from_shortcut(shortcut)
+                .is_none()
+                .then_some(CaptureError::Invalid);
+        }
+        let CaptureKind::MappingInput { slot, draft } = &capture.kind else {
+            return None;
+        };
+        if !shortcut.valid() {
+            return Some(CaptureError::Invalid);
+        }
+        mapping::shortcut_conflict(
+            &self.functions,
+            &self.foreground_app_rules,
+            &self.custom_mappings,
+            draft,
+            *slot,
+            shortcut,
+        )
+        .map(|rule| match rule {
+            RuleId::Function(id) => CaptureError::Duplicate(id),
+            RuleId::Mapping(id) => CaptureError::DuplicateMapping(if id == draft.id {
+                draft.name.clone()
+            } else {
+                self.custom_mappings
+                    .iter()
+                    .find(|mapping| mapping.id == id)
+                    .map_or_else(String::new, |mapping| mapping.name.clone())
+            }),
+        })
+    }
+
     fn submit_capture(&mut self, shortcut: Shortcut) {
         let Some(capture) = &self.capture else { return };
-        let CaptureTarget { id, slot } = capture.target;
+        let (function, output, slot) = match capture.kind {
+            CaptureKind::Function(target) => (Some(target.id), false, target.slot),
+            CaptureKind::MappingInput { slot, .. } => (None, false, slot),
+            CaptureKind::MappingOutput => (None, true, 2),
+        };
+        let Some(id) = function else {
+            if let Some(error) = self.custom_capture_error(&shortcut) {
+                self.capture.as_mut().unwrap().error = Some(error);
+                return;
+            }
+            self.next_capture_result += 1;
+            self.custom_capture_result = Some((self.next_capture_result, output, slot, shortcut));
+            self.finish_recording();
+            return;
+        };
         let error = if !shortcut.valid() {
             Some(CaptureError::Invalid)
         } else if let Some(conflict) = self.functions.iter().find_map(|(&other, config)| {
@@ -546,6 +645,20 @@ impl Runtime {
                 .then_some(other)
         }) {
             Some(CaptureError::Duplicate(conflict))
+        } else if let Some(mapping) = self.custom_mappings.iter().find(|mapping| {
+            mapping.shortcuts.contains(&shortcut)
+                && taprelay_core::mapping::scopes_overlap(
+                    &self.foreground_app_rules,
+                    &self
+                        .foreground_app_rules
+                        .assignments
+                        .get(&id)
+                        .cloned()
+                        .unwrap_or_default(),
+                    &mapping.groups,
+                )
+        }) {
+            Some(CaptureError::DuplicateMapping(mapping.name.clone()))
         } else {
             self.replace_shortcut(id, slot, shortcut)
                 .err()
@@ -595,7 +708,11 @@ impl Runtime {
                 .context("Shortcut slot out of range")? = shortcut;
         }
         anyhow::ensure!(
-            self.foreground_app_rules.valid_bindings(&candidate),
+            taprelay_core::mapping::valid(
+                &candidate,
+                &self.foreground_app_rules,
+                &self.custom_mappings
+            ),
             "Shortcut conflicts with another function"
         );
         self.functions = candidate;
@@ -619,7 +736,7 @@ impl Runtime {
         rules: taprelay_core::foreground_app::ForegroundAppRules,
     ) -> Result<()> {
         anyhow::ensure!(
-            rules.valid_bindings(&self.functions),
+            taprelay_core::mapping::valid(&self.functions, &rules, &self.custom_mappings),
             "Invalid application group or conflicting shortcut"
         );
         self.foreground_app_rules = rules;
@@ -791,19 +908,35 @@ impl Runtime {
                         if self.capture_waiting() {
                             continue;
                         }
-                        if event.code == InputCode::Key(0x1b) && event.down {
+                        let output = self
+                            .capture
+                            .as_ref()
+                            .is_some_and(|capture| capture.kind == CaptureKind::MappingOutput);
+                        if event.code == InputCode::Key(0x1b) && event.down && !output {
                             self.finish_recording();
+                            continue;
+                        }
+                        if output
+                            && matches!(event.code, InputCode::Key(key) if taprelay_core::input::modifier(key))
+                        {
                             continue;
                         }
                         if !self.capture_state.update(event) {
                             continue;
                         }
                         self.capture.as_mut().unwrap().preview =
-                            self.capture_state.description_with(platform::key_name);
+                            self.capture_state.pressed_inputs();
                         if let Some(shortcut) = self.recorder.observe(&self.capture_state, event) {
                             self.submit_capture(shortcut);
                         } else if self.recorder.take_invalid() {
                             self.capture.as_mut().unwrap().error = Some(CaptureError::Invalid);
+                        } else if let Some(shortcut) = self.recorder.candidate()
+                            && self.capture.as_ref().is_some_and(|capture| {
+                                !matches!(capture.kind, CaptureKind::Function(_))
+                            })
+                        {
+                            let error = self.custom_capture_error(&shortcut);
+                            self.capture.as_mut().unwrap().error = error;
                         }
                         continue;
                     }
@@ -861,6 +994,11 @@ impl Runtime {
 
         for output in result.outputs {
             match output {
+                RoutedOutput::Mapping { down, .. } => {
+                    if down {
+                        self.matched += 1;
+                    }
+                }
                 RoutedOutput::Feedback { binding, action } => {
                     self.matched += 1;
                     tracing::info!(?binding, ?action, "Input recognized");
@@ -971,6 +1109,64 @@ mod tests {
             tx.send(Ok(())).unwrap();
             Ok(rx)
         }
+    }
+
+    #[test]
+    fn mapping_profile_is_revoked_even_after_the_input_source_is_gone() {
+        struct LinkedTransport(taprelay_core::passthrough::InputLink);
+        impl Transport for LinkedTransport {
+            fn input_link(&self) -> Option<taprelay_core::passthrough::InputLink> {
+                Some(self.0.clone())
+            }
+            fn snapshot(&mut self) -> Option<Snapshot> {
+                None
+            }
+            fn refresh(&self) -> Result<()> {
+                Ok(())
+            }
+            fn restart(&self) -> Result<u64> {
+                Ok(1)
+            }
+            fn select(&self, _: String) -> Result<u64> {
+                Ok(1)
+            }
+            fn invalidate(&self) {
+                self.0.end();
+            }
+            fn send(
+                &self,
+                _: QueuedCommand,
+            ) -> Result<oneshot::Receiver<Result<(), BackendError>>> {
+                unreachable!()
+            }
+        }
+        let (link, _receiver) = taprelay_core::passthrough::InputLink::channel(
+            std::sync::Arc::new(std::sync::atomic::AtomicU64::new(1)),
+        );
+        let mut runtime = Runtime::new(Config::default());
+        runtime.transport = Some(Box::new(LinkedTransport(link.clone())));
+        runtime
+            .custom_mappings
+            .push(taprelay_core::mapping::CustomMapping {
+                id: 1,
+                name: "Speed".into(),
+                enabled: true,
+                shortcuts: vec![Shortcut::mouse(ModifierSet::empty(), MouseButton::Side1)],
+                output: taprelay_core::mapping::MappingOutput::Keyboard {
+                    usage: 0x4f,
+                    modifiers: 0,
+                },
+                groups: Default::default(),
+            });
+        runtime.listening = true;
+        runtime.input = Some(Box::new(FakeInput));
+        runtime.configure_input();
+        assert!(link.profile_requested() && !link.capture_requested());
+        runtime.listening = false;
+        runtime.input.take();
+        runtime.configure_input();
+        assert_eq!(link.mapping_epoch(), 0);
+        assert!(!link.profile_requested());
     }
 
     struct SnapshotTransport(Option<Snapshot>);
@@ -1444,6 +1640,206 @@ mod tests {
         runtime
     }
 
+    #[test]
+    fn custom_capture_returns_a_draft_result_without_changing_live_bindings() {
+        let mut runtime = capture_runtime();
+        let functions = runtime.functions.clone();
+        for output in [false, true] {
+            let mut draft = capture_mapping_draft();
+            draft.output = taprelay_core::mapping::MappingOutput::Keyboard {
+                usage: 0,
+                modifiers: 0,
+            };
+            runtime
+                .apply_binding_command(BindingCommand::BeginCustomCapture {
+                    output,
+                    slot: 0,
+                    draft,
+                })
+                .unwrap();
+            runtime.tick_with_capture_context(true, false);
+            queue_capture_keys(&mut runtime, &[(0x27, true), (0x27, false)], false);
+            runtime.tick_with_capture_context(true, false);
+            assert!(runtime.capture().is_none());
+            let (_, recorded_output, _, shortcut) = runtime.custom_capture_result.as_ref().unwrap();
+            assert_eq!(*recorded_output, output);
+            assert_eq!(*shortcut, Shortcut::keyboard(ModifierSet::empty(), 0x27));
+            assert_eq!(runtime.functions, functions);
+            assert!(runtime.custom_mappings.is_empty());
+            assert_eq!(runtime.bindings_revision, 0);
+            assert_eq!(runtime.matched, 0);
+        }
+    }
+
+    fn capture_mapping_draft() -> taprelay_core::mapping::CustomMapping {
+        taprelay_core::mapping::CustomMapping {
+            id: 25,
+            name: "Speed".into(),
+            enabled: true,
+            shortcuts: Vec::new(),
+            output: taprelay_core::mapping::MappingOutput::Keyboard {
+                usage: 0x4f,
+                modifiers: 0,
+            },
+            groups: Default::default(),
+        }
+    }
+
+    #[test]
+    fn custom_capture_checks_duplicates_on_press_and_allows_retry_without_changing_the_draft() {
+        let mut runtime = capture_runtime();
+        let mut draft = capture_mapping_draft();
+        draft
+            .shortcuts
+            .push(Shortcut::keyboard(ModifierSet::empty(), 0x79));
+        // The persisted slot may be replaced, while the unsaved other slot stays reserved.
+        let mut persisted = draft.clone();
+        persisted.shortcuts[0] = Shortcut::keyboard(ModifierSet::empty(), 0x7a);
+        runtime.custom_mappings.push(persisted);
+        let original = runtime.custom_mappings.clone();
+        runtime
+            .apply_binding_command(BindingCommand::BeginCustomCapture {
+                output: false,
+                slot: 1,
+                draft,
+            })
+            .unwrap();
+        runtime.tick_with_capture_context(true, false);
+        queue_capture_keys(&mut runtime, &[(0x79, true)], false);
+        runtime.tick_with_capture_context(true, false);
+        assert_eq!(
+            runtime.capture().unwrap().error,
+            Some(CaptureError::DuplicateMapping("Speed".into()))
+        );
+        assert!(runtime.custom_capture_result.is_none());
+        queue_capture_keys(&mut runtime, &[(0x79, false)], false);
+        runtime.tick_with_capture_context(true, false);
+        assert!(runtime.recording());
+        queue_capture_keys(&mut runtime, &[(0x78, true)], false);
+        runtime.tick_with_capture_context(true, false);
+        assert_eq!(
+            runtime.capture().unwrap().error,
+            Some(CaptureError::Duplicate(FunctionId::MediaNext))
+        );
+        queue_capture_keys(&mut runtime, &[(0x78, false), (0x27, true)], false);
+        runtime.tick_with_capture_context(true, false);
+        assert!(runtime.capture().unwrap().error.is_none());
+        queue_capture_keys(&mut runtime, &[(0x27, false)], false);
+        runtime.tick_with_capture_context(true, false);
+        assert!(runtime.capture().is_none());
+        assert_eq!(
+            runtime.custom_capture_result.as_ref().unwrap().3,
+            Shortcut::keyboard(ModifierSet::empty(), 0x27)
+        );
+        assert_eq!(runtime.custom_mappings, original);
+    }
+
+    #[test]
+    fn receiver_recording_accepts_mouse_buttons_and_escape() {
+        let mut runtime = capture_runtime();
+        runtime
+            .apply_binding_command(BindingCommand::BeginCustomCapture {
+                output: true,
+                slot: 2,
+                draft: capture_mapping_draft(),
+            })
+            .unwrap();
+        runtime.tick_with_capture_context(true, false);
+        for down in [true, false] {
+            runtime.window_keys.push(InputEvent {
+                code: InputCode::Mouse(MouseButton::Left),
+                down,
+                captured: Instant::now(),
+            });
+        }
+        runtime.tick_with_capture_context(true, false);
+        assert!(runtime.capture().is_none());
+        assert_eq!(
+            runtime.custom_capture_result.as_ref().unwrap().3,
+            Shortcut::mouse(ModifierSet::empty(), MouseButton::Left)
+        );
+        runtime
+            .apply_binding_command(BindingCommand::BeginCustomCapture {
+                output: true,
+                slot: 2,
+                draft: capture_mapping_draft(),
+            })
+            .unwrap();
+        runtime.tick_with_capture_context(true, false);
+        queue_capture_keys(&mut runtime, &[(0x1b, true), (0x1b, false)], false);
+        runtime.tick_with_capture_context(true, false);
+        assert!(runtime.capture().is_none());
+        assert_eq!(
+            runtime.custom_capture_result.as_ref().unwrap().3,
+            Shortcut::keyboard(ModifierSet::empty(), 0x1b)
+        );
+    }
+
+    #[test]
+    fn receiver_recording_ignores_modifiers_in_preview_and_finishes_before_they_are_released() {
+        let mut runtime = capture_runtime();
+        for modifier in [
+            0x10, 0x11, 0x12, 0x5b, 0x5c, 0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5,
+        ] {
+            runtime
+                .apply_binding_command(BindingCommand::BeginCustomCapture {
+                    output: true,
+                    slot: 2,
+                    draft: capture_mapping_draft(),
+                })
+                .unwrap();
+            runtime.tick_with_capture_context(true, false);
+            queue_capture_keys(&mut runtime, &[(modifier, true)], false);
+            runtime.tick_with_capture_context(true, false);
+            let capture = runtime.capture().unwrap();
+            assert!(capture.preview.is_empty());
+            assert!(capture.error.is_none());
+            queue_capture_keys(&mut runtime, &[(0x41, true)], false);
+            runtime.tick_with_capture_context(true, false);
+            assert_eq!(
+                runtime.capture().unwrap().preview,
+                vec![InputCode::Key(0x41)]
+            );
+            queue_capture_keys(&mut runtime, &[(0x41, false)], false);
+            runtime.tick_with_capture_context(true, false);
+            assert!(runtime.capture().is_none());
+            assert_eq!(
+                runtime.custom_capture_result.as_ref().unwrap().3,
+                Shortcut::keyboard(ModifierSet::empty(), 0x41)
+            );
+            queue_capture_keys(&mut runtime, &[(modifier, false)], false);
+            runtime.tick_with_capture_context(true, false);
+        }
+    }
+
+    #[test]
+    fn builtin_capture_reports_conflict_with_a_disabled_custom_mapping() {
+        let mut runtime = capture_runtime();
+        runtime
+            .custom_mappings
+            .push(taprelay_core::mapping::CustomMapping {
+                id: 1,
+                name: "Speed".into(),
+                enabled: false,
+                shortcuts: vec![Shortcut::keyboard(ModifierSet::empty(), 0x79)],
+                output: taprelay_core::mapping::MappingOutput::Keyboard {
+                    usage: 0x4f,
+                    modifiers: 0,
+                },
+                groups: Default::default(),
+            });
+        let original = runtime.functions.clone();
+        begin_capture(&mut runtime, FunctionId::MediaPlayPause, 0);
+        runtime.tick_with_capture_context(true, false);
+        queue_capture_keys(&mut runtime, &[(0x79, true), (0x79, false)], false);
+        runtime.tick_with_capture_context(true, false);
+        assert_eq!(
+            runtime.capture().unwrap().error,
+            Some(CaptureError::DuplicateMapping("Speed".into()))
+        );
+        assert_eq!(runtime.functions, original);
+    }
+
     fn begin_capture(runtime: &mut Runtime, id: FunctionId, slot: usize) {
         runtime
             .apply_binding_command(BindingCommand::BeginCapture(CaptureTarget { id, slot }))
@@ -1687,13 +2083,19 @@ mod tests {
             id: FunctionId::MediaNext,
             slot: 0,
         };
-        assert_eq!(runtime.capture().unwrap().target, target);
+        assert_eq!(
+            runtime.capture().unwrap().kind,
+            CaptureKind::Function(target)
+        );
         assert!(
             runtime
                 .apply_binding_command(BindingCommand::BeginCapture(CaptureTarget { id, slot: 2 }))
                 .is_err()
         );
-        assert_eq!(runtime.capture().unwrap().target, target);
+        assert_eq!(
+            runtime.capture().unwrap().kind,
+            CaptureKind::Function(target)
+        );
         queue_capture_keys(&mut runtime, &[(0x79, false)], false);
         runtime.tick_with_capture_context(true, false);
         queue_capture_keys(&mut runtime, &[(0x7a, true), (0x7a, false)], false);
@@ -1820,6 +2222,7 @@ mod tests {
             fn configure(
                 &self,
                 _: &FunctionConfigs,
+                _: &[taprelay_core::mapping::CustomMapping],
                 _: &taprelay_core::foreground_app::ForegroundAppRules,
                 listening: bool,
                 _: bool,

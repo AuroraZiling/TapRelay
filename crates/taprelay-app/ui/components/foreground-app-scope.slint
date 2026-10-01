@@ -45,24 +45,24 @@ component ScopeChoice inherits Button {
     }
 }
 
-export component ForegroundAppScope inherits ElidedButton {
-    in property <string> function-id;
+export component ScopeSelector inherits ElidedButton {
     in property <string> scope-label;
+    in property <[ForegroundAppScopeOption]> options;
+    callback opening();
+    callback select-option(string);
     display-text: root.scope-label;
-    accessible-label: I18n.text.groups-scope + ": " + root.scope-label;
+    accessible-label: I18n.text.common-effective-scope + ": " + root.scope-label;
     variant: outline;
     size: sm;
-    accessible-id: "binding-scope-" + root.function-id;
-    disabled: ForegroundAppUi.busy;
     clicked => {
-        ForegroundAppUi.open-scope(root.function-id);
+        root.opening();
         choices.show();
     }
     choices := PopupWindow {
         x: root.width - self.width;
         y: root.height;
         width: 260px;
-        height: min(280px, ForegroundAppUi.scope-options.length * 36px + 12px);
+        height: min(280px, root.options.length * 36px + 12px);
         close-policy: close-on-click-outside;
         Rectangle {
             background: Tokens.color-card;
@@ -77,15 +77,24 @@ export component ForegroundAppScope inherits ElidedButton {
                 content := VerticalLayout {
                     width: parent.width;
                     alignment: start;
-                    for option in ForegroundAppUi.scope-options: ScopeChoice {
+                    for option in root.options: ScopeChoice {
                         option: option;
-                        disabled: root.disabled || ForegroundAppUi.busy;
+                        disabled: root.disabled;
                         clicked => {
-                            ForegroundAppUi.set-scope(ForegroundAppUi.scope-function, option.id);
+                            root.select-option(option.id);
                         }
                     }
                 }
             }
         }
     }
+}
+
+export component ForegroundAppScope inherits ScopeSelector {
+    in property <string> function-id;
+    options: ForegroundAppUi.scope-options;
+    accessible-id: "binding-scope-" + root.function-id;
+    disabled: ForegroundAppUi.busy;
+    opening => { ForegroundAppUi.open-scope(root.function-id); }
+    select-option(id) => { ForegroundAppUi.set-scope(ForegroundAppUi.scope-function, id); }
 }

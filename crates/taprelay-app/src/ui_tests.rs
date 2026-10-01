@@ -77,6 +77,288 @@ fn render_all_views_without_hardware() {
     check_foreground_app_list_virtualization(&ui);
     check_about_links(&ui);
     check_runtime_feedback(&ui);
+    check_custom_mappings(&ui);
+    check_mapping_record_toggle_clicks(&ui);
+}
+
+fn check_mapping_record_toggle_clicks(ui: &AppWindow) {
+    use slint::platform::{PointerEventButton, WindowEvent};
+    ui.set_mode(2);
+    ui.set_page(1);
+    ui.window().set_size(slint::LogicalSize::new(900., 500.));
+    let view = ui.global::<MappingUi>();
+    view.set_open(true);
+    view.set_editor(true);
+    view.set_saving(false);
+    view.set_busy(false);
+    view.set_error("".into());
+    view.set_capture_error("".into());
+    view.set_capture_slot(-1);
+    let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let observed = actions.clone();
+    let window = ui.as_weak();
+    view.on_command(move |command, _| {
+        observed.borrow_mut().push(command.to_string());
+        let ui = window.upgrade().unwrap();
+        let view = ui.global::<MappingUi>();
+        match command.as_str() {
+            "capture-output" => {
+                view.set_capture_slot(2);
+                view.set_busy(true);
+            }
+            "cancel-capture" => {
+                view.set_capture_slot(-1);
+                view.set_busy(false);
+            }
+            _ => {}
+        }
+    });
+    view.set_selected_output(MappingOutputOption::default());
+    actions.borrow_mut().clear();
+    ui.window().take_snapshot().unwrap();
+    let button = binding_element(ui, "mapping-record-output");
+    let position = button.absolute_position();
+    let size = button.size();
+    let position =
+        slint::LogicalPosition::new(position.x + size.width / 2., position.y + size.height / 2.);
+    for _ in 0..2 {
+        ui.window()
+            .dispatch_event(WindowEvent::PointerMoved { position });
+        ui.window().dispatch_event(WindowEvent::PointerPressed {
+            position,
+            button: PointerEventButton::Left,
+        });
+        ui.window().dispatch_event(WindowEvent::PointerReleased {
+            position,
+            button: PointerEventButton::Left,
+        });
+    }
+    assert_eq!(
+        *actions.borrow(),
+        vec!["capture-output", "cancel-capture"],
+        "Cancelling must not start recording again on pointer release"
+    );
+    view.set_editor(false);
+    view.set_open(false);
+}
+
+fn check_custom_mappings(ui: &AppWindow) {
+    use slint::platform::{Key, WindowEvent};
+    ui.set_mode(2);
+    ui.set_page(1);
+    ui.set_toast("".into());
+    ui.window().set_size(slint::LogicalSize::new(900., 500.));
+    let view = ui.global::<MappingUi>();
+    let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let observed = actions.clone();
+    view.on_command(move |command, value| {
+        observed
+            .borrow_mut()
+            .push((command.to_string(), value.to_string()))
+    });
+    let action = |id: &str, command: &str, value: &str| {
+        binding_element(ui, id).invoke_accessible_default_action();
+        assert_eq!(
+            actions.borrow().last(),
+            Some(&(command.into(), value.into()))
+        );
+    };
+    let missing = |id: &str| {
+        let id = id.to_owned();
+        ui.root_element()
+            .query_descendants()
+            .match_predicate(move |element| element.accessible_id().as_deref() == Some(id.as_str()))
+            .find_first()
+            .is_none()
+    };
+    let keyboard = MappingOutputOption {
+        label: "F24".into(),
+        value: "key/115".into(),
+        is_mouse: false,
+    };
+    let rows = ModelRc::new(VecModel::from(vec![MappingRow {
+        id: "7".into(),
+        name: "Hold key".into(),
+        input: "Ctrl+F12".into(),
+        output: "F24".into(),
+        scope: "All apps".into(),
+        enabled: true,
+    }]));
+    view.set_scopes(ModelRc::new(VecModel::from(vec![
+        ForegroundAppScopeOption {
+            id: "".into(),
+            name: "All apps".into(),
+            checked: true,
+        },
+        ForegroundAppScopeOption {
+            id: "games".into(),
+            name: "Games".into(),
+            checked: false,
+        },
+    ])));
+    view.set_scope_label("All apps".into());
+    let locale = "zh-CN";
+    i18n::apply(ui, locale);
+    view.set_open(true);
+    view.set_editor(false);
+    view.set_busy(false);
+    view.set_saving(false);
+    view.set_capture_slot(-1);
+    view.set_input_error("".into());
+    view.set_rows(ModelRc::default());
+    ui.window().take_snapshot().unwrap();
+    assert_eq!(
+        binding_element(ui, "mappings-empty")
+            .accessible_label()
+            .as_deref(),
+        Some(rust_i18n::t!("mappings.empty", locale = locale).as_ref())
+    );
+    assert!(missing("mappings-column-enabled"));
+    view.set_rows(rows.clone());
+    ui.window().take_snapshot().unwrap();
+    action("mapping-enabled-7", "toggle", "7");
+    action("mapping-edit-7", "edit", "7");
+    action("mapping-delete-7", "delete", "7");
+    view.set_editor(true);
+    view.set_name("Hold key".into());
+    view.set_entry_mode(0);
+    view.set_selected_output(MappingOutputOption::default());
+    view.set_ctrl(false);
+    view.set_inputs(ModelRc::default());
+    ui.window().take_snapshot().unwrap();
+    assert_eq!(
+        binding_element(ui, "mapping-output-preview")
+            .accessible_label()
+            .as_deref(),
+        Some(rust_i18n::t!("capture.pending", locale = locale).as_ref())
+    );
+    let before = actions.borrow().len();
+    binding_element(ui, "mapping-save").invoke_accessible_default_action();
+    assert_eq!(
+        actions.borrow().len(),
+        before,
+        "Missing output cannot be saved"
+    );
+    view.set_selected_output(keyboard.clone());
+    view.set_ctrl(true);
+    ui.window().take_snapshot().unwrap();
+    assert_eq!(
+        binding_element(ui, "mapping-output-preview")
+            .accessible_label()
+            .as_deref(),
+        Some("Ctrl+F24")
+    );
+    view.set_selected_output(MappingOutputOption {
+        label: i18n::mouse_button_label(locale, taprelay_core::input::MouseButton::Side2).into(),
+        value: "mouse/4".into(),
+        is_mouse: true,
+    });
+    ui.window().take_snapshot().unwrap();
+    assert!(missing("mapping-output-ctrl"));
+    ui.invoke_show_mapping_leave();
+    ui.window().take_snapshot().unwrap();
+    ui.window().dispatch_event(WindowEvent::KeyPressed {
+        text: Key::Escape.into(),
+    });
+    assert_eq!(actions.borrow().last(), Some(&("stay".into(), "".into())));
+    ui.invoke_close_mapping_leave();
+    view.set_selected_output(keyboard.clone());
+    view.set_ctrl(false);
+    action("mapping-add-input", "capture-input", "0");
+    view.set_capture_slot(0);
+    view.set_capture_text("Ctrl+F12".into());
+    view.set_capture_error("Duplicate shortcut".into());
+    view.set_busy(true);
+    ui.window().take_snapshot().unwrap();
+    let typed = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let observed = typed.clone();
+    ui.global::<BindingUi>()
+        .on_key_input(move |text, down| observed.borrow_mut().push((text.to_string(), down)));
+    ui.window()
+        .dispatch_event(WindowEvent::KeyPressed { text: "X".into() });
+    ui.window()
+        .dispatch_event(WindowEvent::KeyReleased { text: "X".into() });
+    assert_eq!(
+        *typed.borrow(),
+        vec![("X".into(), true), ("X".into(), false)]
+    );
+    assert_eq!(
+        view.get_name(),
+        "Hold key",
+        "Recording must not edit the description"
+    );
+    action("mapping-cancel-input-0", "cancel-capture", "");
+    view.set_capture_slot(-1);
+    view.set_capture_error("".into());
+    view.set_busy(false);
+    view.set_inputs(ModelRc::new(VecModel::from(vec!["Ctrl+F12".into()])));
+    ui.window().take_snapshot().unwrap();
+    action("mapping-add-input", "capture-input", "1");
+    action("mapping-delete-input-0", "remove-input", "0");
+    view.set_input_error("Duplicate shortcut".into());
+    let before = actions.borrow().len();
+    binding_element(ui, "mapping-save").invoke_accessible_default_action();
+    assert_eq!(actions.borrow().len(), before);
+    view.set_input_error("".into());
+    action("mapping-save", "save", "");
+    view.set_busy(true);
+    let before = actions.borrow().len();
+    binding_element(ui, "mapping-save").invoke_accessible_default_action();
+    assert_eq!(actions.borrow().len(), before);
+    view.set_busy(false);
+    binding_element(ui, "mapping-scope").invoke_accessible_default_action();
+    ui.window().take_snapshot().unwrap();
+    action("scope-choice-games", "scope", "games");
+    let before = actions.borrow().len();
+    ui.window().dispatch_event(WindowEvent::KeyPressed {
+        text: Key::Escape.into(),
+    });
+    assert_eq!(
+        actions.borrow().len(),
+        before,
+        "Closing scope popup must not leave the editor"
+    );
+    view.set_output_options(ModelRc::new(VecModel::from(vec![keyboard.clone()])));
+    binding_element(ui, "mapping-entry-manual").invoke_accessible_default_action();
+    ui.window().take_snapshot().unwrap();
+    assert_eq!(
+        view.get_selected_output(),
+        keyboard,
+        "Switching entry method preserves the key"
+    );
+    binding_element(ui, "mapping-select-output").invoke_accessible_default_action();
+    ui.window().take_snapshot().unwrap();
+    for text in ["F", "2", "4"] {
+        ui.window()
+            .dispatch_event(WindowEvent::KeyPressed { text: text.into() });
+        ui.window()
+            .dispatch_event(WindowEvent::KeyReleased { text: text.into() });
+    }
+    assert_eq!(
+        actions.borrow().last(),
+        Some(&("filter-output".into(), "F24".into()))
+    );
+    action("mapping-output-option-key/115", "select-output", "key/115");
+    binding_element(ui, "mapping-entry-record").invoke_accessible_default_action();
+    view.set_capture_slot(2);
+    ui.window().dispatch_event(WindowEvent::KeyPressed {
+        text: Key::Escape.into(),
+    });
+    assert_eq!(
+        typed.borrow().last(),
+        Some(&(slint::SharedString::from(Key::Escape).to_string(), true)),
+        "Receiver recording accepts Escape as a key"
+    );
+    view.set_capture_slot(-1);
+    view.set_saving(true);
+    let before = actions.borrow().len();
+    ui.window().dispatch_event(WindowEvent::KeyPressed {
+        text: Key::Escape.into(),
+    });
+    assert_eq!(actions.borrow().len(), before, "Cannot leave during save");
+    view.set_saving(false);
+    view.set_open(false);
+    view.set_editor(false);
 }
 
 fn check_foreground_app_icons(ui: &AppWindow) {
@@ -578,7 +860,7 @@ fn check_foreground_app_groups(ui: &AppWindow) {
                     .accessible_label()
                     .as_deref(),
                 Some(
-                    rust_i18n::t!("groups.new_title", locale = locale)
+                    rust_i18n::t!("common.new", locale = locale)
                         .into_owned()
                         .as_str()
                 )
@@ -1334,7 +1616,7 @@ fn check_binding_layouts_and_actions(ui: &AppWindow) {
             .iter()
             .enumerate()
             .map(|(i, d)| FunctionBindingRow {
-                scope_label: rust_i18n::t!("groups.all", locale = locale)
+                scope_label: rust_i18n::t!("common.all_apps", locale = locale)
                     .into_owned()
                     .into(),
                 scope_editable: d.category == taprelay_core::function::CategoryId::Media,
@@ -1406,7 +1688,7 @@ fn check_binding_layouts_and_actions(ui: &AppWindow) {
         assert_eq!(
             scope_header.accessible_label().as_deref(),
             Some(
-                rust_i18n::t!("groups.scope", locale = locale)
+                rust_i18n::t!("common.effective_scope", locale = locale)
                     .into_owned()
                     .as_str()
             )
@@ -1593,7 +1875,7 @@ fn check_volume_bindings(ui: &AppWindow) {
             let definition = taprelay_core::function::function_definition(id);
             let shortcut = Shortcut::new(ModifierSet::from_keys([0x11]), primary);
             FunctionBindingRow {
-                scope_label: rust_i18n::t!("groups.all", locale = locale)
+                scope_label: rust_i18n::t!("common.all_apps", locale = locale)
                     .into_owned()
                     .into(),
                 scope_editable: true,

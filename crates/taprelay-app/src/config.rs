@@ -13,6 +13,8 @@ pub struct Config {
     pub schema: u32,
     pub functions: FunctionConfigs,
     #[serde(default)]
+    pub custom_mappings: Vec<taprelay_core::mapping::CustomMapping>,
+    #[serde(default)]
     pub foreground_app_rules: taprelay_core::foreground_app::ForegroundAppRules,
     pub remembered_device: Option<Device>,
     pub wizard: Wizard,
@@ -22,7 +24,8 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            schema: 3,
+            schema: 4,
+            custom_mappings: Vec::new(),
             functions: function::default_configs(),
             foreground_app_rules: Default::default(),
             remembered_device: None,
@@ -196,12 +199,20 @@ impl Config {
             "Passthrough mouse percentage must be between 1 and 100"
         );
         ensure!(
-            self.schema == 3,
-            "Unsupported configuration format (expected schema 3)"
+            self.schema == 4,
+            "Unsupported configuration format (expected schema 4)"
         );
         ensure!(
             self.foreground_app_rules.valid_bindings(&self.functions),
             "Invalid application group or conflicting shortcut"
+        );
+        ensure!(
+            taprelay_core::mapping::valid(
+                &self.functions,
+                &self.foreground_app_rules,
+                &self.custom_mappings
+            ),
+            "Invalid custom mapping or conflicting shortcut"
         );
         ensure!(self.wizard.page <= 3, "Invalid wizard page");
         ensure!(
@@ -225,6 +236,9 @@ impl Config {
                     config
                         .shortcuts
                         .retain(|shortcut| !shortcut.is_standalone_primary_mouse_button());
+                }
+                if c.schema == 3 {
+                    c.schema = 4;
                 }
                 c.validate()?;
                 Ok(c)
@@ -484,7 +498,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let unsupported_schema = dir.path().join("unsupported-schema.json");
         let mut invalid = serde_json::to_value(Config::default()).unwrap();
-        invalid["schema"] = serde_json::json!(4);
+        invalid["schema"] = serde_json::json!(5);
         let invalid_bytes = serde_json::to_vec(&invalid).unwrap();
         std::fs::write(&unsupported_schema, &invalid_bytes).unwrap();
         assert!(Config::load(&unsupported_schema).is_err());

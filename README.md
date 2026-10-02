@@ -4,11 +4,11 @@
 
 Turn keyboard and mouse shortcuts on your computer into Bluetooth commands to control another device.
 
-This is a personal project, so device compatibility is at the *works on my machine* stage.
+This is a personal project, so it *works on my machine*.
 
 ## Requirements
 
-- Windows x64 (*macOS support is not implemented yet, as I haven't bought the Mac needed for it.*)
+- Windows x64 (*macOS support is not implemented yet*)
 - A Bluetooth adapter and driver that support Bluetooth Low Energy (BLE) peripheral mode.
 - A receiver that accepts media controls over BLE HID.
 

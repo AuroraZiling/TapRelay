@@ -132,14 +132,16 @@ jobs:
             const name = `TapRelay_${process.env.VERSION}_Windows_x64.zip`;
             const asset = fs.readFileSync(`release-assets/${name}`);
             if (!asset.length) throw new Error('Release ZIP is empty.');
-            let release;
-            try {
-              ({ data: release } = await github.rest.repos.getReleaseByTag({ ...repo, tag }));
-            } catch (error) {
-              if (error.status !== 404) throw error;
+            // List releases also finds drafts when this token has push access.
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              ...repo, per_page: 100,
+            });
+            let release = releases.find(item => item.tag_name === tag);
+            if (!release) {
               ({ data: release } = await github.rest.repos.createRelease({
                 ...repo, tag_name: tag, name: `TapRelay ${tag}`,
-                draft: false, prerelease: false, generate_release_notes: true,
+                draft: true, prerelease: false,
+                body: '## English\n\n<!-- Add English release notes before publishing. -->\n\n## 简体中文\n\n<!-- 发布前补充中文更新说明。 -->',
               }));
             }
             const assets = await github.paginate(github.rest.repos.listReleaseAssets, {
@@ -153,4 +155,4 @@ jobs:
               headers: { 'content-type': 'application/zip', 'content-length': asset.length },
               data: asset,
             });
-            core.info(`Published ${name} to ${release.html_url}`);
+            core.info(`Uploaded ${name} to ${release.draft ? 'draft' : 'published'} release ${release.html_url}`);

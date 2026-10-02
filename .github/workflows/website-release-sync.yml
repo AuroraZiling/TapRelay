@@ -1,0 +1,27 @@
+# Install in AuroraZiling/TapRelay/.github/workflows/website-release-sync.yml.
+# Configure TAPRELAY_WEBSITE_DEPLOY_HOOK as a repository Actions secret.
+name: Refresh TapRelay Website
+on:
+  release:
+    types: [published, edited, deleted, unpublished, released, prereleased]
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: taprelay-website-refresh
+  cancel-in-progress: false
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Request a fresh website build
+        env:
+          DEPLOY_HOOK: ${{ secrets.TAPRELAY_WEBSITE_DEPLOY_HOOK }}
+        shell: bash
+        run: |
+          if [ -z "$DEPLOY_HOOK" ]; then
+            echo 'TAPRELAY_WEBSITE_DEPLOY_HOOK is not configured.' >&2
+            exit 1
+          fi
+          curl --fail --silent --show-error --retry 3 --max-time 30 \
+            --request POST "$DEPLOY_HOOK" > /dev/null

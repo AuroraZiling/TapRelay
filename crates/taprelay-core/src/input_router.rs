@@ -443,24 +443,16 @@ impl InputRouter {
     }
 
     /// Route an edge that belongs to TapRelay's own configuration window.
-    /// Physical state is still updated and a captured function is released,
-    /// App control toggles can start here; active passthrough owns
-    /// the window's input just like every other window.
+    /// Configured function shortcuts also work here, with the same listening,
+    /// recording, and scope rules as other windows. Unmatched input remains
+    /// local for editing; active passthrough owns the window's input too.
     pub fn route_local_event(&mut self, event: InputEvent) -> RouteResult {
         if self.passthrough {
             return self.route_event(event);
         }
         if event.down
             && !self.recording
-            && self
-                .index
-                .best_match_where(event.code, &self.physical, |id| {
-                    matches!(
-                        id,
-                        FunctionId::AppToggleListening | FunctionId::AppTogglePassthrough
-                    )
-                })
-                .is_some()
+            && self.index.best_match(event.code, &self.physical).is_some()
         {
             return self.route_event(event);
         }
@@ -1866,14 +1858,14 @@ mod tests {
     }
 
     #[test]
-    fn local_window_event_bypasses_matching_and_preserves_modifier_release() {
+    fn unmatched_local_window_event_preserves_modifier_release() {
         let mut router = router_with(
             Shortcut::keyboard(
                 ModifierSet {
                     ctrl: true,
                     ..Default::default()
                 },
-                0x58,
+                0x59,
             ),
             FunctionId::MediaNext,
         );
@@ -1904,6 +1896,76 @@ mod tests {
             })]
         ));
     }
+    #[test]
+    fn function_shortcuts_work_with_the_configuration_window_in_front() {
+        for shortcut in [
+            Shortcut::keyboard(ModifierSet::from_keys([0xa0, 0xa2]), 0x50),
+            Shortcut::mouse(ModifierSet::from_keys([0xa0]), MouseButton::Side1),
+        ] {
+            let mut router = router_with(shortcut.clone(), FunctionId::MediaPlayPause);
+            let held: Vec<_> = [0xa0, 0xa2]
+                .into_iter()
+                .filter(|key| shortcut.modifiers.contains_key(*key))
+                .collect();
+            for &key in &held {
+                let result = router.route_local_event(event(InputCode::Key(key), true));
+                assert!(!result.consume);
+                assert!(outputs(&result).is_empty());
+            }
+            let code = shortcut.primary_code();
+            let down = router.route_local_event(event(code, true));
+            assert!(
+                down.consume,
+                "{shortcut:?} was bypassed in the foreground window"
+            );
+            assert_eq!(outputs(&down), [(media(MediaCommand::PlayPause), true)]);
+            let repeat = router.route_local_event(event(code, true));
+            assert!(repeat.consume);
+            assert!(outputs(&repeat).is_empty());
+            let up = router.route_local_event(event(code, false));
+            assert!(up.consume);
+            assert!(outputs(&up).is_empty());
+            for key in held {
+                let result = router.route_local_event(event(InputCode::Key(key), false));
+                assert!(!result.consume);
+                assert!(outputs(&result).is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn local_function_shortcuts_respect_recording_pause_and_foreground_scope() {
+        let shortcut = Shortcut::keyboard(ModifierSet::from_keys([0xa0, 0xa2]), 0x50);
+        for blocked_by in ["recording", "pause", "scope"] {
+            let mut router = router_with(shortcut.clone(), FunctionId::MediaPlayPause);
+            match blocked_by {
+                "recording" => {
+                    router.set_recording(true);
+                }
+                "pause" => {
+                    router.set_listening(false);
+                }
+                "scope" => {
+                    router.set_foreground_app_rules(&scoped_rules(FunctionId::MediaPlayPause));
+                    router.set_foreground(Some(r"C:\TapRelay.exe"));
+                }
+                _ => unreachable!(),
+            }
+            for (key, down) in [
+                (0xa0, true),
+                (0xa2, true),
+                (0x50, true),
+                (0x50, false),
+                (0xa2, false),
+                (0xa0, false),
+            ] {
+                let result = router.route_local_event(event(InputCode::Key(key), down));
+                assert!(!result.consume, "input was consumed during {blocked_by}");
+                assert!(outputs(&result).is_empty());
+            }
+        }
+    }
+
     #[test]
     fn app_toggle_survives_pause_without_repeating_or_leaking_edges() {
         for shortcut in [

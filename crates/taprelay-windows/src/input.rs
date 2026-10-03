@@ -14,28 +14,33 @@ use std::{
     time::{Duration, Instant},
 };
 use taprelay_core::{
-    function::FunctionConfigs,
+    function::{AppCommand, FunctionAction, FunctionConfigs},
     input::{InputCode, InputEvent, MouseButton},
     input_router::{InputRouter, PhysicalInput, RouteResult, RoutedInput, RoutedOutput},
+    passthrough::{Event as PassthroughEvent, InputLink, KeyUsage},
     ports::BackendError,
 };
 use tokio::sync::mpsc::Sender;
 use windows::Win32::{
     Foundation::*,
-    System::{LibraryLoader::GetModuleHandleW, Threading::GetCurrentThreadId},
+    System::{
+        LibraryLoader::GetModuleHandleW,
+        Threading::{GetCurrentProcessId, GetCurrentThreadId},
+    },
     UI::Input::KeyboardAndMouse::*,
     UI::WindowsAndMessaging::*,
 };
-use windows::core::w;
 mod raw;
-use taprelay_core::{
-    function::{AppCommand, FunctionAction},
-    passthrough::{Event as PassthroughEvent, InputLink, KeyUsage},
-};
 thread_local! { static PASSTHROUGH: RefCell<Option<InputLink>> = const { RefCell::new(None) }; }
 thread_local! { static KEY_USAGES: RefCell<[Option<KeyUsage>; 256]> = const { RefCell::new([None; 256]) }; }
 thread_local! { static KEYBOARD_HOOK: RefCell<Option<Hook>> = const { RefCell::new(None) }; }
-thread_local! { static KEYBOARD_SEEN: RefCell<VecDeque<(KeyboardStamp, bool)>> = const { RefCell::new(VecDeque::new()) }; }
+thread_local! { static KEYBOARD_SEEN: RefCell<VecDeque<KeyboardObservation>> = const { RefCell::new(VecDeque::new()) }; }
+
+struct KeyboardObservation {
+    stamp: KeyboardStamp,
+    raw: bool,
+    consume: bool,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct KeyboardStamp {
@@ -46,7 +51,7 @@ struct KeyboardStamp {
     down: bool,
 }
 
-fn duplicate_keyboard(event: &KBDLLHOOKSTRUCT, message: u32, raw: bool) -> bool {
+fn observed_keyboard(event: &KBDLLHOOKSTRUCT, message: u32, raw: bool) -> bool {
     let stamp = KeyboardStamp {
         time: event.time,
         scan: event.scanCode,
@@ -57,21 +62,28 @@ fn duplicate_keyboard(event: &KBDLLHOOKSTRUCT, message: u32, raw: bool) -> bool 
         extended: event.flags.contains(LLKHF_EXTENDED),
         down: matches!(message, WM_KEYDOWN | WM_SYSKEYDOWN),
     };
+    let duplicate = KEYBOARD_SEEN.with(|seen| {
+        let mut seen = seen.borrow_mut();
+        seen.iter()
+            .position(|other| other.stamp == stamp && other.raw != raw)
+            .and_then(|index| seen.remove(index).map(|other| other.consume))
+    });
+    if let Some(consume) = duplicate {
+        return consume;
+    }
+    let consume = route_keyboard(event, message, raw);
     KEYBOARD_SEEN.with(|seen| {
         let mut seen = seen.borrow_mut();
-        if let Some(index) = seen
-            .iter()
-            .position(|(other, source)| *other == stamp && *source != raw)
-        {
-            seen.remove(index);
-            return true;
-        }
         if seen.len() == 1024 {
             seen.pop_front();
         }
-        seen.push_back((stamp, raw));
-        false
-    })
+        seen.push_back(KeyboardObservation {
+            stamp,
+            raw,
+            consume,
+        });
+    });
+    consume
 }
 
 thread_local! { static DISPATCH: RefCell<Option<Sender<RoutedInput>>> = const { RefCell::new(None) }; }
@@ -85,7 +97,6 @@ struct PolicyRequest {
     ordered: bool,
 }
 thread_local! { static LAST_MOUSE_POINT: Cell<Option<POINT>> = const { Cell::new(None) }; }
-thread_local! { static TAPRELAY_WINDOW: Cell<HWND> = const { Cell::new(HWND(std::ptr::null_mut())) }; }
 // The router decides a tap from a hold by elapsed time alone, so this thread
 // must be woken at the pending threshold instead of at the next physical edge.
 // The deadline is cached so an unchanged one costs no syscall.
@@ -143,6 +154,8 @@ struct HookPolicy {
     listening: bool,
     recording: bool,
 }
+
+const MODIFIER_KEYS: [u8; 8] = [0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0x5b, 0x5c];
 
 impl HookPolicy {
     fn new() -> Self {
@@ -206,15 +219,55 @@ impl HookPolicy {
         result
     }
 
-    fn edge(&mut self, event: InputEvent) -> RouteResult {
-        let mut result = self.refresh_foreground();
-        append(&mut result, self.router.route_event(event));
-        result
+    fn edge(&mut self, event: InputEvent, local: bool) -> RouteResult {
+        self.route_edge(event, local, self.modifier_snapshot(event))
     }
 
-    fn local_edge(&mut self, event: InputEvent) -> RouteResult {
+    fn modifier_snapshot(&self, event: InputEvent) -> Option<[bool; 8]> {
+        // A keyboard hook runs before its current key's asynchronous state is
+        // updated. Sample only on other edges, when held modifiers are stable.
+        // Passthrough replays local releases, so its async state is not physical.
+        if self.router.passthrough()
+            || matches!(event.code, InputCode::Key(key) if taprelay_core::input::modifier(key))
+        {
+            return None;
+        }
+        Some(MODIFIER_KEYS.map(|key| unsafe { GetAsyncKeyState(i32::from(key)) < 0 }))
+    }
+
+    fn route_edge(
+        &mut self,
+        event: InputEvent,
+        local: bool,
+        modifiers: Option<[bool; 8]>,
+    ) -> RouteResult {
         let mut result = self.refresh_foreground();
-        append(&mut result, self.router.route_local_event(event));
+        if !self.router.passthrough()
+            && !matches!(event.code, InputCode::Key(key) if taprelay_core::input::modifier(key))
+            && let Some(modifiers) = modifiers
+        {
+            for (key, down) in MODIFIER_KEYS.into_iter().zip(modifiers) {
+                // Reconcile through local routing so an inferred modifier
+                // cannot start a shortcut or synthesize a key on the host.
+                let mut reconciled = self.router.route_local_event(InputEvent {
+                    code: InputCode::Key(key),
+                    down,
+                    captured: event.captured,
+                });
+                // This inferred edge cannot consume the unrelated physical
+                // button/key that caused the state check.
+                reconciled.consume = false;
+                append(&mut result, reconciled);
+            }
+        }
+        append(
+            &mut result,
+            if local {
+                self.router.route_local_event(event)
+            } else {
+                self.router.route_event(event)
+            },
+        );
         result
     }
 
@@ -502,11 +555,14 @@ impl InputHandle {
                                     6 => InputCode::Mouse(MouseButton::Side2),
                                     _ => InputCode::Key(key as u8),
                                 };
-                                p.local_edge(InputEvent {
-                                    code,
-                                    down: true,
-                                    captured: Instant::now(),
-                                });
+                                p.edge(
+                                    InputEvent {
+                                        code,
+                                        down: true,
+                                        captured: Instant::now(),
+                                    },
+                                    true,
+                                );
                             }
                         });
                         if started.send(Ok(GetCurrentThreadId())).is_err() {
@@ -967,7 +1023,7 @@ fn raw_mouse_edge(button: MouseButton, down: bool, captured: Instant) {
         down,
         captured,
     };
-    let mut result = policy_edge(event);
+    let mut result = policy_edge(event, false);
     arm_policy_timer();
     if prepare_hook_result_at(&mut result, captured) && !result.outputs.is_empty() {
         emit(event, result);
@@ -975,22 +1031,18 @@ fn raw_mouse_edge(button: MouseButton, down: bool, captured: Instant) {
 }
 
 fn taprelay_foreground() -> bool {
-    unsafe { taprelay_window_handle().is_some_and(|window| window == GetForegroundWindow()) }
+    unsafe { taprelay_window(GetForegroundWindow()) }
 }
 
-fn taprelay_window_handle() -> Option<HWND> {
-    let mut window = None;
-    TAPRELAY_WINDOW.with(|cached| {
-        let mut value = cached.get();
-        if value.0.is_null() {
-            value = unsafe { FindWindowW(w!("TapRelay.Desktop.v2"), None).unwrap_or_default() };
-            cached.set(value);
-        }
-        if !value.0.is_null() {
-            window = Some(value);
-        }
-    });
-    window
+fn taprelay_window(window: HWND) -> bool {
+    if window.0.is_null() {
+        return false;
+    }
+    let mut process = 0;
+    unsafe {
+        GetWindowThreadProcessId(window, Some(&mut process));
+        process == GetCurrentProcessId()
+    }
 }
 
 fn taprelay_window_at(point: POINT) -> bool {
@@ -1000,11 +1052,11 @@ fn taprelay_window_at(point: POINT) -> bool {
             return false;
         }
         let root = GetAncestor(window, GA_ROOT);
-        taprelay_window_handle().is_some_and(|app| app == root)
+        taprelay_window(root)
     }
 }
 
-fn policy_edge(event: InputEvent) -> RouteResult {
+fn policy_edge(event: InputEvent, local: bool) -> RouteResult {
     POLICY.with(|policy| {
         let mut borrowed = policy.borrow_mut();
         let Some(policy) = borrowed.as_mut() else {
@@ -1012,18 +1064,7 @@ fn policy_edge(event: InputEvent) -> RouteResult {
             return RouteResult::default();
         };
 
-        policy.edge(event)
-    })
-}
-fn policy_local_edge(event: InputEvent) -> RouteResult {
-    POLICY.with(|policy| {
-        let mut borrowed = policy.borrow_mut();
-        let Some(policy) = borrowed.as_mut() else {
-            stop(StopReason::PolicyUnavailable);
-            return RouteResult::default();
-        };
-
-        policy.local_edge(event)
+        policy.edge(event, local)
     })
 }
 fn policy_motion(motion: PhysicalInput) -> RouteResult {
@@ -1202,10 +1243,7 @@ pub fn keyboard_layout() -> usize {
 }
 
 fn raw_keyboard(keyboard: windows::Win32::UI::Input::RAWKEYBOARD, time: u32) {
-    if !passthrough_active()
-        || keyboard.ExtraInformation == REPLAY_TAG as u32
-        || keyboard.VKey == 255
-    {
+    if keyboard.ExtraInformation == REPLAY_TAG as u32 || keyboard.VKey == 255 {
         return;
     }
     let event = KBDLLHOOKSTRUCT {
@@ -1219,12 +1257,10 @@ fn raw_keyboard(keyboard: windows::Win32::UI::Input::RAWKEYBOARD, time: u32) {
         },
         ..Default::default()
     };
-    if !duplicate_keyboard(&event, keyboard.Message, true) {
-        route_keyboard(&event, keyboard.Message);
-    }
+    observed_keyboard(&event, keyboard.Message, true);
 }
 
-fn route_keyboard(event: &KBDLLHOOKSTRUCT, message: u32) -> bool {
+fn route_keyboard(event: &KBDLLHOOKSTRUCT, message: u32, raw: bool) -> bool {
     let edge = match message {
         WM_KEYDOWN | WM_SYSKEYDOWN => keyboard_code(event).map(|code| (code, true)),
         WM_KEYUP | WM_SYSKEYUP => keyboard_code(event).map(|code| (code, false)),
@@ -1245,11 +1281,22 @@ fn route_keyboard(event: &KBDLLHOOKSTRUCT, message: u32) -> bool {
             down,
             captured: raw::captured_at(event.time),
         };
-        let mut result = if taprelay_foreground() {
-            policy_local_edge(input)
-        } else {
-            policy_edge(input)
-        };
+        let local = taprelay_foreground();
+        let mut result = POLICY.with(|policy| {
+            let mut policy = policy.borrow_mut();
+            let Some(policy) = policy.as_mut() else {
+                stop(StopReason::PolicyUnavailable);
+                return RouteResult::default();
+            };
+            // Raw Input supplies the ordered physical modifier stream itself.
+            // Async state may already reflect a later edge by the time it arrives.
+            let modifiers = if raw {
+                None
+            } else {
+                policy.modifier_snapshot(input)
+            };
+            policy.route_edge(input, local, modifiers)
+        });
         // A merged shortcut starts a hold window on its press edge
         // and ends one on its release edge.
         arm_policy_timer();
@@ -1273,11 +1320,7 @@ unsafe extern "system" fn keyboard_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LR
             // Windows owns this structure for the duration of the hook callback.
             let event = unsafe { &*(lp.0 as *const KBDLLHOOKSTRUCT) };
             if !event.flags.contains(LLKHF_INJECTED) {
-                consume = if passthrough_active() && duplicate_keyboard(event, wp.0 as u32, false) {
-                    true
-                } else {
-                    route_keyboard(event, wp.0 as u32)
-                };
+                consume = observed_keyboard(event, wp.0 as u32, false);
             }
         }));
         if outcome.is_err() {
@@ -1343,11 +1386,7 @@ unsafe extern "system" fn mouse_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESU
                         down,
                         captured: Instant::now(),
                     };
-                    let mut result = if local_window {
-                        policy_local_edge(input)
-                    } else {
-                        policy_edge(input)
-                    };
+                    let mut result = policy_edge(input, local_window);
                     arm_policy_timer();
                     if prepare_hook_result(&mut result) {
                         consume = result.consume;
@@ -1414,6 +1453,189 @@ unsafe extern "system" fn mouse_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESU
 #[cfg(test)]
 mod tests {
     use super::*;
+    use windows::core::w;
+
+    #[test]
+    fn raw_keyboard_recovers_shortcuts_missing_from_the_hook() {
+        use taprelay_core::function::{FunctionConfig, FunctionId, ModifierSet, Shortcut};
+        use windows::Win32::UI::Input::RAWKEYBOARD;
+        let mut configs = taprelay_core::function::default_configs();
+        configs.insert(
+            FunctionId::AppToggleListening,
+            FunctionConfig {
+                enabled: true,
+                shortcuts: vec![Shortcut::keyboard(ModifierSet::from_keys([0xa0]), 0xdd)],
+            },
+        );
+        let mut policy = HookPolicy::new();
+        policy.configure(&configs, &[], &Default::default(), true, false, 0);
+        POLICY.with(|slot| *slot.borrow_mut() = Some(policy));
+        KEYBOARD_SEEN.with(|seen| seen.borrow_mut().clear());
+        let (sender, mut received) = tokio::sync::mpsc::channel(16);
+        DISPATCH.with(|slot| *slot.borrow_mut() = Some(sender));
+        for (key, scan) in [(0x10, 0x2a), (0xdd, 0x1b)] {
+            raw_keyboard(
+                RAWKEYBOARD {
+                    VKey: key,
+                    MakeCode: scan,
+                    Message: WM_KEYDOWN,
+                    ..Default::default()
+                },
+                123,
+            );
+        }
+        // A delayed hook copy must retain the raw route's consumption
+        // decision without toggling the same shortcut a second time.
+        let duplicate = KBDLLHOOKSTRUCT {
+            vkCode: 0xdd,
+            scanCode: 0x1b,
+            time: 123,
+            ..Default::default()
+        };
+        let consumed = observed_keyboard(&duplicate, WM_KEYDOWN, false);
+        let mut recognized = 0;
+        while let Ok(input) = received.try_recv() {
+            if let RoutedInput::Edge { result, .. } = input {
+                recognized += result
+                    .outputs
+                    .iter()
+                    .filter(|output| matches!(output, RoutedOutput::Feedback { .. }))
+                    .count();
+            }
+        }
+        DISPATCH.with(|slot| *slot.borrow_mut() = None);
+        POLICY.with(|slot| *slot.borrow_mut() = None);
+        KEYBOARD_SEEN.with(|seen| seen.borrow_mut().clear());
+        assert_eq!(recognized, 1, "the raw keyboard fallback lost Shift+]");
+        assert!(consumed, "duplicate hook input lost its consume decision");
+    }
+
+    #[test]
+    fn application_windows_are_recognized_independently_of_the_tray_window_class() {
+        let window = crate::native::OwnedWindow(unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("STATIC"),
+                w!("TapRelay input test"),
+                WS_POPUP,
+                0,
+                0,
+                0,
+                0,
+                None,
+                None,
+                Some(GetModuleHandleW(None).unwrap().into()),
+                None,
+            )
+            .unwrap()
+        });
+        assert!(taprelay_window(window.0));
+        assert!(!taprelay_window(HWND(std::ptr::null_mut())));
+    }
+
+    #[test]
+    fn missing_modifier_edges_still_select_the_correct_shortcut_slot() {
+        use taprelay_core::function::{FunctionConfig, FunctionId, ModifierSet, Shortcut};
+        for (primary, held_keys) in [
+            (InputCode::Mouse(MouseButton::Side2), &[0][..]),
+            (InputCode::Mouse(MouseButton::Side2), &[1][..]),
+            (InputCode::Key(0x50), &[0, 2][..]),
+            (InputCode::Key(0x50), &[1, 3][..]),
+        ] {
+            let shortcut = |modifiers| match primary {
+                InputCode::Mouse(button) => Shortcut::mouse(modifiers, button),
+                InputCode::Key(key) => Shortcut::keyboard(modifiers, key),
+            };
+            let mut configs = taprelay_core::function::default_configs();
+            configs.insert(
+                FunctionId::MediaPlayPause,
+                FunctionConfig {
+                    enabled: true,
+                    shortcuts: vec![
+                        shortcut(ModifierSet::empty()),
+                        shortcut(ModifierSet::from_keys(
+                            held_keys.iter().map(|&index| MODIFIER_KEYS[index]),
+                        )),
+                    ],
+                },
+            );
+            let mut policy = HookPolicy::new();
+            policy.configure(&configs, &[], &Default::default(), true, false, 0);
+            let mut held = [false; 8];
+            for &index in held_keys {
+                held[index] = true;
+            }
+            // Replay the observed trace: Shift is physically down but
+            // its hook edge never reached TapRelay.
+            for (modifiers, expected_slot) in [(held, 1), ([false; 8], 0)] {
+                let event = InputEvent {
+                    code: primary,
+                    down: true,
+                    captured: Instant::now(),
+                };
+                let result = policy.route_edge(event, true, Some(modifiers));
+                let slot = result.outputs.iter().find_map(|output| match output {
+                    RoutedOutput::Feedback { binding, .. } => Some(binding.slot),
+                    _ => None,
+                });
+                assert_eq!(
+                    slot,
+                    Some(expected_slot),
+                    "primary={primary:?}, held={held_keys:?}"
+                );
+                policy.route_edge(
+                    InputEvent {
+                        down: false,
+                        ..event
+                    },
+                    true,
+                    Some(modifiers),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn modifier_callbacks_and_passthrough_do_not_use_asynchronous_state() {
+        let mut policy = HookPolicy::new();
+        let shift = InputEvent {
+            code: InputCode::Key(0xa0),
+            down: true,
+            captured: Instant::now(),
+        };
+        assert!(policy.modifier_snapshot(shift).is_none());
+        policy.route_edge(shift, true, Some([false; 8]));
+        // The callback's down wins over an async snapshot still reporting up.
+        let up = policy.route_edge(
+            InputEvent {
+                down: false,
+                ..shift
+            },
+            true,
+            None,
+        );
+        assert_eq!(
+            up.outputs,
+            [RoutedOutput::Local(PhysicalInput::Edge {
+                code: shift.code,
+                down: false
+            })]
+        );
+        policy.router.set_passthrough(true);
+        let primary = InputEvent {
+            code: InputCode::Key(0x50),
+            ..shift
+        };
+        assert!(policy.modifier_snapshot(primary).is_none());
+        let result = policy.route_edge(primary, true, Some([true; 8]));
+        assert_eq!(
+            result.outputs,
+            [RoutedOutput::Remote(PhysicalInput::Edge {
+                code: primary.code,
+                down: true
+            })]
+        );
+    }
 
     #[test]
     fn host_release_preserves_keypad_enter_and_right_modifier_identity() {

@@ -49,23 +49,35 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - name: Resolve release version
-        if: startsWith(github.ref, 'refs/tags/')
-        id: version
-        shell: pwsh
-        env:
-          TAG_NAME: ${{ github.ref_name }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if ($env:TAG_NAME -cnotmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
-            throw 'Release tags must use vX.Y.Z.'
-          }
-          $version = $env:TAG_NAME.Substring(1)
-          "version=$version" >> $env:GITHUB_OUTPUT
-          "TAPRELAY_VERSION=$version" >> $env:GITHUB_ENV
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-09-20
+      - name: Set release version from tag
+        id: version
+        shell: python
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          import os, re, subprocess
+          from pathlib import Path
+
+          tag = os.environ["TAG_NAME"]
+          if not re.fullmatch(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", tag):
+              raise SystemExit("Release tags must use vX.Y.Z.")
+          version = tag[1:]
+          manifest = Path("Cargo.toml")
+          content, count = re.subn(
+              r'(\[workspace\.package\]\s*version\s*=\s*")[^"]+(")',
+              lambda m: f'{m[1]}{version}{m[2]}',
+              manifest.read_text(encoding="utf-8"),
+          )
+          if count != 1:
+              raise SystemExit("Expected one workspace.package.version in Cargo.toml.")
+          manifest.write_text(content, encoding="utf-8")
+          subprocess.run(["cargo", "update", "--workspace"], check=True)
+          for target, value in [("GITHUB_OUTPUT", f"version={version}"), ("GITHUB_ENV", f"TAPRELAY_VERSION={version}")]:
+              with open(os.environ[target], "a", encoding="utf-8") as output:
+                  output.write(value + "\n")
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: windows-release

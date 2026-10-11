@@ -1,6 +1,39 @@
 //! User-visible asynchronous states, independent of GUI widgets and wall-clock time.
 use std::time::{Duration, Instant};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ErrorScope {
+    Connection,
+    Startup,
+    Runtime,
+}
+
+impl ErrorScope {
+    pub fn summary_key(self, state: &taprelay_core::state::Snapshot) -> &'static str {
+        use crate::i18n::keys;
+        use taprelay_core::devices::{AdapterState, DeviceError};
+        match self {
+            Self::Connection if state.adapter_state == AdapterState::Disabled => {
+                keys::RECEIVER_ADAPTER_OFF
+            }
+            Self::Connection if state.adapter_state == AdapterState::Unavailable => {
+                keys::RECEIVER_ADAPTER_MISSING
+            }
+            Self::Connection if state.hid_suspended => keys::RECEIVER_SUSPENDED,
+            Self::Connection if state.device_error == Some(DeviceError::PairingLaunchFailed) => {
+                keys::RECEIVER_PAIR_FAILED
+            }
+            Self::Connection => keys::ERROR_CONNECTION,
+            Self::Startup => keys::ERROR_STARTUP,
+            Self::Runtime => keys::RUNTIME_STOPPED,
+        }
+    }
+
+    pub fn can_retry(self) -> bool {
+        self == Self::Connection
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum TestStatus {
     #[default]

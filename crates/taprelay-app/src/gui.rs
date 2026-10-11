@@ -572,11 +572,14 @@ impl Controller {
     }
     fn error(&mut self, message: &str) {
         tracing::error!("{message}");
-        self.say(format!("{}: {message}", self.tr(keys::ERROR_ACTION)));
+        self.say(self.tr(keys::ERROR_OPERATION));
+        self.notify_error(&self.tr(keys::ERROR_OPERATION));
+    }
+    fn notify_error(&mut self, summary: &str) {
         if self.runtime.config.options.notifications
             && self.last_notification.elapsed() > Duration::from_secs(60)
         {
-            self.desktop.notify("TapRelay", message);
+            self.desktop.notify("TapRelay", summary);
             self.last_notification = Instant::now();
         }
     }
@@ -918,7 +921,12 @@ impl Controller {
                 && (!self.runtime.state.adapter
                     || (!self.runtime.state.service && !self.runtime.state.service_paused))
             {
-                self.error(&e);
+                tracing::error!("{e}");
+                self.notify_error(
+                    &self
+                        .tr(crate::feedback::ErrorScope::Connection
+                            .summary_key(&self.runtime.state)),
+                );
             }
         }
         let warning_enabled = self.passed
@@ -932,7 +940,8 @@ impl Controller {
             now,
         ) {
             let message = self.tr(keys::RECEIVER_TIMEOUT);
-            self.error(&message);
+            self.say(message.clone());
+            self.notify_error(&message);
         }
         self.flush(false);
         if let Err(error) = self.present_startup(ui) {
@@ -1081,6 +1090,13 @@ impl Controller {
         ui.set_device_selected(s.selected.is_some());
         ui.set_discovery_status(self.tr(crate::receiver_view::page_status_key(s)).into());
         let timeout = !self.passed && self.started.elapsed() > Duration::from_secs(30);
+        let scope = if self.fatal.is_some() {
+            crate::feedback::ErrorScope::Startup
+        } else if self.runtime.stopped() {
+            crate::feedback::ErrorScope::Runtime
+        } else {
+            crate::feedback::ErrorScope::Connection
+        };
         let failure = self
             .fatal
             .clone()
@@ -1102,7 +1118,13 @@ impl Controller {
         if self.fatal.is_some() {
             ui.set_mode(3);
         }
-        ui.set_problem(failure.clone().unwrap_or_default().into());
+        ui.set_problem(if failure.is_some() {
+            self.tr(scope.summary_key(s)).into()
+        } else {
+            "".into()
+        });
+        ui.set_problem_retry_allowed(scope.can_retry() && !self.runtime.stopped());
+        ui.set_problem_busy(self.runtime.busy() || self.recovering);
         ui.set_busy((!self.passed || self.recovering) && failure.is_none());
         let checks_key = (flags, self.fatal.is_some(), failure.is_some(), locale);
         if self.previous_checks != Some(checks_key) {

@@ -65,6 +65,8 @@ export component AppWindow inherits Window {
     in property <string> stage-detail;
     in property <string> diagnostics;
     in property <string> problem;
+    in property <bool> problem-retry-allowed;
+    in property <bool> problem-busy;
     in property <int> input-count;
     in property <string> toast;
     in property <int> state-color: 2;
@@ -112,6 +114,12 @@ export component AppWindow inherits Window {
         VerticalLayout {
             padding: 28px;
             spacing: 20px;
+            if root.problem != "": ErrorBanner {
+                problem: root.problem;
+                retry-allowed: root.problem-retry-allowed;
+                busy: root.problem-busy;
+                action(name, value) => { root.action(name, value); }
+            }
             if root.mode == 0 || root.mode == 3: EnvironmentPage {
                 busy: root.busy;
                 checks: root.checks;
@@ -129,7 +137,6 @@ export component AppWindow inherits Window {
                 scanning: root.scanning;
                 paired-devices: root.paired-devices;
                 elevated: root.elevated;
-                problem: root.problem;
                 relay-status: root.relay-status;
                 receiver-next-allowed: root.receiver-next-allowed;
                 step: root.wizard-page <= 1 ? 0 : root.wizard-page - 1;
@@ -229,12 +236,6 @@ export component AppWindow inherits Window {
                         clicked => { ForegroundAppUi.command("cancel", ""); }
                     }
 
-                }
-                if root.problem != "" && root.page != Navigation.bindings.page: ErrorBanner {
-                    problem: root.problem;
-                    action(name,value)=> {
-                        root.action(name,value);
-                    }
                 }
                 if root.page == Navigation.overview.page: OverviewPage {
                     bindings: root.bindings;

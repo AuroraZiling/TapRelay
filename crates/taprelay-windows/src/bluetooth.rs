@@ -988,6 +988,15 @@ impl Server {
         );
     }
     fn fail(&mut self, e: &BackendError) {
+        // Revocation during a notification is expected on suspend, reconnect,
+        // or input-mode changes. Do not turn cancellation into another fault.
+        if matches!(e, BackendError::Stale) {
+            self.adopt_generation();
+            self.refresh_signal.signal();
+            self.configure_sender();
+            self.publish();
+            return;
+        }
         self.authorization
             .reconcile(|selected| *selected = authorization::Selected::default());
         self.adopt_generation();
@@ -1001,25 +1010,24 @@ impl Server {
         self.synced_reports = [false; 3];
         self.reset_report_state();
         self.state.ready = false;
-        self.state.last_error = Some(if !restoring && self.maintenance.failures >= 6 {
-            format!(
-                "Automatic recovery stopped after repeated failures; disconnect and connect again: {e}"
-            )
-        } else {
-            e.to_string()
-        });
+        self.state.last_error = Some(e.to_string());
         self.state.device_error = Some(DeviceError::ConnectionFailed);
         self.retry_at = Instant::now() + Duration::from_secs(3);
         if restoring || self.maintenance.failures == 1 {
             tracing::error!("{e}; retrying with backoff");
-        } else if self.maintenance.failures == 6 {
-            tracing::error!(
-                "Automatic recovery stopped after 6 failures; disconnect and connect again: {e}"
+        } else if self.maintenance.failures.is_multiple_of(6) {
+            tracing::warn!(
+                attempt = self.maintenance.failures,
+                "{e}; recovery continues with backoff"
             );
         }
         self.publish();
     }
     fn refresh(&mut self) -> Result<(), BackendError> {
+        if !self.startup_restore.borrow().pending() && !self.maintenance.refresh_due(Instant::now())
+        {
+            return Ok(());
+        }
         api("GATT state refresh", self.refresh_native())
     }
     fn refresh_native(&mut self) -> windows::core::Result<()> {
@@ -1400,8 +1408,10 @@ impl Server {
         let consumer = peers[0].as_ref().map(|peer| &peer.session);
         if self.session.as_ref().map(|(session, _)| session) != consumer {
             self.release_maintenance();
-            if let Some((session, token)) = self.session.take() {
-                session.RemoveSessionStatusChanged(token)?;
+            if let Some((session, token)) = self.session.take()
+                && let Err(error) = session.RemoveSessionStatusChanged(token)
+            {
+                tracing::debug!(%error, "Retired GATT session handler cleanup failed");
             }
             if let Some(session) = consumer {
                 self.link_device = session
@@ -1427,7 +1437,9 @@ impl Server {
             if additional.contains(&session) {
                 retained.push((session, token));
             } else {
-                session.RemoveSessionStatusChanged(token)?;
+                if let Err(error) = session.RemoveSessionStatusChanged(token) {
+                    tracing::debug!(%error, "Retired report session handler cleanup failed");
+                }
             }
         }
         self.report_sessions = retained;

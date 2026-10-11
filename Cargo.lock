@@ -4447,7 +4447,7 @@ dependencies = [
 
 [[package]]
 name = "taprelay-app"
-version = "0.2.2"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "embed-resource",
@@ -4472,7 +4472,7 @@ dependencies = [
 
 [[package]]
 name = "taprelay-core"
-version = "0.2.2"
+version = "0.1.0"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -4480,7 +4480,7 @@ dependencies = [
 
 [[package]]
 name = "taprelay-windows"
-version = "0.2.2"
+version = "0.1.0"
 dependencies = [
  "serde",
  "taprelay-core",

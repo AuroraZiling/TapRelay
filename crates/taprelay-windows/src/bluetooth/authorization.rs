@@ -92,6 +92,13 @@ impl<S: Clone + Eq> Authorization<S> {
         }
         if *selected != previous {
             self.revoke();
+            tracing::info!(
+                generation = self.revision.load(Ordering::Acquire),
+                radio_on = selected.radio_on,
+                suspended = selected.suspended,
+                reports_active = ?selected.reports.each_ref().map(|peer| peer.as_ref().map(|peer| peer.active)),
+                "Selected HID transport changed; previous input revoked"
+            );
         }
         (result, self.revision.load(Ordering::Acquire))
     }
@@ -390,6 +397,41 @@ mod tests {
             });
             assert!(h.generation() > generation);
             assert_eq!(h.link.epoch(), 0);
+        }
+    }
+
+    #[test]
+    fn sleep_and_receiver_disconnect_require_fresh_sync_and_never_replay_old_input() {
+        for suspend in [true, false] {
+            let h = Harness::new(hid::Profile::Full);
+            assert!(
+                h.link
+                    .submit(Event::Motion { dx: 3, dy: 4 }, std::time::Instant::now())
+            );
+            let old = h.input.try_recv().unwrap();
+            if suspend {
+                h.auth.reconcile(|selected| selected.suspended = true);
+                h.auth.reconcile(|selected| selected.suspended = false);
+            } else {
+                h.auth.session_event(&10, false, &h.refresh);
+                h.auth.session_event(&10, true, &h.refresh);
+            }
+            assert!(!h.link.accepts(&old));
+            assert!(
+                !h.link.begin(),
+                "native recovery alone must not restore input capture"
+            );
+            // The sender authorizes the new generation only after neutral reports succeed.
+            h.link.set_ready(h.generation());
+            h.link.set_profile_available(true);
+            assert!(h.link.request_profile());
+            assert!(h.link.begin());
+            assert!(!h.link.accepts(&old));
+            assert!(
+                h.link
+                    .submit(Event::Motion { dx: 1, dy: 2 }, std::time::Instant::now())
+            );
+            assert!(h.link.accepts(&h.input.try_recv().unwrap()));
         }
     }
 }

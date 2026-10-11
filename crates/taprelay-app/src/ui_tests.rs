@@ -157,6 +157,60 @@ fn render_all_views_without_hardware() {
     check_runtime_feedback(&ui);
     check_custom_mappings(&ui);
     check_mapping_record_toggle_clicks(&ui);
+    check_error_retry(&ui);
+}
+
+fn check_error_retry(ui: &AppWindow) {
+    let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let observed = actions.clone();
+    ui.on_action(move |name, _| {
+        observed.borrow_mut().push(name.to_string());
+    });
+    ui.window().set_size(slint::LogicalSize::new(900., 500.));
+    ui.set_toast("".into());
+    ui.global::<MappingUi>().set_editor(false);
+    ui.global::<MappingUi>().set_open(false);
+    for locale in ["en", "zh-CN"] {
+        i18n::apply(ui, locale);
+        for mode in [0, 1, 2, 3] {
+            ui.set_mode(mode);
+            ui.set_page(1); // Errors remain reachable on the bindings page too.
+            ui.set_problem(
+                rust_i18n::t!(i18n::keys::ERROR_CONNECTION, locale = locale)
+                    .into_owned()
+                    .into(),
+            );
+            ui.set_problem_retry_allowed(mode != 3);
+            ui.set_problem_busy(true);
+            ui.window().take_snapshot().unwrap();
+            let summary = binding_element(ui, "error-summary");
+            assert!(!summary.accessible_label().unwrap().contains("0x8000000e"));
+            actions.borrow_mut().clear();
+            if mode != 3 {
+                binding_element(ui, "error-retry").invoke_accessible_default_action();
+                assert!(actions.borrow().is_empty());
+                ui.set_problem_busy(false);
+                binding_element(ui, "error-retry").invoke_accessible_default_action();
+                assert_eq!(actions.borrow().last().unwrap(), "retry");
+            } else {
+                assert!(
+                    ui.root_element()
+                        .query_descendants()
+                        .match_predicate(|element| {
+                            element
+                                .accessible_id()
+                                .is_some_and(|id| id == "error-retry")
+                        })
+                        .find_first()
+                        .is_none()
+                );
+            }
+            if mode == 2 {
+                save_groups_snapshot(ui, &format!("error-bar-{locale}"));
+            }
+        }
+    }
+    ui.set_problem("".into());
 }
 
 fn check_mapping_record_toggle_clicks(ui: &AppWindow) {

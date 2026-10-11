@@ -49,10 +49,6 @@ export component EnvironmentPage inherits VerticalLayout {
                     }
                 }
             }
-            Label {
-                text: root.problem;
-                color: Tokens.color-destructive;
-            }
             if root.problem != "": Caption {
                 text: root.fatal ? I18n.text.startup-environment-troubleshooting : I18n.text.startup-troubleshooting;
             }

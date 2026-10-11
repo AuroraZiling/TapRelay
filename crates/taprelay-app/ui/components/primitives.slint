@@ -1,6 +1,6 @@
-import { Alert } from "../vendor/components/alert.slint";
 import { Tokens } from "../vendor/theme/tokens.slint";
 import { I18n } from "@i18n";
+import { Button } from "../vendor/components/button.slint";
 
 export component Heading inherits Text {
     font-size: 24px;
@@ -65,11 +65,36 @@ export component Spinner inherits Rectangle {
         }
     }
 }
-export component ErrorBanner inherits Alert {
+export component ErrorBanner inherits Rectangle {
     in property <string> problem;
+    in property <bool> retry-allowed;
+    in property <bool> busy;
     callback action(string, string);
-    variant: destructive;
-    title: root.problem;
-    action-label: I18n.text.common-retry;
-    action-clicked => { root.action("retry", ""); }
+    vertical-stretch: 0;
+    background: Tokens.color-destructive.with-alpha(0.08);
+    border-color: Tokens.color-destructive.with-alpha(0.4);
+    border-width: 1px;
+    border-radius: Tokens.radius-lg;
+    HorizontalLayout {
+        padding: 12px;
+        spacing: 8px;
+        Text {
+            text: root.problem;
+            color: Tokens.color-destructive;
+            wrap: word-wrap;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            accessible-live-region: polite;
+            accessible-id: "error-summary";
+        }
+        if root.retry-allowed: Button {
+            text: I18n.text.common-retry;
+            accessible-id: "error-retry";
+            variant: outline;
+            size: xs;
+            disabled: root.busy;
+            horizontal-stretch: 0;
+            clicked => { root.action("retry", ""); }
+        }
+    }
 }

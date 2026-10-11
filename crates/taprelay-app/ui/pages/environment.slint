@@ -1,5 +1,6 @@
 import { ScrollArea } from "../vendor/components/scroll-area.slint";
 import { Button } from "../vendor/components/button.slint";
+import { Icon } from "../vendor/components/icon.slint";
 import { Tokens } from "../vendor/theme/tokens.slint";
 import { I18n } from "@i18n";
 import { CheckRow } from "../types.slint";
@@ -34,10 +35,20 @@ export component EnvironmentPage inherits VerticalLayout {
                         spacing: 14px;
                         if check.state == 1: Spinner {
                         }
-                        if check.state != 1: Text {
+                        if check.state == 2: Icon {
                             width: 16px;
-                            text: check.state == 2 ? "✓" : check.state == 3 ? "!" : "·";
-                            color: check.state == 3 ? Tokens.color-destructive : check.state == 2 ? Tokens.color-success : Tokens.color-muted-foreground;
+                            height: 16px;
+                            horizontal-stretch: 0;
+                            commands: "M20 6 9 17 4 12";
+                            tint: Tokens.color-success;
+                            accessible-role: text;
+                            accessible-id: "environment-passed-" + check.title;
+                            accessible-label: I18n.text.check-passed;
+                        }
+                        if check.state != 1 && check.state != 2: Text {
+                            width: 16px;
+                            text: check.state == 3 ? "!" : "·";
+                            color: check.state == 3 ? Tokens.color-destructive : Tokens.color-muted-foreground;
                         }
                         Label {
                             text: check.title;

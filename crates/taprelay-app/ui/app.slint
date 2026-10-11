@@ -114,7 +114,7 @@ export component AppWindow inherits Window {
         VerticalLayout {
             padding: 28px;
             spacing: 20px;
-            if root.problem != "": ErrorBanner {
+            if root.mode == 2 && root.page == Navigation.overview.page && root.problem != "": ErrorBanner {
                 problem: root.problem;
                 retry-allowed: root.problem-retry-allowed;
                 busy: root.problem-busy;

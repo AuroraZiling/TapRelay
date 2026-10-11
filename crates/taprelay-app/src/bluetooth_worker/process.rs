@@ -71,7 +71,7 @@ impl Worker {
             exited: false,
             stopping: Arc::new(AtomicBool::new(false)),
         };
-        let mut stdin = worker
+        let stdin = worker
             .child
             .stdin
             .take()
@@ -92,26 +92,8 @@ impl Worker {
             thread::Builder::new()
                 .name("bluetooth-worker-writer".into())
                 .spawn(move || {
-                    loop {
-                        if stopping.load(Ordering::Acquire) {
-                            let _ = protocol::write(&Command::Shutdown, &mut stdin);
-                            break;
-                        }
-                        let command = match commands.recv_timeout(Duration::from_millis(5)) {
-                            Ok(command) => command,
-                            Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                                let _ = protocol::write(&Command::Shutdown, &mut stdin);
-                                break;
-                            }
-                        };
-                        if stopping.load(Ordering::Acquire) {
-                            continue;
-                        }
-                        if let Err(error) = protocol::write(&command, &mut stdin) {
-                            let _ = failures.try_send(Err(error));
-                            break;
-                        }
+                    if let Err(error) = write_commands(stdin, initial, commands, &stopping) {
+                        let _ = failures.try_send(Err(error));
                     }
                 })?,
         );
@@ -150,7 +132,6 @@ impl Worker {
                     }
                 })?,
         );
-        worker.send(initial)?;
         tracing::info!(pid = worker.child.id(), "Isolated Bluetooth worker started");
         Ok(worker)
     }
@@ -205,6 +186,32 @@ impl Worker {
     }
 }
 
+fn write_commands(
+    mut writer: impl std::io::Write,
+    initial: Command,
+    commands: mpsc::Receiver<Command>,
+    stopping: &AtomicBool,
+) -> Result<()> {
+    // Even an immediate replacement must honor the child's first-frame contract.
+    protocol::write(&initial, &mut writer)?;
+    loop {
+        if stopping.load(Ordering::Acquire) {
+            return protocol::write(&Command::Shutdown, &mut writer);
+        }
+        let command = match commands.recv_timeout(Duration::from_millis(5)) {
+            Ok(command) => command,
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return protocol::write(&Command::Shutdown, &mut writer);
+            }
+        };
+        if stopping.load(Ordering::Acquire) {
+            continue;
+        }
+        protocol::write(&command, &mut writer)?;
+    }
+}
+
 impl WorkerProcess for Worker {
     fn send(&self, command: Command) -> Result<()> {
         Self::send(self, command)
@@ -238,6 +245,35 @@ impl Drop for Worker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stopping_before_writer_runs_still_initializes_before_shutdown() {
+        let (sender, commands) = mpsc::sync_channel(2);
+        sender.send(Command::Refresh).unwrap();
+        let mut bytes = Vec::new();
+        write_commands(
+            &mut bytes,
+            Command::Init {
+                profile: taprelay_core::hid::Profile::MediaOnly,
+                publish: true,
+                remembered: None,
+                selected: None,
+            },
+            commands,
+            &AtomicBool::new(true),
+        )
+        .unwrap();
+        let mut reader = bytes.as_slice();
+        assert!(matches!(
+            protocol::read::<Command>(&mut reader).unwrap(),
+            Some(Command::Init { .. })
+        ));
+        assert!(matches!(
+            protocol::read::<Command>(&mut reader).unwrap(),
+            Some(Command::Shutdown)
+        ));
+        assert!(protocol::read::<Command>(&mut reader).unwrap().is_none());
+    }
 
     fn probe(script: &str) -> Worker {
         let mut command = std::process::Command::new("powershell.exe");

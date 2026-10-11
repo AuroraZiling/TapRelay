@@ -435,9 +435,16 @@ impl Runtime {
             self.recorder.reset();
         }
         if matches!(self.test, TestStatus::Pending(_)) {
-            self.test = TestStatus::Failed(
-                "Test cancelled because the input or connection session changed".into(),
-            );
+            self.test = if matches!(
+                reason,
+                RouterReason::TransportLost | RouterReason::SessionChanged
+            ) {
+                TestStatus::Idle
+            } else {
+                TestStatus::Failed(
+                    "Test cancelled because the input or connection session changed".into(),
+                )
+            };
         }
         if (reason == RouterReason::TransportLost
             || (reason == RouterReason::ListenerStopped && !self.state.input))
@@ -963,6 +970,7 @@ impl Runtime {
                 {
                     self.test = match &result {
                         Ok(()) => TestStatus::Succeeded,
+                        Err(BackendError::Stale | BackendError::TimedOut) => TestStatus::Idle,
                         Err(error) => TestStatus::Failed(error.to_string()),
                     };
                 }
@@ -977,7 +985,7 @@ impl Runtime {
                             "Windows accepted HID notification; receiver execution is not acknowledged"
                         );
                     }
-                    Err(BackendError::Stale) => {}
+                    Err(BackendError::Stale | BackendError::TimedOut) => {}
                     Err(error) => self.error = Some(error.to_string()),
                 }
             } else {
@@ -1497,6 +1505,29 @@ mod tests {
         let mut runtime = Runtime::new(config);
         runtime.input = Some(Box::new(FakeInput));
         runtime
+    }
+
+    #[test]
+    fn expired_and_timed_out_receipts_do_not_stop_listening_or_emit_test_failure() {
+        for error in [BackendError::Stale, BackendError::TimedOut] {
+            let mut runtime = app_runtime();
+            runtime.input_initialized = true;
+            runtime.listening = true;
+            runtime.test = TestStatus::Pending(1);
+            let (reply, result) = oneshot::channel();
+            runtime.receipts.push(Receipt {
+                created: Instant::now(),
+                test: Some(1),
+                action: MediaCommand::PlayPause,
+                result,
+            });
+            reply.send(Err(error)).unwrap();
+            runtime.tick();
+            assert!(runtime.error.is_none());
+            assert!(runtime.listening);
+            assert_eq!(runtime.test, TestStatus::Idle);
+            assert!(runtime.receipts.is_empty());
+        }
     }
 
     fn function_output(action: FunctionAction, down: bool, created: Instant) -> RouteResult {

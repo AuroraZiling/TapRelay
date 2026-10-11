@@ -113,6 +113,10 @@ struct Harness {
 
 impl Harness {
     fn build(fail_start: bool) -> Self {
+        Self::build_with_target(fail_start, None)
+    }
+
+    fn build_with_target(fail_start: bool, remembered: Option<Target>) -> Self {
         let state = Arc::new(Mutex::new(ScriptState {
             now: Instant::now(),
             workers: vec![],
@@ -122,7 +126,7 @@ impl Harness {
         let (arrived_tx, arrived) = mpsc::sync_channel(1);
         let (resume, resume_rx) = mpsc::sync_channel(1);
         let handle = Handle::start_with(
-            None,
+            remembered,
             Script {
                 state: state.clone(),
                 arrived: arrived_tx,
@@ -270,6 +274,186 @@ fn status(generation: u64, endpoint: &str, input_available: bool) -> Message {
         }),
         input_available,
     }
+}
+
+#[test]
+fn identity_resolution_stall_after_radio_recovery_restarts_native_owner() {
+    use taprelay_core::devices::AdapterState;
+    let h = Harness::new();
+    let worker = h.current();
+    h.message(
+        worker,
+        Message::Status {
+            state: Box::new(Snapshot {
+                adapter_state: AdapterState::Disabled,
+                activity: TransportActivity::CheckingEnvironment,
+                ..Default::default()
+            }),
+            input_available: false,
+        },
+    );
+    h.step();
+    h.message(
+        worker,
+        Message::Status {
+            state: Box::new(Snapshot {
+                adapter_state: AdapterState::Available,
+                adapter: true,
+                service: true,
+                broadcasting: true,
+                activity: TransportActivity::ResolvingDevice,
+                ..Default::default()
+            }),
+            input_available: false,
+        },
+    );
+    h.step();
+    assert!(h.advance(Duration::from_secs(31)));
+    assert!(
+        h.current() > worker,
+        "native identity resolution remained stuck until manual retry"
+    );
+}
+
+#[test]
+fn repeated_status_and_duplicate_progress_cannot_hide_a_native_stall() {
+    let h = Harness::new();
+    h.connected();
+    let worker = h.current();
+    h.message(worker, Message::NativeProgress(10));
+    h.step();
+    for _ in 0..3 {
+        h.message(worker, status(3, "phone", false));
+        h.message(worker, Message::NativeProgress(10));
+        assert!(h.advance(Duration::from_secs(10)));
+    }
+    assert_ne!(h.current(), worker);
+    assert!(!h.snapshot().ready);
+}
+
+#[test]
+fn native_progress_keeps_disabled_radio_and_sleeping_receiver_waits_alive() {
+    use taprelay_core::devices::AdapterState;
+    for (adapter_state, hid_suspended) in [
+        (AdapterState::Disabled, false),
+        (AdapterState::Available, true),
+    ] {
+        let h = Harness::new();
+        let worker = h.current();
+        h.message(
+            worker,
+            Message::Status {
+                state: Box::new(Snapshot {
+                    adapter_state,
+                    hid_suspended,
+                    ..Default::default()
+                }),
+                input_available: false,
+            },
+        );
+        h.step();
+        for sequence in 1..=60 {
+            h.message(worker, Message::NativeProgress(sequence));
+            assert!(h.advance(Duration::from_secs(10)));
+            assert_eq!(h.current(), worker);
+        }
+    }
+}
+
+#[test]
+fn stalled_startup_preserves_remembered_receiver_until_new_subscription() {
+    let h = Harness::build_with_target(
+        false,
+        Some(Target {
+            id: "old-endpoint".into(),
+            identity: vec!["physical:phone".into()],
+            ..Default::default()
+        }),
+    );
+    assert!(h.settle());
+    assert!(h.advance(Duration::from_secs(30)));
+    assert_eq!(h.current(), 1);
+    assert!(
+        matches!(h.state.lock().unwrap().calls.last(), Some(Call::Start(_, Command::Init { remembered: Some(target), selected: None, .. })) if target.identity == ["physical:phone"])
+    );
+    h.status(3, "new-endpoint", false);
+    assert!(h.snapshot().ready);
+    assert_eq!(h.snapshot().selected.as_deref(), Some("new-endpoint"));
+}
+
+#[test]
+fn stalled_active_session_retires_input_and_restores_the_receiver_by_identity() {
+    let h = Harness::new();
+    h.connected();
+    h.full();
+    h.arm();
+    let mut receipt = h.send();
+    h.step();
+    let worker = h.current();
+    assert!(h.advance(Duration::from_secs(30)));
+    assert_ne!(h.current(), worker);
+    assert!(!h.handle.link.begin());
+    assert_eq!(h.handle.link.epoch(), 0);
+    assert!(matches!(
+        receipt.try_recv().unwrap(),
+        Err(BackendError::Stale)
+    ));
+    h.status(3, "new-endpoint", false);
+    assert!(h.snapshot().ready);
+    assert_eq!(h.snapshot().selected_target().unwrap().id, "new-endpoint");
+}
+
+#[test]
+fn stalled_media_session_restarts_with_physical_identity() {
+    let h = Harness::new();
+    h.connected();
+    assert!(h.advance(Duration::from_secs(30)));
+    assert!(
+        matches!(h.state.lock().unwrap().calls.last(), Some(Call::Start(_, Command::Init { remembered: Some(target), selected: None, .. })) if target.identity == ["physical:phone"])
+    );
+}
+
+#[test]
+fn repeated_stalls_before_discovery_do_not_lose_the_recovery_target() {
+    let h = Harness::new();
+    h.connected();
+    for _ in 0..3 {
+        assert!(h.advance(Duration::from_secs(30)));
+        assert!(
+            matches!(h.state.lock().unwrap().calls.last(), Some(Call::Start(_, Command::Init { remembered: Some(target), selected: None, .. })) if target.identity == ["physical:phone"])
+        );
+        h.message(
+            h.current(),
+            Message::Status {
+                state: Box::default(),
+                input_available: false,
+            },
+        );
+        h.step();
+    }
+    h.status(3, "new-endpoint", false);
+    assert!(h.snapshot().ready);
+}
+
+#[test]
+fn native_stall_after_explicit_disconnect_never_republishes_or_restores_receiver() {
+    let h = Harness::new();
+    h.connected();
+    h.handle.disconnect().unwrap();
+    h.step();
+    assert!(h.advance(Duration::from_secs(30)));
+    assert!(matches!(
+        h.state.lock().unwrap().calls.last(),
+        Some(Call::Start(
+            _,
+            Command::Init {
+                publish: false,
+                remembered: None,
+                selected: None,
+                ..
+            }
+        ))
+    ));
 }
 
 #[test]
@@ -675,9 +859,10 @@ fn receipt_deadlines_and_late_replies_do_not_complete_another_request() {
         Err(oneshot::error::TryRecvError::Empty)
     ));
     assert!(h.advance(Duration::from_millis(1)));
-    assert!(
-        matches!(first.try_recv().unwrap(), Err(BackendError::Unavailable(message)) if message.contains("timed out"))
-    );
+    assert!(matches!(
+        first.try_recv().unwrap(),
+        Err(BackendError::TimedOut)
+    ));
     let mut next = h.send();
     h.step();
     let next_id = h.media_id();
@@ -724,7 +909,7 @@ fn pending_limit_and_worker_backpressure_give_requests_a_terminal_result() {
     assert!(
         pending
             .iter_mut()
-            .all(|reply| matches!(reply.try_recv().unwrap(), Err(BackendError::Unavailable(_))))
+            .all(|reply| matches!(reply.try_recv().unwrap(), Err(BackendError::TimedOut)))
     );
     let current = h.current();
     h.state.lock().unwrap().workers[current].backpressure = true;
@@ -931,6 +1116,7 @@ fn media_reconnect_and_pairing_deadlines_use_the_same_clock_as_full_switches() {
     h.step();
     h.handle.pair("phone".into()).unwrap();
     h.step();
+    h.message(h.current(), Message::NativeProgress(1));
     assert!(h.advance(Duration::from_secs(29)));
     assert!(h.snapshot().profile_switching);
     assert!(h.handle.link.take_failure().is_none());

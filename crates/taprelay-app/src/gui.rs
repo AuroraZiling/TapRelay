@@ -461,6 +461,7 @@ struct Controller {
     passed: bool,
     recovering: bool,
     wait_warning: WaitWarning,
+    session_presentation: crate::receiver_view::SessionPresentation,
     started: Instant,
     last_slow: Instant,
     stage_key: String,
@@ -521,6 +522,7 @@ impl Controller {
             passed: false,
             recovering: false,
             wait_warning: WaitWarning::default(),
+            session_presentation: crate::receiver_view::SessionPresentation::default(),
             started: now,
             last_slow: now - Duration::from_secs(2),
             stage_key: String::new(),
@@ -934,7 +936,11 @@ impl Controller {
             && self.runtime.config.options.notifications
             && self.runtime.config.wizard.dismissed;
         if self.wait_warning.update(
-            self.runtime.state.selected.as_deref(),
+            self.runtime
+                .state
+                .selected
+                .as_deref()
+                .filter(|_| !self.runtime.state.hid_suspended),
             self.runtime.state.ready,
             warning_enabled,
             now,
@@ -1155,40 +1161,42 @@ impl Controller {
         } else if s.selected.is_none() {
             ("unselected", self.tr(keys::RECEIVER_CHOOSE))
         } else {
-            let status = crate::receiver_view::session_status_key(s);
+            let status = self.session_presentation.key(s, Instant::now());
             (status, self.tr(status))
         };
-        let stage = stage.to_owned();
+        let has_bindings = self
+            .runtime
+            .config
+            .functions
+            .values()
+            .any(|function| function.enabled && !function.shortcuts.is_empty())
+            || self
+                .runtime
+                .config
+                .custom_mappings
+                .iter()
+                .any(|mapping| mapping.enabled);
+        let (display_key, signal) =
+            crate::receiver_view::relay_presentation(key, self.runtime.listening, has_bindings);
+        let stage = if display_key != key {
+            self.tr(display_key)
+        } else {
+            stage
+        }
+        .to_owned();
+        let key = display_key;
         if self.stage_key != key {
             tracing::info!(previous=%self.stage_key,elapsed_ms=self.stage_since.elapsed().as_millis(),next=key,"Connection stage changed");
             self.stage_key = key.into();
             self.stage_since = Instant::now();
         }
         ui.set_stage(stage.into());
-        ui.set_ready(s.ready && !s.profile_switching);
+        ui.set_ready(s.ready && !s.profile_switching && key != keys::RECEIVER_SUSPENDED);
         ui.set_listening(self.runtime.listening);
         ui.set_state_color(if (!self.passed && failure.is_some()) || key == "fault" {
             3
-        } else if self.passed && !self.runtime.listening {
-            1
-        } else if s.ready
-            && self
-                .runtime
-                .config
-                .functions
-                .values()
-                .any(|function| function.enabled && !function.shortcuts.is_empty())
-            || (s.ready
-                && self
-                    .runtime
-                    .config
-                    .custom_mappings
-                    .iter()
-                    .any(|mapping| mapping.enabled))
-        {
-            0
         } else {
-            2
+            signal
         });
         let receiver_none = self.tr(keys::RECEIVER_NONE);
         ui.set_device_name(

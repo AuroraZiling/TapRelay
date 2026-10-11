@@ -46,6 +46,7 @@ pub enum Command {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Error {
     Stale,
+    TimedOut,
     Failed(String),
 }
 
@@ -53,6 +54,7 @@ impl From<taprelay_core::ports::BackendError> for Error {
     fn from(error: taprelay_core::ports::BackendError) -> Self {
         match error {
             taprelay_core::ports::BackendError::Stale => Self::Stale,
+            taprelay_core::ports::BackendError::TimedOut => Self::TimedOut,
             error => Self::Failed(error.to_string()),
         }
     }
@@ -62,6 +64,7 @@ impl From<Error> for taprelay_core::ports::BackendError {
     fn from(error: Error) -> Self {
         match error {
             Error::Stale => Self::Stale,
+            Error::TimedOut => Self::TimedOut,
             Error::Failed(message) => Self::Unavailable(message),
         }
     }
@@ -69,6 +72,7 @@ impl From<Error> for taprelay_core::ports::BackendError {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Message {
+    NativeProgress(u64),
     Status {
         state: Box<Snapshot>,
         input_available: bool,

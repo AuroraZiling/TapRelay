@@ -44,6 +44,7 @@ pub fn run() -> Result<()> {
             }
         })?;
     let mut last_status = None;
+    let mut progress_at = Instant::now();
     let mut pending = Vec::new();
     loop {
         match commands.recv_timeout(Duration::from_millis(5)) {
@@ -174,6 +175,10 @@ pub fn run() -> Result<()> {
         }
         if handle.is_finished() {
             bail!("Native Bluetooth worker stopped");
+        }
+        if Instant::now() >= progress_at {
+            protocol::write(&Message::NativeProgress(handle.progress()), &mut stdout)?;
+            progress_at = Instant::now() + Duration::from_secs(1);
         }
     }
     link.set_mapping_profile(false);

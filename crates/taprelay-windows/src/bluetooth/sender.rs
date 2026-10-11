@@ -160,9 +160,9 @@ impl Sender {
             endpoint,
             reply,
         })?;
-        result.recv_timeout(Duration::from_secs(1)).map_err(|_| {
-            BackendError::Unavailable("HID sender did not complete notification".into())
-        })?
+        result
+            .recv_timeout(Duration::from_secs(1))
+            .map_err(delivery_wait_error)?
     }
 
     pub fn media(
@@ -181,9 +181,9 @@ impl Sender {
             endpoint,
             reply,
         })?;
-        result.recv_timeout(Duration::from_secs(1)).map_err(|_| {
-            BackendError::Unavailable("HID sender did not complete media command".into())
-        })?
+        result
+            .recv_timeout(Duration::from_secs(1))
+            .map_err(delivery_wait_error)?
     }
 }
 
@@ -224,6 +224,18 @@ struct Worker {
 
 impl Worker {
     fn fail(&mut self, error: &BackendError) {
+        if matches!(error, BackendError::Stale) {
+            // A retired report must not revoke or report failure on its successor.
+            tracing::debug!("Retired HID report discarded");
+            return;
+        }
+        if matches!(error, BackendError::TimedOut) {
+            tracing::debug!("HID delivery timed out; retiring input silently");
+            self.authorized = false;
+            self.link.end();
+            self.revision.fetch_add(1, Ordering::AcqRel);
+            return;
+        }
         tracing::warn!("Passthrough: {error}");
         self.authorized = false;
         self.link.fail(error.to_string());
@@ -743,9 +755,7 @@ impl Worker {
             }
             if !timed_out && started.elapsed() >= Duration::from_millis(250) {
                 timed_out = true;
-                self.fail(&BackendError::Unavailable(
-                    "HID notification stalled; input returned to this computer".into(),
-                ));
+                self.fail(&BackendError::TimedOut);
             }
             if self.stopping.load(Ordering::Acquire) || self.detaching.load(Ordering::Acquire) {
                 let _ = pending.Cancel();
@@ -757,6 +767,7 @@ impl Worker {
         }
         let result = api("HID.GetResults", pending.GetResults())?;
         if timed_out {
+            // Timeout already retired input above; a late completion is stale.
             return Err(BackendError::Stale);
         }
         let status = api("HID.Status", result.Status())?;
@@ -766,6 +777,15 @@ impl Worker {
             )));
         }
         Ok(())
+    }
+}
+
+fn delivery_wait_error(error: mpsc::RecvTimeoutError) -> BackendError {
+    match error {
+        mpsc::RecvTimeoutError::Timeout => BackendError::TimedOut,
+        mpsc::RecvTimeoutError::Disconnected => {
+            BackendError::Unavailable("HID sender stopped before delivery".into())
+        }
     }
 }
 
@@ -793,6 +813,43 @@ fn release_volume_pulses(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retired_session_report_is_silent_and_does_not_revoke_a_new_session() {
+        let revision = Arc::new(AtomicU64::new(7));
+        let (link, _input) = InputLink::channel(revision.clone());
+        link.set_ready(7);
+        let mut worker = Worker {
+            link: link.clone(),
+            revision: revision.clone(),
+            stopping: Arc::new(AtomicBool::new(false)),
+            detaching: Arc::new(AtomicBool::new(false)),
+            endpoints: [None, None, None],
+            generation: 7,
+            authorized: true,
+            epoch: 0,
+            reports: InputReports::default(),
+            owners: Default::default(),
+            mapping_epoch: 0,
+            consumer: ConsumerState::default(),
+            pulses: vec![],
+            next_owner: 0,
+            schedule: ReportSchedule::default(),
+        };
+        worker.fail(&BackendError::Stale);
+        assert!(
+            link.take_failure().is_none(),
+            "retired report must not become a user-facing failure"
+        );
+        assert_eq!(revision.load(Ordering::Acquire), 7);
+        assert!(worker.authorized);
+        worker.fail(&BackendError::TimedOut);
+        assert!(link.take_failure().is_none());
+        assert!(!worker.authorized);
+        assert_eq!(revision.load(Ordering::Acquire), 8);
+        worker.fail(&BackendError::Unavailable("native failure".into()));
+        assert!(link.take_failure().unwrap().contains("native failure"));
+    }
 
     #[test]
     fn rapid_volume_presses_release_previous_volume_without_disturbing_other_controls() {

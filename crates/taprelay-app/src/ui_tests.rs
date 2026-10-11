@@ -172,21 +172,55 @@ fn check_error_retry(ui: &AppWindow) {
     ui.global::<MappingUi>().set_open(false);
     for locale in ["en", "zh-CN"] {
         i18n::apply(ui, locale);
-        for mode in [0, 1, 2, 3] {
+        for (mode, page, retry_allowed) in [
+            (0, 0, true),
+            (1, 0, true),
+            (3, 0, false),
+            (2, 0, true),
+            (2, 0, false),
+            (2, 1, true),
+            (2, 2, true),
+            (2, 3, true),
+            (2, 4, true),
+        ] {
             ui.set_mode(mode);
-            ui.set_page(1); // Errors remain reachable on the bindings page too.
+            ui.set_page(page);
             ui.set_problem(
                 rust_i18n::t!(i18n::keys::ERROR_CONNECTION, locale = locale)
                     .into_owned()
                     .into(),
             );
-            ui.set_problem_retry_allowed(mode != 3);
+            ui.set_problem_retry_allowed(retry_allowed);
             ui.set_problem_busy(true);
+            if mode == 0 {
+                let checks = crate::startup_checks::rows(locale, false, [false; 4], true);
+                let passed_id = format!("environment-passed-{}", checks[0].title);
+                ui.set_checks(ModelRc::new(VecModel::from(checks)));
+                ui.window().take_snapshot().unwrap();
+                let checkmark = binding_element(ui, &passed_id);
+                assert_eq!(checkmark.size(), slint::LogicalSize::new(16., 16.));
+                save_groups_snapshot(ui, &format!("environment-passed-{locale}"));
+            }
             ui.window().take_snapshot().unwrap();
+            if mode != 2 || page != 0 {
+                assert!(
+                    ui.root_element()
+                        .query_descendants()
+                        .match_predicate(|element| {
+                            element
+                                .accessible_id()
+                                .is_some_and(|id| id == "error-summary" || id == "error-retry")
+                        })
+                        .find_first()
+                        .is_none(),
+                    "error bar must only appear on the dashboard"
+                );
+                continue;
+            }
             let summary = binding_element(ui, "error-summary");
             assert!(!summary.accessible_label().unwrap().contains("0x8000000e"));
             actions.borrow_mut().clear();
-            if mode != 3 {
+            if retry_allowed {
                 binding_element(ui, "error-retry").invoke_accessible_default_action();
                 assert!(actions.borrow().is_empty());
                 ui.set_problem_busy(false);

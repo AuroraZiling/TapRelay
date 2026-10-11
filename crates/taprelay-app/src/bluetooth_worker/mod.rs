@@ -76,6 +76,8 @@ impl Handle {
             armed: false,
             capture_request: 0,
             switching_since: None,
+            native_progress: 0,
+            progress_since: None,
             pending: BTreeMap::new(),
             next_id: 0,
         };
@@ -217,6 +219,8 @@ struct Supervisor<E: Execution> {
     armed: bool,
     capture_request: u64,
     switching_since: Option<Instant>,
+    native_progress: u64,
+    progress_since: Option<Instant>,
     pending: BTreeMap<u64, Pending>,
     next_id: u64,
 }
@@ -287,6 +291,10 @@ impl<E: Execution> Supervisor<E> {
 
     fn replace_worker(&mut self, profile: Profile, publish: bool) -> Result<()> {
         let initial = self.initial_command(profile, publish);
+        if let Command::Init { remembered, .. } = &initial {
+            // Preserve recovery intent even if the next owner stalls before discovery.
+            self.remembered = remembered.clone();
+        }
         let replacing = self.process.is_some();
         self.link.suspend();
         self.link.set_profile_available(false);
@@ -295,6 +303,8 @@ impl<E: Execution> Supervisor<E> {
         self.publish = publish;
         self.native_generation = None;
         self.native_selected = None;
+        self.native_progress = 0;
+        self.progress_since = Some(self.execution.now());
         self.blocked_native = None;
         self.arm = None;
         self.armed = false;
@@ -331,7 +341,7 @@ impl<E: Execution> Supervisor<E> {
     }
 
     fn initial_command(&self, profile: Profile, publish: bool) -> Command {
-        let target = ((profile != self.profile || profile == Profile::Full) && publish)
+        let target = publish
             .then(|| {
                 self.snapshot
                     .targets
@@ -340,6 +350,13 @@ impl<E: Execution> Supervisor<E> {
                         self.selected
                             .as_ref()
                             .is_some_and(|id| target.matches_id(id))
+                    })
+                    .or_else(|| {
+                        self.remembered.as_ref().filter(|target| {
+                            self.selected
+                                .as_ref()
+                                .is_some_and(|id| target.matches_id(id))
+                        })
                     })
                     .cloned()
             })
@@ -422,6 +439,19 @@ impl<E: Execution> Supervisor<E> {
                 Some("Receiver did not reconnect within 30 seconds; connect again".into());
             self.publish_snapshot();
         }
+        // IPC and GATT callbacks can stay responsive while a native join is stuck.
+        // Only progress from the native control loop proves that it can recover.
+        if self.progress_since.is_some_and(|since| {
+            self.execution.now().saturating_duration_since(since) >= Duration::from_secs(30)
+        }) {
+            tracing::warn!(activity = ?self.snapshot.activity, profile = ?self.profile,
+                "Native Bluetooth control loop stalled; replacing service owner");
+            self.link.disconnect();
+            self.link
+                .fail("Bluetooth stopped responding; reconnecting automatically");
+            self.replace_worker(Profile::MediaOnly, self.publish)?;
+            return Ok(());
+        }
         for _ in 0..256 {
             let Ok(packet) = self.input.try_recv() else {
                 break;
@@ -461,9 +491,7 @@ impl<E: Execution> Supervisor<E> {
             .collect();
         for id in expired {
             if let Some(pending) = self.pending.remove(&id) {
-                let _ = pending.reply.send(Err(BackendError::Unavailable(
-                    "Bluetooth worker delivery timed out".into(),
-                )));
+                let _ = pending.reply.send(Err(BackendError::TimedOut));
             }
         }
         Ok(())
@@ -561,6 +589,12 @@ impl<E: Execution> Supervisor<E> {
 
     fn message(&mut self, message: Message) -> Result<()> {
         match message {
+            Message::NativeProgress(sequence) => {
+                if sequence > self.native_progress {
+                    self.native_progress = sequence;
+                    self.progress_since = Some(self.execution.now());
+                }
+            }
             Message::Status {
                 mut state,
                 input_available,

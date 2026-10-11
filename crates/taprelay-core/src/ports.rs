@@ -2,6 +2,8 @@
 pub enum BackendError {
     #[error("Tap expired or belongs to a previous connection/input session")]
     Stale,
+    #[error("Bluetooth delivery timed out")]
+    TimedOut,
     #[error("Release failed: {release}; press error: {press:?}")]
     Release {
         press: Option<Box<BackendError>>,

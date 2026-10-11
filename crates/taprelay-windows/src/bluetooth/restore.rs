@@ -32,6 +32,18 @@ impl Restore {
         self.target.is_some() && !matches!(self.phase, Phase::Complete | Phase::Cancelled)
     }
 
+    /// A rebuilt service owns new native sessions, even after startup restore completed.
+    /// Prefer physical identity; use a raw selection only while discovery is incomplete.
+    pub fn service_recreated(&mut self, state: &Snapshot, now: Instant) -> Option<String> {
+        if let Some(target) = state.selected_target() {
+            tracing::info!("Restoring selected receiver after Bluetooth service recreation");
+            *self = Self::new(Some(target.clone()), now);
+            None
+        } else {
+            state.selected.clone()
+        }
+    }
+
     pub fn due(&self, now: Instant) -> bool {
         !self.pending() || now >= self.next
     }
@@ -110,6 +122,97 @@ mod tests {
             subscribed: Knowledge::Yes,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn completed_restore_restarts_after_service_recreation_and_endpoint_change() {
+        let now = Instant::now();
+        let mut restore = Restore::new(Some(target()), now);
+        let old = Snapshot {
+            ready: true,
+            generation: 7,
+            selected: Some("receiver".into()),
+            targets: vec![target()],
+            ..Default::default()
+        };
+        restore.observe(&old, 7);
+        assert!(!restore.pending());
+        assert!(restore.service_recreated(&old, now).is_none());
+        let mut fresh = Snapshot {
+            targets: vec![Target {
+                id: "new-endpoint".into(),
+                subscribed: Knowledge::No,
+                ..target()
+            }],
+            ..Default::default()
+        };
+        assert!(
+            restore
+                .candidate(&fresh, &Default::default(), now)
+                .is_none()
+        );
+        fresh.targets[0].subscribed = Knowledge::Yes;
+        assert_eq!(
+            restore
+                .candidate(&fresh, &Default::default(), now)
+                .as_deref(),
+            Some("new-endpoint")
+        );
+        assert!(!fresh.ready);
+    }
+
+    #[test]
+    fn rebuild_preserves_manual_target_instead_of_cancelled_startup_target() {
+        let now = Instant::now();
+        let mut restore = Restore::new(Some(target()), now);
+        restore.cancel("select");
+        let manual = Target {
+            id: "manual".into(),
+            identity: vec!["physical:other".into()],
+            ..target()
+        };
+        let old = Snapshot {
+            selected: Some(manual.id.clone()),
+            targets: vec![manual.clone()],
+            ..Default::default()
+        };
+        assert!(restore.service_recreated(&old, now).is_none());
+        let fresh = Snapshot {
+            targets: vec![target(), manual],
+            ..Default::default()
+        };
+        assert_eq!(
+            restore
+                .candidate(&fresh, &Default::default(), now)
+                .as_deref(),
+            Some("manual")
+        );
+    }
+
+    #[test]
+    fn rebuild_without_resolved_selection_preserves_pending_restore_and_raw_selection() {
+        let now = Instant::now();
+        let mut restore = Restore::new(Some(target()), now);
+        assert!(
+            restore
+                .service_recreated(&Snapshot::default(), now)
+                .is_none()
+        );
+        let mut fresh = Snapshot {
+            targets: vec![target()],
+            ..Default::default()
+        };
+        assert_eq!(
+            restore
+                .candidate(&fresh, &Default::default(), now)
+                .as_deref(),
+            Some("receiver")
+        );
+        fresh.selected = Some("unresolved".into());
+        assert_eq!(
+            restore.service_recreated(&fresh, now).as_deref(),
+            Some("unresolved")
+        );
     }
 
     #[test]

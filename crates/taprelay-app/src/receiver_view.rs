@@ -1,9 +1,84 @@
 //! Typed receiver state projected into localized presentation at one boundary.
 use crate::{DeviceRow, i18n::keys};
+use std::time::{Duration, Instant};
 use taprelay_core::{
     devices::*,
     state::{Knowledge, Snapshot, Target},
 };
+
+#[derive(Default)]
+pub struct SessionPresentation {
+    target: Option<String>,
+    suspended: bool,
+    ready_since: Option<Instant>,
+}
+
+impl SessionPresentation {
+    pub fn key(&mut self, state: &Snapshot, now: Instant) -> &'static str {
+        if self.target != state.selected {
+            self.target = state.selected.clone();
+            self.suspended = false;
+            self.ready_since = None;
+        }
+        let connected = state.selected_target().is_some_and(|target| {
+            target.link == Knowledge::Yes && target.subscribed == Knowledge::Yes
+        });
+        if !connected || state.device_error.is_some() || state.profile_switching {
+            self.suspended = false;
+            self.ready_since = None;
+        } else if state.hid_suspended {
+            self.suspended = true;
+            self.ready_since = None;
+        } else if self.suspended {
+            if state.ready {
+                let since = *self.ready_since.get_or_insert(now);
+                if now.saturating_duration_since(since) >= Duration::from_millis(500) {
+                    self.suspended = false;
+                    self.ready_since = None;
+                }
+            } else {
+                self.ready_since = None;
+            }
+        }
+        if self.suspended {
+            keys::RECEIVER_SUSPENDED
+        } else {
+            session_status_key(state)
+        }
+    }
+}
+
+/// Text and dot share the same interpretation of session readiness and listening.
+pub fn relay_presentation(
+    key: &'static str,
+    listening: bool,
+    has_bindings: bool,
+) -> (&'static str, i32) {
+    if key == "fault" {
+        return (key, 3);
+    }
+    let key = if key == keys::RECEIVER_READY {
+        if !listening {
+            keys::RECEIVER_LISTENING_PAUSED
+        } else if !has_bindings {
+            keys::RECEIVER_NO_BINDINGS
+        } else {
+            keys::RECEIVER_FORWARDING
+        }
+    } else {
+        key
+    };
+    (
+        key,
+        if !listening {
+            1
+        } else if key == keys::RECEIVER_FORWARDING {
+            0
+        } else {
+            2
+        },
+    )
+}
 
 pub fn adapter_label_key(adapter: AdapterState) -> &'static str {
     match adapter {
@@ -71,7 +146,8 @@ pub fn session_status_key(state: &Snapshot) -> &'static str {
         Connection::Disconnected => keys::RECEIVER_PAIRED_DISCONNECTED,
         Connection::AwaitingHostSubscription => keys::RECEIVER_WAIT_SUBSCRIPTION,
         Connection::Synchronizing => keys::RECEIVER_SYNCHRONIZING,
-        Connection::Connected => keys::RECEIVER_READY,
+        Connection::Connected if state.ready && !state.profile_switching => keys::RECEIVER_READY,
+        Connection::Connected => keys::RECEIVER_SYNCHRONIZING,
         Connection::Failed => keys::RECEIVER_CONNECT_FAILED,
     }
 }
@@ -96,10 +172,20 @@ pub fn row(target: &Target, state: &Snapshot, tr: impl Fn(&'static str) -> Strin
         // paired receiver may restart a paused service to subscribe again.
         ("", keys::RECEIVER_HOST_HINT)
     };
-    let detail = if target.availability == Availability::Unavailable {
+    let connection = if selected
+        && target.connection == Connection::Connected
+        && (!state.ready || state.hid_suspended || state.profile_switching)
+    {
+        Connection::Synchronizing
+    } else {
+        target.connection
+    };
+    let detail = if selected && state.hid_suspended {
+        keys::RECEIVER_SUSPENDED
+    } else if target.availability == Availability::Unavailable {
         keys::RECEIVER_DEVICE_MISSING
     } else {
-        match target.connection {
+        match connection {
             Connection::AwaitingHostSubscription => keys::RECEIVER_HOST_HINT,
             Connection::Synchronizing => keys::RECEIVER_SYNCHRONIZING,
             Connection::Connected => keys::RECEIVER_READY,
@@ -122,7 +208,7 @@ pub fn row(target: &Target, state: &Snapshot, tr: impl Fn(&'static str) -> Strin
         }
         .into(),
         device_kind: device_kind(target.kind).into(),
-        status: match target.connection {
+        status: match connection {
             Connection::Connected => "ready",
             Connection::Synchronizing => "busy",
             Connection::Failed => "failed",
@@ -157,6 +243,104 @@ fn device_kind(kind: taprelay_core::state::DeviceKind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn revoked_readiness_cannot_display_a_connected_row_as_ready() {
+        let state = Snapshot {
+            selected: Some("tablet".into()),
+            ready: false,
+            targets: vec![Target {
+                id: "tablet".into(),
+                connection: Connection::Connected,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert_ne!(session_status_key(&state), keys::RECEIVER_READY);
+        let projected = row(&state.targets[0], &state, |key| key.into());
+        assert_ne!(projected.status, "ready");
+        assert_ne!(projected.detail, keys::RECEIVER_READY);
+    }
+
+    #[test]
+    fn forwarding_text_and_dot_agree_with_listening_and_bindings() {
+        assert_eq!(
+            relay_presentation(keys::RECEIVER_READY, false, true),
+            (keys::RECEIVER_LISTENING_PAUSED, 1)
+        );
+        assert_eq!(
+            relay_presentation(keys::RECEIVER_READY, true, false),
+            (keys::RECEIVER_NO_BINDINGS, 2)
+        );
+        assert_eq!(
+            relay_presentation(keys::RECEIVER_READY, true, true),
+            (keys::RECEIVER_FORWARDING, 0)
+        );
+        for key in [
+            keys::RECEIVER_SYNCHRONIZING,
+            keys::RECEIVER_SUSPENDED,
+            "switching",
+            "identity",
+        ] {
+            assert_ne!(relay_presentation(key, true, true).1, 0);
+            assert_ne!(
+                relay_presentation(key, false, true).0,
+                keys::RECEIVER_FORWARDING
+            );
+        }
+        assert_eq!(relay_presentation("fault", false, true), ("fault", 3));
+    }
+
+    #[test]
+    fn short_suspend_resume_cycles_stay_paused_until_readiness_is_stable() {
+        let mut view = SessionPresentation::default();
+        let now = Instant::now();
+        let mut state = Snapshot {
+            selected: Some("tablet".into()),
+            targets: vec![Target {
+                id: "tablet".into(),
+                link: Knowledge::Yes,
+                subscribed: Knowledge::Yes,
+                connection: Connection::Connected,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        for cycle in 0..5 {
+            let at = now + Duration::from_secs(cycle * 3);
+            state.hid_suspended = true;
+            state.ready = false;
+            assert_eq!(view.key(&state, at), keys::RECEIVER_SUSPENDED);
+            state.hid_suspended = false;
+            assert_eq!(
+                view.key(&state, at + Duration::from_secs(1)),
+                keys::RECEIVER_SUSPENDED
+            );
+            state.ready = true;
+            assert_eq!(
+                view.key(&state, at + Duration::from_secs(2)),
+                keys::RECEIVER_SUSPENDED
+            );
+            assert_eq!(
+                view.key(&state, at + Duration::from_millis(2100)),
+                keys::RECEIVER_SUSPENDED
+            );
+        }
+        assert_eq!(
+            view.key(&state, now + Duration::from_millis(14500)),
+            keys::RECEIVER_READY
+        );
+        state.hid_suspended = true;
+        assert_eq!(
+            view.key(&state, now + Duration::from_secs(15)),
+            keys::RECEIVER_SUSPENDED
+        );
+        state.selected = None;
+        state.hid_suspended = false;
+        assert_eq!(
+            view.key(&state, now + Duration::from_secs(16)),
+            keys::RECEIVER_DEVICE_MISSING
+        );
+    }
     #[test]
     fn compact_row_preserves_identity_and_distinguishes_link_from_session() {
         let state = Snapshot::default();

@@ -1,10 +1,17 @@
 use std::time::{Duration, Instant};
 
-/// Shared schedule for synchronization and idle neutral reports. Session
+/// Schedule for required synchronization. Session
 /// flapping must not reset backoff; only success or user selection does.
 pub(super) struct Maintenance {
     pub failures: u32,
     next: Instant,
+}
+
+pub(super) fn needs_synchronization(active: &[bool; 3], synced: &[bool; 3]) -> bool {
+    active
+        .iter()
+        .zip(synced)
+        .any(|(active, synced)| *active && !*synced)
 }
 impl Maintenance {
     pub fn new(now: Instant) -> Self {
@@ -21,7 +28,8 @@ impl Maintenance {
     }
     pub fn success(&mut self, now: Instant) {
         self.failures = 0;
-        self.next = now + Duration::from_secs(3);
+        // Readiness prevents idle sends. A new generation must synchronize immediately.
+        self.next = now;
     }
     pub fn failure(&mut self, now: Instant) {
         self.failures = self.failures.saturating_add(1);
@@ -33,6 +41,20 @@ impl Maintenance {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn synchronized_idle_reports_do_not_wake_receiver_but_new_reports_sync_immediately() {
+        let now = Instant::now();
+        let mut policy = Maintenance::new(now);
+        policy.success(now);
+        let media = [true, false, false];
+        assert!(!needs_synchronization(&media, &media));
+        assert!(!needs_synchronization(&[true; 3], &[true; 3]));
+        assert!(needs_synchronization(&media, &[false; 3]));
+        assert!(needs_synchronization(&[true; 3], &media));
+        assert!(policy.due(now + Duration::from_millis(100)));
+        policy.failure(now);
+        assert!(!policy.due(now + Duration::from_millis(100)));
+    }
     #[test]
     fn receiver_can_recover_after_a_long_outage() {
         let mut now = Instant::now();
@@ -80,9 +102,9 @@ mod tests {
         assert!(policy.due(now));
         policy.success(now);
         assert!(policy.refresh_due(now));
-        assert!(!policy.due(now + Duration::from_secs(2)));
+        assert!(policy.due(now));
         assert!(policy.due(now + Duration::from_secs(3)));
         policy.success(now + Duration::from_secs(2));
-        assert!(!policy.due(now + Duration::from_secs(3)));
+        assert!(policy.due(now + Duration::from_secs(3)));
     }
 }

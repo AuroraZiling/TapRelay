@@ -176,10 +176,15 @@ pub struct BleHandle {
     pub state: watch::Receiver<Snapshot>,
     stop: Arc<AtomicBool>,
     revision: Arc<AtomicU64>,
+    progress: Arc<AtomicU64>,
     thread: Option<thread::JoinHandle<()>>,
     hid_sender: Arc<sender::Sender>,
 }
 impl BleHandle {
+    /// Advances only on the native control thread, never on GATT callbacks or IPC.
+    pub fn progress(&self) -> u64 {
+        self.progress.load(Ordering::Acquire)
+    }
     pub fn input_link(&self) -> taprelay_core::passthrough::InputLink {
         self.hid_sender.link.clone()
     }
@@ -216,6 +221,8 @@ impl BleHandle {
         let stop = Arc::new(AtomicBool::new(false));
         let stopping = stop.clone();
         let revision = Arc::new(AtomicU64::new(1));
+        let progress = Arc::new(AtomicU64::new(0));
+        let worker_progress = progress.clone();
         let hid_sender = Arc::new(sender::Sender::new(revision.clone())?);
         let worker_sender = hid_sender.clone();
         let worker_revision = revision.clone();
@@ -233,9 +240,10 @@ impl BleHandle {
                         let manager = Rc::new(RefCell::new(Coordinator::default()));
                         let mut publication =
                             publication::Publication::new(publish, Instant::now());
-                        let mut server = None;
+                        let mut server: Option<Server> = None;
                         let mut refresh_at = Instant::now();
                         while !stopping.load(Ordering::Acquire) {
+                            worker_progress.fetch_add(1, Ordering::Release);
                             let previous_adapter = discovery.adapter;
                             let previous_adapter_id = discovery.adapter_id.clone();
                             if let Err(e) = discovery.tick() {
@@ -255,6 +263,11 @@ impl BleHandle {
                                 Instant::now(),
                             ) {
                                 // Drop the old server on its own worker before publishing another.
+                                if let Some(current) = &server {
+                                    publication.selection = startup_restore
+                                        .borrow_mut()
+                                        .service_recreated(&current.state, Instant::now());
+                                }
                                 server.take();
                                 manager.borrow_mut().disconnect();
                                 tx.send_replace(Snapshot {
@@ -273,7 +286,7 @@ impl BleHandle {
                                     profile,
                                 ) {
                                     Ok(mut s) => {
-                                        if let Some(id) = publication.selection.take() {
+                                        if let Some(id) = publication.selection.clone() {
                                             manager.borrow_mut().connect(
                                                 &s.state,
                                                 id.clone(),
@@ -447,6 +460,7 @@ impl BleHandle {
             state,
             stop,
             revision,
+            progress,
             thread: Some(thread),
             hid_sender,
         })
@@ -997,6 +1011,21 @@ impl Server {
             self.publish();
             return;
         }
+        if matches!(e, BackendError::TimedOut) {
+            self.adopt_generation();
+            self.synced = false;
+            self.synced_reports = [false; 3];
+            self.state.ready = false;
+            if self.startup_restore.borrow().pending() {
+                self.startup_restore.borrow_mut().failure(Instant::now());
+            } else {
+                self.maintenance.failure(Instant::now());
+            }
+            self.retry_at = Instant::now() + Duration::from_secs(3);
+            self.configure_sender();
+            self.publish();
+            return;
+        }
         self.authorization
             .reconcile(|selected| *selected = authorization::Selected::default());
         self.adopt_generation();
@@ -1079,14 +1108,14 @@ impl Server {
             let Metadata { name, pairing, identity } = self.metadata.resolve(&id, Instant::now(), || {
                 updates.send_modify(|s| s.activity = TransportActivity::ResolvingDevice);
                 let resolving_started = Instant::now();
-                tracing::debug!(device_id = %id, "Resolving subscriber identity");
+                tracing::info!("Subscriber device lookup started");
                 match BluetoothLEDevice::FromIdAsync(&windows::core::HSTRING::from(&id))
                     .and_then(|p| p.join())
                 {
                     Ok(device) => {
                         tracing::info!(
                             elapsed_ms = resolving_started.elapsed().as_millis(),
-                            "Subscriber identity resolved"
+                            "Subscriber device handle opened"
                         );
                         let name = device
                             .Name()
@@ -1111,6 +1140,7 @@ impl Server {
                         identity.sort();
                         identity.dedup();
                         if let Err(e) = device.Close() { tracing::warn!("Close subscriber metadata handle: {e}"); }
+                        tracing::info!(elapsed_ms = resolving_started.elapsed().as_millis(), identity_keys = identity.len(), ?pairing, "Subscriber identity resolved");
                         Metadata { name, pairing, identity }
                     }
                     Err(e) => {
@@ -1269,6 +1299,7 @@ impl Server {
         self.publish();
         if available
             && self.sender.link.epoch() == 0
+            && maintenance::needs_synchronization(&report_active, &self.synced_reports)
             && (if self.startup_restore.borrow().pending() {
                 self.startup_restore.borrow().due(Instant::now())
             } else {
@@ -1282,7 +1313,7 @@ impl Server {
             let recovering = !self.synced || self.maintenance.failures > 0;
             let mut failed = None;
             for (index, kind) in hid::ReportKind::ALL.into_iter().enumerate() {
-                if !report_active[index] {
+                if !report_active[index] || self.synced_reports[index] {
                     continue;
                 }
                 let Some(report_client) = self.selected_clients[index].clone() else {
@@ -1414,12 +1445,23 @@ impl Server {
                 tracing::debug!(%error, "Retired GATT session handler cleanup failed");
             }
             if let Some(session) = consumer {
-                self.link_device = session
+                let started = Instant::now();
+                tracing::info!("Selected Bluetooth link lookup started");
+                let device = session
                     .DeviceId()
                     .and_then(|id| id.Id())
                     .and_then(|id| BluetoothLEDevice::FromIdAsync(&id))
-                    .and_then(|operation| operation.join())
-                    .ok();
+                    .and_then(|operation| operation.join());
+                match &device {
+                    Ok(_) => tracing::info!(
+                        elapsed_ms = started.elapsed().as_millis(),
+                        "Selected Bluetooth link opened"
+                    ),
+                    Err(error) => {
+                        tracing::warn!(elapsed_ms = started.elapsed().as_millis(), %error, "Selected Bluetooth link lookup failed")
+                    }
+                }
+                self.link_device = device.ok();
                 if let Some(client) = &clients[0] {
                     self.enable_connection_maintenance(client);
                 }

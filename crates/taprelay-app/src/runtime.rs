@@ -907,7 +907,7 @@ impl Runtime {
         for input in pending {
             match input {
                 RoutedInput::Control(result) => self.apply_router_outputs(result),
-                RoutedInput::Edge { event, result } => {
+                RoutedInput::Edge { event, mut result } => {
                     if event.captured < self.epoch {
                         continue;
                     }
@@ -947,9 +947,13 @@ impl Runtime {
                         }
                         continue;
                     }
-                    if event.captured > self.ui_input_until {
-                        self.apply_router_outputs(result);
+                    if event.captured <= self.ui_input_until {
+                        // GUI input must still release commands already held by the receiver.
+                        result.outputs.retain(|output| {
+                            matches!(output, RoutedOutput::Function { down: false, .. })
+                        });
                     }
+                    self.apply_router_outputs(result);
                 }
             }
         }
@@ -1544,6 +1548,60 @@ mod tests {
                 revision: 0,
             }],
             ..Default::default()
+        }
+    }
+
+    #[test]
+    fn ui_input_cutoff_preserves_media_releases_but_suppresses_queued_presses() {
+        for action in [MediaCommand::Rewind, MediaCommand::FastForward] {
+            let mut runtime = Runtime::new(Config::default());
+            runtime.input_initialized = true;
+            runtime.input = Some(Box::new(FakeInput));
+            runtime.transport = Some(Box::new(FakeTransport));
+            runtime.listening = true;
+            runtime.state.ready = true;
+            runtime.state.selected = Some("receiver".into());
+            let action = FunctionAction::Media(action);
+            runtime.apply_router_outputs(function_output(action, true, Instant::now()));
+            runtime.tick_with_capture_context(true, false);
+            assert_eq!(runtime.delivered, 1);
+
+            for down in [false, true] {
+                let event = InputEvent {
+                    code: InputCode::Key(0x77),
+                    down,
+                    captured: Instant::now(),
+                };
+                runtime
+                    .sender
+                    .try_send(RoutedInput::Edge {
+                        event,
+                        result: function_output(action, down, event.captured),
+                    })
+                    .unwrap();
+                runtime.consume_ui_input();
+                runtime.tick_with_capture_context(true, false);
+                assert_eq!(
+                    runtime.delivered, 2,
+                    "only the held command's release should pass"
+                );
+            }
+            assert!(runtime.error.is_none());
+
+            let event = InputEvent {
+                code: InputCode::Key(0x77),
+                down: true,
+                captured: Instant::now(),
+            };
+            runtime
+                .sender
+                .try_send(RoutedInput::Edge {
+                    event,
+                    result: function_output(action, true, event.captured),
+                })
+                .unwrap();
+            runtime.tick_with_capture_context(true, false);
+            assert_eq!(runtime.delivered, 3, "new input should still pass");
         }
     }
 

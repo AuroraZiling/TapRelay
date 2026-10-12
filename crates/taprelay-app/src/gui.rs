@@ -133,13 +133,7 @@ pub fn run() -> Result<()> {
         ref selected => selected.locale(),
     };
     let desktop = Desktop::new(i18n::tray_labels(locale))?;
-    let size = &config.window;
-    if let (Some(x), Some(y)) = (size.x, size.y)
-        && desktop::visible_position(x, y)
-    {
-        ui.window().set_position(slint::PhysicalPosition::new(x, y));
-    }
-    ui.window().set_maximized(size.maximized);
+    restore_geometry(&ui, &config.window);
     let actions = Rc::new(RefCell::new(Vec::<(Action, String)>::new()));
     let a = actions.clone();
     ui.window().on_close_requested(move || {
@@ -261,6 +255,19 @@ pub fn run() -> Result<()> {
     c.save_geometry(&ui);
     c.flush(true);
     Ok(())
+}
+
+pub(super) fn restore_geometry(ui: &AppWindow, geometry: &config::Geometry) {
+    ui.window().set_size(slint::LogicalSize::new(
+        geometry.width.max(900.),
+        geometry.height.max(500.),
+    ));
+    if let (Some(x), Some(y)) = (geometry.x, geometry.y)
+        && desktop::visible_position(x, y)
+    {
+        ui.window().set_position(slint::PhysicalPosition::new(x, y));
+    }
+    ui.window().set_maximized(geometry.maximized);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

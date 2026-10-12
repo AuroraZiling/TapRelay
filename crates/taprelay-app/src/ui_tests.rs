@@ -133,6 +133,35 @@ impl slint::platform::Platform for SoftwareTestPlatform {
 }
 
 #[test]
+fn startup_restores_saved_window_size_and_maximized_state() {
+    slint::platform::set_platform(Box::new(SoftwareTestPlatform {
+        window: slint::platform::software_renderer::MinimalSoftwareWindow::new(
+            slint::platform::software_renderer::RepaintBufferType::ReusedBuffer,
+        ),
+    }))
+    .unwrap();
+    let ui = AppWindow::new().unwrap();
+    for (width, height, maximized, expected) in [
+        (1200., 800., false, (1200., 800.)),
+        (1100., 700., true, (1100., 700.)),
+        (300., 200., false, (900., 500.)),
+    ] {
+        crate::gui::restore_geometry(
+            &ui,
+            &crate::config::Geometry {
+                width,
+                height,
+                maximized,
+                ..Default::default()
+            },
+        );
+        let size = ui.window().size().to_logical(ui.window().scale_factor());
+        assert_eq!((size.width, size.height), expected);
+        assert_eq!(ui.window().is_maximized(), maximized);
+    }
+}
+
+#[test]
 fn render_all_views_without_hardware() {
     let render_window = slint::platform::software_renderer::MinimalSoftwareWindow::new(
         slint::platform::software_renderer::RepaintBufferType::ReusedBuffer,

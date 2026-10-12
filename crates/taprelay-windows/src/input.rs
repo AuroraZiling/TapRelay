@@ -882,11 +882,6 @@ fn passthrough_active() -> bool {
 }
 
 fn end_passthrough() {
-    PASSTHROUGH.with(|link| {
-        if let Some(link) = link.borrow().as_ref() {
-            link.end();
-        }
-    });
     if passthrough_active() {
         tracing::info!("Passthrough ended; input returned to this computer");
     }
@@ -897,7 +892,13 @@ fn end_passthrough() {
             .map(|p| p.router.set_passthrough(false))
             .unwrap_or_default()
     });
+    // Queue held mapping releases before EndPassthrough closes admission.
     prepare_hook_result(&mut result);
+    PASSTHROUGH.with(|link| {
+        if let Some(link) = link.borrow().as_ref() {
+            link.end();
+        }
+    });
     if !result.outputs.is_empty() {
         dispatch(RoutedInput::Control(result));
     }
@@ -1454,6 +1455,102 @@ unsafe extern "system" fn mouse_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESU
 mod tests {
     use super::*;
     use windows::core::w;
+
+    #[test]
+    fn passthrough_exit_queues_held_mapping_releases_before_closing_admission() {
+        use taprelay_core::{
+            function::{ModifierSet, Shortcut},
+            mapping::{CustomMapping, MappingOutput},
+        };
+        for output in [
+            MappingOutput::Keyboard {
+                usage: 0x4f,
+                modifiers: 1,
+            },
+            MappingOutput::Mouse {
+                button: MouseButton::Left,
+            },
+        ] {
+            let (link, queue) = InputLink::channel(Arc::new(std::sync::atomic::AtomicU64::new(1)));
+            link.set_mapping_profile(true);
+            link.set_profile_available(true);
+            link.set_ready(1);
+            assert!(link.request_profile());
+            assert!(link.begin());
+            let mut policy = HookPolicy::new();
+            policy.router.update_mappings(&[CustomMapping {
+                id: 1,
+                name: "Held output".into(),
+                enabled: true,
+                shortcuts: vec![Shortcut::mouse(ModifierSet::empty(), MouseButton::Side1)],
+                output,
+                groups: Default::default(),
+            }]);
+            policy.router.set_listening(true);
+            policy.router.set_passthrough(true);
+            let event = InputEvent {
+                code: InputCode::Mouse(MouseButton::Side1),
+                down: true,
+                captured: Instant::now(),
+            };
+            let mut press = policy.router.route_event(event);
+            PASSTHROUGH.with(|slot| *slot.borrow_mut() = Some(link.clone()));
+            POLICY.with(|slot| *slot.borrow_mut() = Some(policy));
+            assert!(prepare_hook_result(&mut press));
+            let PassthroughEvent::Mapping {
+                token, down: true, ..
+            } = queue.try_recv().unwrap().event
+            else {
+                panic!("missing mapping press");
+            };
+
+            end_passthrough();
+            assert!(!link.capture_requested());
+            // The supervisor reopens the unchanged mapping profile before draining input.
+            link.set_ready(1);
+            let packets: Vec<_> = queue.try_iter().collect();
+            assert!(packets.iter().all(|packet| link.accepts(packet)));
+            assert_eq!(
+                packets
+                    .iter()
+                    .map(|packet| packet.event)
+                    .collect::<Vec<_>>(),
+                [
+                    PassthroughEvent::Mapping {
+                        output,
+                        token,
+                        down: false
+                    },
+                    PassthroughEvent::ReleasePhysical
+                ],
+            );
+            let tail = POLICY.with(|slot| {
+                slot.borrow_mut()
+                    .as_mut()
+                    .unwrap()
+                    .router
+                    .route_event(InputEvent {
+                        down: false,
+                        captured: Instant::now(),
+                        ..event
+                    })
+            });
+            assert!(tail.consume && tail.outputs.is_empty());
+            POLICY.with(|slot| slot.borrow_mut().take());
+            PASSTHROUGH.with(|slot| slot.borrow_mut().take());
+        }
+    }
+
+    #[test]
+    fn passthrough_exit_cancels_a_request_before_capture_starts() {
+        let (link, _queue) = InputLink::channel(Arc::new(std::sync::atomic::AtomicU64::new(1)));
+        link.set_profile_available(true);
+        assert!(link.request_profile());
+        PASSTHROUGH.with(|slot| *slot.borrow_mut() = Some(link.clone()));
+        end_passthrough();
+        PASSTHROUGH.with(|slot| slot.borrow_mut().take());
+        assert!(!link.capture_requested());
+    }
 
     #[test]
     fn raw_keyboard_recovers_shortcuts_missing_from_the_hook() {

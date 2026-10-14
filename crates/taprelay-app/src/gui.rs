@@ -251,8 +251,7 @@ struct Controller {
     last_slow: Instant,
     stage_key: String,
     stage_since: Instant,
-    toast: String,
-    toast_until: Instant,
+    pending_notification: Option<String>,
     exit: Option<ExitIntent>,
     last_error: String,
     last_notification: Instant,
@@ -311,8 +310,7 @@ impl Controller {
             last_slow: now - Duration::from_secs(2),
             stage_key: String::new(),
             stage_since: now,
-            toast: String::new(),
-            toast_until: now,
+            pending_notification: None,
             exit: None,
             last_error: String::new(),
             last_notification: now - Duration::from_secs(120),
@@ -344,8 +342,7 @@ impl Controller {
         rust_i18n::t!(key, locale = self.locale()).into_owned()
     }
     fn say(&mut self, message: String) {
-        self.toast = message;
-        self.toast_until = Instant::now() + Duration::from_secs(6);
+        self.pending_notification = Some(message);
     }
     fn command_error(&mut self, error: &anyhow::Error) {
         let message = match error.downcast_ref::<HandoffError>() {
@@ -1143,7 +1140,7 @@ impl Controller {
             },
         };
         ui.input_count = self.runtime.matched;
-        ui.toast = if self.runtime.slow() {
+        ui.progress_message = if self.runtime.slow() {
             self.tr(keys::RUNTIME_SLOW)
         } else if self.exit.is_some() {
             self.tr(keys::RUNTIME_FINISHING)
@@ -1151,8 +1148,6 @@ impl Controller {
             self.tr(keys::RUNTIME_BUSY)
         } else if matches!(self.runtime.test, TestStatus::Pending(_)) {
             self.tr(keys::TEST_SENDING)
-        } else if Instant::now() < self.toast_until {
-            self.toast.clone()
         } else {
             "".into()
         };

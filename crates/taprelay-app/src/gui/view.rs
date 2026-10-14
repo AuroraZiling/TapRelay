@@ -11,6 +11,7 @@ use gpui_kit::component::{
     group_box::{GroupBox, GroupBoxVariants},
     input::{Input, InputEvent, InputState},
     menu::{DropdownMenu, PopupMenuItem},
+    notification::Notification,
     scroll::ScrollableElement,
     switch::Switch,
 };
@@ -23,6 +24,9 @@ mod pages;
 mod shell;
 
 use action_alert::ActionAlert;
+
+struct FeedbackNotification;
+struct ProgressNotification;
 
 #[derive(Clone)]
 enum Command {
@@ -46,6 +50,7 @@ pub(super) struct AppView {
     dialog: u8,
     group_focus_request: i32,
     mapping_focus_request: i32,
+    last_progress_message: String,
     last_tick: Instant,
     _subscriptions: Vec<Subscription>,
     _pump: Task<()>,
@@ -175,6 +180,7 @@ impl AppView {
             dialog: 0,
             group_focus_request: 0,
             mapping_focus_request: 0,
+            last_progress_message: String::new(),
             last_tick: Instant::now() - Duration::from_millis(50),
             _subscriptions: subscriptions,
             _pump: pump,
@@ -270,6 +276,33 @@ impl AppView {
             Theme::change(mode, Some(window), cx);
         }
         gpui_kit::component::set_locale(&self.ui.locale);
+        if let Some(message) = self.controller.pending_notification.take() {
+            window.defer(cx, move |window, cx| {
+                window.push_notification(
+                    Notification::new()
+                        .id::<FeedbackNotification>()
+                        .message(message),
+                    cx,
+                );
+            });
+        }
+        if self.last_progress_message != self.ui.progress_message {
+            self.last_progress_message = self.ui.progress_message.clone();
+            let message = self.last_progress_message.clone();
+            window.defer(cx, move |window, cx| {
+                if message.is_empty() {
+                    window.remove_notification::<ProgressNotification>(cx);
+                } else {
+                    window.push_notification(
+                        Notification::new()
+                            .id::<ProgressNotification>()
+                            .message(message)
+                            .autohide(false),
+                        cx,
+                    );
+                }
+            });
+        }
         let bytes = |c: Hsla| {
             let c = c.to_rgb();
             [(c.r * 255.) as u8, (c.g * 255.) as u8, (c.b * 255.) as u8]
@@ -479,21 +512,7 @@ impl Render for AppView {
         if self.ui.mode == 2 {
             root = root.child(self.navigation(window, cx));
         }
-        root.child(content).when(!self.ui.toast.is_empty(), |root| {
-            root.child(
-                div()
-                    .absolute()
-                    .right_5()
-                    .bottom_5()
-                    .max_w(rems(27.5))
-                    .p_4()
-                    .rounded_lg()
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .bg(cx.theme().group_box)
-                    .child(self.ui.toast.clone()),
-            )
-        })
+        root.child(content)
     }
 }
 

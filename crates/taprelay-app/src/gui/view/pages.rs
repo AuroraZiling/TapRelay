@@ -208,52 +208,32 @@ impl AppView {
             )
     }
 
-    fn admin_alert(&self, cx: &Context<Self>) -> Div {
-        div()
-            .h_flex()
-            .gap_3()
-            .p_3()
-            .rounded_md()
-            .border_1()
-            .border_color(cx.theme().danger.opacity(0.4))
-            .text_color(cx.theme().danger)
-            .bg(cx.theme().danger.opacity(0.08))
-            .child(div().flex_1().child(self.tr("permissions.warning")))
-            .child(self.app_button(
-                "elevate",
-                "permissions.restart.short",
-                Action::Elevate,
-                false,
-                cx,
-            ))
+    fn admin_alert(&self, cx: &Context<Self>) -> ActionAlert {
+        ActionAlert::error("admin-alert", self.tr("permissions.warning")).action(self.app_button(
+            "elevate",
+            "permissions.restart.short",
+            Action::Elevate,
+            false,
+            cx,
+        ))
     }
 
     pub(super) fn overview(&self, window: &mut Window, cx: &Context<Self>) -> AnyElement {
         let mut content = div().v_flex().flex_1().min_h_0().gap_4();
         if !self.ui.problem.is_empty() {
             content = content.child(
-                div()
-                    .h_flex()
-                    .gap_2()
-                    .p_3()
-                    .rounded_lg()
-                    .border_1()
-                    .border_color(cx.theme().danger.opacity(0.4))
-                    .bg(cx.theme().danger.opacity(0.08))
-                    .child(div().flex_1().child(self.error(&self.ui.problem, cx)))
-                    .when(self.ui.problem_retry_allowed, |row| {
-                        row.child(
-                            self.app_button(
-                                "overview-retry",
-                                "common.retry",
-                                Action::Retry,
-                                self.ui.problem_busy,
-                                cx,
-                            )
-                            .small()
-                            .h_7(),
-                        )
-                    }),
+                ActionAlert::error("overview-alert", self.ui.problem.clone()).when(
+                    self.ui.problem_retry_allowed,
+                    |alert| {
+                        alert.action(self.app_button(
+                            "overview-retry",
+                            "common.retry",
+                            Action::Retry,
+                            self.ui.problem_busy,
+                            cx,
+                        ))
+                    },
+                ),
             );
         }
         if !self.ui.elevated {

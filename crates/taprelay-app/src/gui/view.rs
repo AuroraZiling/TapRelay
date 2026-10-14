@@ -5,7 +5,7 @@ use super::{
 use gpui_kit::assets::IconName;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::{
-    ActiveTheme, Disableable, Icon, Selectable, Sizable, StyledExt, Theme, ThemeMode, WindowExt,
+    ActiveTheme, Disableable, Icon, Selectable, StyledExt, Theme, ThemeMode, WindowExt,
     button::{Button, ButtonVariants},
     checkbox::Checkbox,
     group_box::{GroupBox, GroupBoxVariants},
@@ -17,9 +17,12 @@ use gpui_kit::component::{
 use gpui_kit::{prelude::*, *};
 use std::time::{Duration, Instant};
 
+mod action_alert;
 mod editors;
 mod pages;
 mod shell;
+
+use action_alert::ActionAlert;
 
 #[derive(Clone)]
 enum Command {

@@ -1,12 +1,16 @@
 use super::{
     Action, BindingCommand, Controller, DesktopEvent, FunctionId, Presentation, config, desktop,
 };
+use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::{
     ActiveTheme, StyledExt,
     input::{InputEvent, InputState},
 };
 use gpui_kit::{prelude::*, *};
-use std::time::{Duration, Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 mod components;
 mod dialogs;
@@ -29,6 +33,7 @@ pub(super) struct AppView {
     focus: FocusHandle,
     capture_focus: Option<FocusHandle>,
     sidebar_collapsed: bool,
+    app_icon: Arc<Image>,
     group_name: Entity<InputState>,
     mapping_name: Entity<InputState>,
     output_filter: Entity<InputState>,
@@ -159,6 +164,10 @@ impl AppView {
             focus: cx.focus_handle(),
             capture_focus: None,
             sidebar_collapsed: false,
+            app_icon: Arc::new(Image::from_bytes(
+                ImageFormat::Png,
+                include_bytes!("../../resources/taprelay-128.png").to_vec(),
+            )),
             group_name,
             mapping_name,
             output_filter,
@@ -240,7 +249,9 @@ impl Render for AppView {
             .min_w_0()
             .min_h_0()
             .gap(rems(1.125))
-            .p_7();
+            .p_7()
+            .bg(cx.theme().background)
+            .rounded_tl(cx.theme().radius_tokens().xl);
         if self.ui.mode == 2 {
             content = content.child(self.page_header(cx));
         }
@@ -257,14 +268,14 @@ impl Render for AppView {
             },
         };
         content = content.child(body);
-        let mut root = div()
+        let root = div()
             .id("taprelay")
             .track_focus(&self.focus)
             .size_full()
-            .h_flex()
+            .v_flex()
             .relative()
             .items_stretch()
-            .bg(cx.theme().background)
+            .bg(cx.theme().sidebar)
             .text_color(cx.theme().foreground)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if !this.controller.recording() {
@@ -274,10 +285,18 @@ impl Render for AppView {
             .on_key_up(cx.listener(|this, event: &KeyUpEvent, window, cx| {
                 this.key(&event.keystroke.key, false, window, cx)
             }));
+        let mut workspace = div()
+            .id("workspace")
+            .h_flex()
+            .items_stretch()
+            .flex_1()
+            .min_h_0()
+            .test_support();
         if self.ui.mode == 2 {
-            root = root.child(self.navigation(window, cx));
+            workspace = workspace.child(self.navigation(window, cx));
         }
-        root.child(content)
+        root.child(self.title_bar(cx))
+            .child(workspace.child(content))
     }
 }
 

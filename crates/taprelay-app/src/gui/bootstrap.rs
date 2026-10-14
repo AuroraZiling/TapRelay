@@ -1,5 +1,6 @@
 use super::view::AppView;
 use super::*;
+use gpui_kit::component::TitleBar;
 use gpui_kit::{AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size};
 
 pub fn run() -> Result<()> {
@@ -100,13 +101,13 @@ pub fn run() -> Result<()> {
                 }),
                 titlebar: Some(TitlebarOptions {
                     title: Some("TapRelay".into()),
-                    ..Default::default()
+                    ..TitleBar::title_bar_options()
                 }),
                 window_min_size: Some(size_for_minimum()),
                 show: false,
                 focus: false,
                 app_id: Some("TapRelay".into()),
-                ..Default::default()
+                ..TitleBar::window_options()
             };
             match gpui_kit::open_window(options, cx, |window, cx| {
                 cx.new(|cx| AppView::new(controller, geometry, window, cx))

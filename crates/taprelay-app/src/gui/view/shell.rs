@@ -4,7 +4,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::base::motion::{Transition, transition};
 use gpui_kit::component::{
-    ActiveTheme, Collapsible, Icon, StyledExt,
+    ActiveTheme, Collapsible, Icon, StyledExt, TitleBar,
     sidebar::{SidebarItem, SidebarMenu, SidebarMenuItem, SidebarToggleButton},
 };
 use gpui_kit::{prelude::*, *};
@@ -19,11 +19,29 @@ const TITLES: [&str; 5] = [
 ];
 
 impl AppView {
+    pub(super) fn title_bar(&self, cx: &App) -> TitleBar {
+        TitleBar::new()
+            .h_10()
+            .bg(cx.theme().title_bar)
+            .border_b_0()
+            .child(
+                div()
+                    .id("titlebar-brand")
+                    .h_flex()
+                    .gap_2()
+                    .flex_shrink_0()
+                    .text_sm()
+                    .child(img(self.app_icon.clone()).size_4())
+                    .child("TapRelay")
+                    .test_support(),
+            )
+    }
+
     pub(super) fn navigation(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let target_width = if self.sidebar_collapsed {
-            window.rem_size() * 3.5 + px(1.)
+            window.rem_size() * 3.25
         } else {
-            window.rem_size() * 12.
+            window.rem_size() * 11.75
         };
         let width = transition(
             "sidebar-width",
@@ -32,7 +50,7 @@ impl AppView {
             window,
             cx,
         );
-        let content_width = target_width - window.rem_size() * 1.5 - px(1.);
+        let content_width = target_width - window.rem_size() * 1.25;
         let nav = |page: usize, icon| {
             SidebarMenuItem::new(self.tr(TITLES[page]))
                 .icon(Icon::new(icon).size_4())
@@ -59,11 +77,10 @@ impl AppView {
             .h_full()
             .flex_shrink_0()
             .v_flex()
-            .p_3()
+            .py_3()
+            .px_2p5()
             .gap_3()
             .overflow_hidden()
-            .border_r_1()
-            .border_color(cx.theme().sidebar_border)
             .bg(cx.theme().sidebar)
             .text_color(cx.theme().sidebar_foreground)
             .child(

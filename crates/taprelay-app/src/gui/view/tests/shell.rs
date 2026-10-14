@@ -1,7 +1,105 @@
-use super::support::open;
+use super::support::{open, settle};
+use crate::action::Action;
+use crate::gui::view::Command;
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{AppContext, TestAppContext};
+use gpui_kit::{AppContext, TestAppContext, px};
 use std::time::Duration;
+
+#[gpui_kit::test]
+fn title_bar_remains_above_every_screen_in_both_locales_and_themes(cx: &mut TestAppContext) {
+    let (handle, view, _folder) = open(cx);
+    for scale in [1., 1.5, 2.] {
+        cx.simulate_window_scale_factor_change(handle, scale);
+        cx.update_window(handle, |_, window, cx| {
+            for language in ["english", "chinese"] {
+                for dark in [false, true] {
+                    for mode in [0, 1, 2, 3] {
+                        view.update(cx, |view, cx| {
+                            view._pump = gpui_kit::Task::ready(());
+                            view.controller.runtime.config.options.language =
+                                crate::config::Language::from_name(language).unwrap();
+                            view.controller.passed = matches!(mode, 1 | 2);
+                            view.controller.fatal = (mode == 3).then(|| "Startup failed".into());
+                            view.controller.sync(&mut view.ui);
+                            view.ui.mode = mode;
+                            view.ui.dark = dark;
+                            view.effects(window, cx);
+                            cx.notify();
+                        });
+                        window.render_frame(cx);
+                        let bar = window.find("title-bar").bounds();
+                        let workspace = window.find("workspace").bounds();
+                        let brand = window.find("titlebar-brand").bounds();
+                        let controls = window.find("window-controls").bounds();
+                        assert_eq!(bar.size.height, px(40.));
+                        assert_eq!(bar.size.width, px(900.));
+                        assert_eq!(workspace.top(), bar.bottom());
+                        assert_eq!(workspace.bottom(), px(500.));
+                        assert!(brand.is_contained_within(&bar));
+                        assert!(window.try_find("titlebar-status").is_none());
+                        assert_eq!(controls.right(), bar.right());
+                        assert!(controls.top() >= bar.top());
+                        assert!(controls.bottom() <= bar.bottom());
+                        assert!(controls.left() >= brand.right() + px(100.));
+                        for control in ["minimize", "maximize", "close"] {
+                            assert!(window.within("title-bar").find(control).visible());
+                        }
+                        assert_eq!(window.try_find("navigation").is_some(), mode == 2);
+                        assert_eq!(window.try_find("page-header").is_some(), mode == 2);
+                        if mode == 2 {
+                            assert_eq!(window.find("navigation").bounds().top(), bar.bottom());
+                            assert_eq!(
+                                window.find("receiver-status-indicator").label(),
+                                Some(view.read(cx).ui.stage.as_str()),
+                            );
+                        }
+                    }
+                }
+            }
+        })
+        .unwrap();
+    }
+}
+
+#[gpui_kit::test]
+fn window_close_preserves_unsaved_mapping_confirmation_and_close_to_tray(cx: &mut TestAppContext) {
+    let (handle, view, _folder) = open(cx);
+    cx.update_window(handle, |_, window, cx| {
+        view.update(cx, |view, cx| {
+            view._pump = gpui_kit::Task::ready(());
+            view.dispatch(Command::App(Action::Navigate, "1".into()), window, cx);
+        });
+    })
+    .unwrap();
+    settle(cx, handle, &view);
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("custom-mappings", cx);
+        window.click("mapping-create", cx);
+        window.click("mapping-name", cx);
+        window.input("Unsaved mapping", cx);
+    })
+    .unwrap();
+    let mut visual = gpui_kit::VisualTestContext::from_window(handle, cx);
+    assert!(!visual.simulate_close());
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("dialog-cancel").visible());
+        assert!(!view.read(cx).controller.hidden);
+        window.click("dialog-cancel", cx);
+        assert_eq!(window.find("mapping-name").value(), Some("Unsaved mapping"));
+    })
+    .unwrap();
+    assert!(!visual.simulate_close());
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("dialog-discard", cx);
+        assert!(view.read(cx).controller.hidden);
+        assert!(!view.read(cx).controller.runtime.stopped());
+        assert!(view.read(cx).controller.mapping_draft.is_none());
+    })
+    .unwrap();
+}
 
 #[gpui_kit::test]
 fn sidebar_toggle_keeps_its_position_when_collapsed(cx: &mut TestAppContext) {

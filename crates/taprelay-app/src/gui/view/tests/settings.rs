@@ -36,6 +36,15 @@ fn settings_switch_between_catppuccin_themes_and_follow_system(cx: &mut TestAppC
             assert_eq!(theme.primary, gpui_kit::rgb(primary).into());
             assert_eq!(theme.tokens.background, theme.background.into());
             assert_eq!(theme.button_primary, theme.primary);
+            assert_eq!(theme.title_bar, theme.sidebar);
+            assert!(theme.sidebar.l > theme.background.l);
+            for background in [theme.title_bar, theme.secondary] {
+                let hovered = background.blend(theme.secondary_hover);
+                assert!(
+                    (hovered.l - background.l).abs() > 0.02,
+                    "secondary hover must remain visible on title bars and buttons in {name}"
+                );
+            }
             let color = theme.group_box.to_rgb();
             assert_eq!(
                 view.read(cx).ui.overlay_background,

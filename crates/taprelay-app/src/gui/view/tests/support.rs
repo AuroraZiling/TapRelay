@@ -5,6 +5,7 @@ use crate::{
     runtime::Runtime,
     runtime_worker::RuntimeHandle,
 };
+use gpui_kit::component::TitleBar;
 use gpui_kit::{
     AnyWindowHandle, AppContext, Bounds, Entity, TestAppContext, WindowBounds, WindowOptions, px,
     size,
@@ -67,7 +68,7 @@ pub(super) fn open_sized(
                     Default::default(),
                     size(px(width), px(height)),
                 ))),
-                ..Default::default()
+                ..TitleBar::window_options()
             },
             cx,
             |window, cx| {

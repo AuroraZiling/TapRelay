@@ -21,15 +21,16 @@ fn preserves_overview_proportions_in_both_themes_and_window_sizes(cx: &mut TestA
                         cx.notify();
                     });
                     window.render_frame(cx);
+                    let bar = window.find("title-bar").bounds();
                     let nav = window.find("navigation").bounds();
                     let header = window.find("page-header").bounds();
                     let status = window.find("status-card").bounds();
                     let shortcuts = window.find("shortcuts-card").bounds();
-                    assert_eq!(nav.size.width, px(192.));
-                    assert_eq!(nav.size.height, px(height));
+                    assert_eq!(nav.size.width, px(188.));
+                    assert_eq!(nav.size.height, px(height) - bar.size.height);
                     assert_eq!(
                         header.origin,
-                        gpui_kit::point(nav.right() + px(28.), px(28.))
+                        gpui_kit::point(nav.right() + px(28.), bar.bottom() + px(28.))
                     );
                     assert_eq!(status.size.height, px(180.));
                     assert_eq!(status.origin.x, header.origin.x);

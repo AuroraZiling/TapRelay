@@ -1,4 +1,9 @@
 use super::*;
+use gpui_kit::base::motion::{Transition, transition};
+use gpui_kit::component::Collapsible;
+use gpui_kit::component::sidebar::{
+    SidebarItem, SidebarMenu, SidebarMenuItem, SidebarToggleButton,
+};
 
 const TITLES: [&str; 5] = [
     "nav.overview",
@@ -32,40 +37,84 @@ impl AppView {
         div().text_xl().child(text)
     }
 
-    pub(super) fn navigation(&self, cx: &Context<Self>) -> AnyElement {
-        let nav = |page: usize, icon| {
-            self.icon_button(
-                ("nav", page),
-                icon,
-                self.tr(TITLES[page]),
-                Command::App(Action::Navigate, page.to_string()),
-                false,
-                cx,
-            )
-            .toggled(self.ui.page == page as i32)
-            .map(|button| {
-                if self.ui.page == page as i32 {
-                    button.primary()
-                } else {
-                    button.ghost()
-                }
-            })
+    pub(super) fn navigation(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let target_width = if self.sidebar_collapsed {
+            window.rem_size() * 3.5 + px(1.)
+        } else {
+            window.rem_size() * 12.
         };
-        div()
-            .id("navigation")
-            .w(rems(3.75))
-            .h_full()
-            .flex_shrink_0()
-            .v_flex()
-            .p_3()
-            .gap(rems(0.625))
-            .bg(cx.theme().sidebar)
+        let width = transition(
+            "sidebar-width",
+            target_width,
+            Transition::new(Duration::from_millis(200)),
+            window,
+            cx,
+        );
+        let content_width = target_width - window.rem_size() * 1.5 - px(1.);
+        let nav = |page: usize, icon| {
+            SidebarMenuItem::new(self.tr(TITLES[page]))
+                .icon(Icon::new(icon).size_4())
+                .min_h_9()
+                .active(self.ui.page == page as i32)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.dispatch(Command::App(Action::Navigate, page.to_string()), window, cx)
+                }))
+        };
+        let menu = SidebarMenu::new()
             .child(nav(0, IconName::LayoutDashboard))
             .child(nav(1, IconName::Keyboard))
             .child(nav(4, IconName::Folder))
             .child(nav(2, IconName::Bluetooth))
-            .child(div().flex_1())
-            .child(nav(3, IconName::Settings))
+            .w(content_width)
+            .collapsed(self.sidebar_collapsed);
+        let settings = nav(3, IconName::Settings)
+            .collapsed(self.sidebar_collapsed)
+            .render(("nav", 3usize), window, cx)
+            .into_any_element();
+        div()
+            .id("navigation")
+            .w(width)
+            .h_full()
+            .flex_shrink_0()
+            .v_flex()
+            .p_3()
+            .gap_3()
+            .overflow_hidden()
+            .border_r_1()
+            .border_color(cx.theme().sidebar_border)
+            .bg(cx.theme().sidebar)
+            .text_color(cx.theme().sidebar_foreground)
+            .child(
+                div()
+                    .w_8()
+                    .h_9()
+                    .flex_shrink_0()
+                    .h_flex()
+                    .justify_center()
+                    .child(
+                        SidebarToggleButton::new()
+                            .collapsed(self.sidebar_collapsed)
+                            .accessibility_label(if self.sidebar_collapsed {
+                                "Expand sidebar"
+                            } else {
+                                "Collapse sidebar"
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.sidebar_collapsed = !this.sidebar_collapsed;
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .child(
+                div()
+                    .id("navigation-menu")
+                    .w(content_width)
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .child(menu.render(0usize, window, cx).into_any_element()),
+            )
+            .child(div().w(content_width).child(settings))
             .test_support()
             .into_any_element()
     }

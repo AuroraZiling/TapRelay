@@ -25,6 +25,7 @@ pub struct View {
     pub state: Snapshot,
     pub matched: u64,
     pub listening: bool,
+    pub passthrough: bool,
     capture: Option<CaptureSession>,
     pub test: TestStatus,
     pub bindings_revision: u64,
@@ -43,6 +44,9 @@ impl View {
             state: runtime.state.clone(),
             matched: runtime.matched,
             listening: runtime.listening,
+            passthrough: runtime.passthrough_epoch() != 0
+                && runtime.state.ready
+                && runtime.state.selected_target().is_some(),
             capture: runtime.capture().cloned(),
             test: runtime.test.clone(),
             bindings_revision: runtime.bindings_revision,
@@ -401,6 +405,7 @@ impl RuntimeHandle {
         self.view.capture = None;
         self.view.test = TestStatus::Idle;
         self.view.listening = false;
+        self.view.passthrough = false;
         self.view.state.input = false;
         self.view.state.ready = false;
     }

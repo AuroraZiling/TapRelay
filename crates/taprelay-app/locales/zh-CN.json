@@ -164,6 +164,7 @@
   "receiver.pair.unknown": "配对状态未知",
   "receiver.pair.wait": "请在操作系统中完成配对。TapRelay 正在监测设备状态。",
   "receiver.paired.disconnected": "已配对 · 未连接 TapRelay",
+  "receiver.passthrough": "透传中",
   "receiver.preparing": "正在重新准备蓝牙服务",
   "receiver.ready": "会话已就绪",
   "receiver.refresh": "刷新设备",

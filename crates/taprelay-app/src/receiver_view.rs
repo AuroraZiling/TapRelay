@@ -200,13 +200,12 @@ pub fn row(target: &Target, state: &Snapshot, tr: impl Fn(&'static str) -> Strin
     };
     let detail = tr(detail);
     DeviceRow {
-        id: target.id.clone().into(),
+        id: target.id.clone(),
         name: if target.name.trim().is_empty() {
             target.id.clone()
         } else {
             target.name.clone()
-        }
-        .into(),
+        },
         device_kind: device_kind(target.kind).into(),
         status: match connection {
             Connection::Connected => "ready",
@@ -218,10 +217,10 @@ pub fn row(target: &Target, state: &Snapshot, tr: impl Fn(&'static str) -> Strin
             _ => "unknown",
         }
         .into(),
-        detail: detail.into(),
+        detail,
         selected,
         action: action.into(),
-        action_label: tr(label).into(),
+        action_label: tr(label),
         enabled: selected
             || (!action.is_empty()
                 && state.adapter_state == AdapterState::Available

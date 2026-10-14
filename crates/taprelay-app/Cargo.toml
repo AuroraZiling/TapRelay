@@ -17,14 +17,6 @@ tracing.workspace = true
 anyhow = "1.0.104"
 serde_json = "1.0.151"
 time = { version = "0.3.55", features = ["formatting"] }
-slint = { version = "1.18.1", default-features = false, features = [
-    "std",
-    "backend-winit",
-    "unstable-winit-030",
-    "renderer-software",
-    "compat-1-2",
-    "accessibility",
-] }
 tracing-subscriber = { version = "0.3.23", default-features = false, features = [
     "fmt",
     "json",
@@ -35,21 +27,17 @@ tracing-appender = "0.2.5"
 tempfile = "3.27.0"
 lru = { version = "0.18.5", default-features = false }
 rust-i18n = "4.2.3"
+gpui-kit = "=0.7.3"
+image = { version = "0.25", default-features = false }
 
 [build-dependencies]
-slint-build = { version = "1.18.1", default-features = false, features = [
-    "compat-1-18",
-] }
 serde_json = "1.0.151"
-lucide-slint = "1.47.0"
 embed-resource = "3.0.11"
 
 [dev-dependencies]
+gpui-kit = { version = "=0.7.3", features = ["test-support"] }
 time = { version = "0.3.55", features = ["macros"] }
-i-slint-backend-testing = { version = "1.18.1", features = [
-    "renderer-software",
-] }
 
 [target.'cfg(windows)'.dependencies]
-i-slint-core = "=1.18.1"
+raw-window-handle = "0.6.2"
 taprelay-windows = { path = "../taprelay-windows" }

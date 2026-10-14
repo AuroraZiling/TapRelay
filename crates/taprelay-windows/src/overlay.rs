@@ -457,7 +457,7 @@ fn capsule_distance(x: f32, y: f32, width: f32) -> f32 {
     ((x - center_x).powi(2) + (y - 30.0).powi(2)).sqrt() - 22.0
 }
 
-// Lucide ScreenShare's 24-unit path, matching the bundled lucide-slint icon.
+// Lucide ScreenShare's 24-unit path, converted to Direct2D geometry.
 // Render its round 2-unit strokes directly into the layered window's alpha mask.
 fn screen_share_coverage(x: f32, y: f32, scale: f32) -> f32 {
     let icon_scale = ICON_SIZE / 24.0;

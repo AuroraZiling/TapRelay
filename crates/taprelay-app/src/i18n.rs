@@ -1,5 +1,4 @@
 use rust_i18n::t;
-use slint::{ComponentHandle, ModelRc, VecModel};
 use std::sync::LazyLock;
 
 pub mod locale {
@@ -98,27 +97,15 @@ pub fn mouse_button_label(locale_id: &str, button: taprelay_core::input::MouseBu
     .into_owned()
 }
 
-pub fn apply(ui: &crate::AppWindow, locale_id: &str) {
-    let locale_id = resolve(locale_id).unwrap_or(locale::SOURCE);
-    let global = ui.global::<crate::I18n>();
-    if global.get_locale() == locale_id {
-        return;
-    }
-    global.set_text(translation_values(locale_id));
-    global.set_locale(locale_id.into());
-}
-
-pub fn language_options(locale_id: &str) -> ModelRc<crate::ChoiceOption> {
-    ModelRc::new(VecModel::from(option_rows(locale_id)))
+pub fn language_options(locale_id: &str) -> Vec<crate::ChoiceOption> {
+    option_rows(locale_id)
 }
 
 /// The single definition of the selector content, shared by the model and its tests.
 fn option_rows(locale_id: &str) -> Vec<crate::ChoiceOption> {
     let locale_id = resolve(locale_id).unwrap_or(locale::SOURCE);
     let mut options = vec![crate::ChoiceOption {
-        label: t!("language.system", locale = locale_id)
-            .into_owned()
-            .into(),
+        label: t!("language.system", locale = locale_id).into_owned(),
         value: "system".into(),
     }];
     options.extend(locale::all().iter().map(|locale| {
@@ -127,8 +114,7 @@ fn option_rows(locale_id: &str) -> Vec<crate::ChoiceOption> {
                 format!("language.{}", locale.to_ascii_lowercase().replace('-', "_")),
                 locale = locale
             )
-            .into_owned()
-            .into(),
+            .into_owned(),
             value: locale.as_str().into(),
         }
     }));

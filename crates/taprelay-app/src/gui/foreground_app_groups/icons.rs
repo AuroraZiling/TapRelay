@@ -1,11 +1,12 @@
 use crate::platform::foreground_apps::IconPixels;
+use gpui_kit::RenderImage;
 use lru::LruCache;
-use slint::{Image, Rgba8Pixel, SharedPixelBuffer};
+use std::sync::Arc;
 use std::{collections::BTreeSet, num::NonZeroUsize, sync::mpsc};
 use taprelay_core::foreground_app::executable_identity;
 
 struct Entry {
-    image: Option<Image>,
+    image: Option<Arc<RenderImage>>,
     name: Option<String>,
     missing: bool,
     fresh: bool,
@@ -74,7 +75,7 @@ impl IconCache {
         }
     }
 
-    pub fn image(&self, path: &str) -> Option<Image> {
+    pub fn image(&self, path: &str) -> Option<Arc<RenderImage>> {
         self.images
             .peek(&executable_identity(path))
             .and_then(|entry| entry.image.clone())
@@ -105,10 +106,13 @@ impl IconCache {
         while let Ok((path, metadata)) = self.results.try_recv() {
             let key = executable_identity(&path);
             self.pending.remove(&key);
-            let image = metadata.icon.map(|pixels| {
-                let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(pixels.size, pixels.size);
-                buffer.make_mut_bytes().copy_from_slice(&pixels.rgba);
-                Image::from_rgba8(buffer)
+            let image = metadata.icon.and_then(|mut pixels| {
+                // GPUI's render cache consumes BGRA; the Windows adapter returns RGBA.
+                for pixel in pixels.rgba.as_chunks_mut::<4>().0 {
+                    pixel.swap(0, 2);
+                }
+                let buffer = image::RgbaImage::from_raw(pixels.size, pixels.size, pixels.rgba)?;
+                Some(Arc::new(RenderImage::new(vec![image::Frame::new(buffer)])))
             });
             self.images.put(
                 key,

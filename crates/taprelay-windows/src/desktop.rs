@@ -1,4 +1,4 @@
-//! Windows shell integration, isolated from Slint and the application state model.
+//! Windows shell integration, isolated from the UI and application state model.
 mod shell_features;
 use super::native::{OwnedRegistryKey, OwnedWindow};
 use std::{collections::VecDeque, sync::Mutex};
@@ -401,7 +401,7 @@ pub fn show_error(text: &str) {
 }
 pub fn foreground_app() {
     unsafe {
-        // Slint owns the actual visible application window, the hidden shell host has a distinct title.
+        // The UI owns the visible window; the shell host stays hidden.
         unsafe extern "system" fn find(hwnd: HWND, _: LPARAM) -> windows::core::BOOL {
             unsafe {
                 let mut pid = 0;
@@ -414,5 +414,35 @@ pub fn foreground_app() {
             }
         }
         let _ = EnumWindows(Some(find), LPARAM(0));
+    }
+}
+
+pub fn set_window_visible(handle: isize, visible: bool) {
+    let window = HWND(handle as *mut _);
+    unsafe {
+        let mode = if !visible {
+            SW_HIDE
+        } else if IsIconic(window).as_bool() {
+            SW_RESTORE
+        } else {
+            SW_SHOW
+        };
+        let _ = ShowWindow(window, mode);
+        if visible {
+            let _ = SetForegroundWindow(window);
+        }
+    }
+}
+
+pub fn display_at_position(x: i32, y: i32) -> Option<(u64, f32)> {
+    use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+    unsafe {
+        let monitor = MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONULL);
+        if monitor.is_invalid() {
+            return None;
+        }
+        let (mut dpi_x, mut dpi_y) = (0, 0);
+        GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y).ok()?;
+        (dpi_x > 0).then_some((monitor.0 as u64, dpi_x as f32 / 96.))
     }
 }

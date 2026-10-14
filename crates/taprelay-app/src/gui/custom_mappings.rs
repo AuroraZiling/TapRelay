@@ -1,5 +1,5 @@
 use super::*;
-use crate::{MappingOutputOption, MappingRow, MappingUi, platform};
+use crate::{MappingOutputOption, MappingRow, platform};
 use taprelay_core::{
     function::ModifierSet,
     input::MouseButton,
@@ -18,31 +18,14 @@ pub(super) enum MappingSave {
     Delete(Vec<CustomMapping>),
 }
 
-pub(super) fn connect(controller: &Rc<RefCell<Controller>>, ui: &AppWindow) {
-    let c = controller.clone();
-    let window = ui.as_weak();
-    ui.global::<MappingUi>().on_command(move |command, value| {
-        dispatch_controller(&c, &window, |c, ui| {
-            c.runtime.poll();
-            c.runtime.consume_ui_input();
-            if let Err(error) = c.mapping_command(ui, &command, &value) {
-                ui.global::<MappingUi>().set_error(error.to_string().into());
-            }
-            c.sync(ui);
-            Ok(())
-        });
-    });
-}
-
 impl Controller {
-    fn mapping_pull(&mut self, ui: &AppWindow) {
+    fn mapping_pull(&mut self, ui: &mut Presentation) {
         let Some(draft) = &mut self.mapping_draft else {
             return;
         };
-        let view = ui.global::<MappingUi>();
-        draft.mapping.name = view.get_name().to_string();
+        draft.mapping.name = ui.mapping.name.clone().to_string();
         draft.mapping.output = with_ui_modifiers(
-            output_from_choice(&view.get_selected_output().value).unwrap_or(
+            output_from_choice(&ui.mapping.selected_output.clone().value).unwrap_or(
                 MappingOutput::Keyboard {
                     usage: 0,
                     modifiers: 0,
@@ -52,7 +35,7 @@ impl Controller {
         );
     }
 
-    pub(super) fn mapping_dirty(&mut self, ui: &AppWindow) -> bool {
+    pub(super) fn mapping_dirty(&mut self, ui: &mut Presentation) -> bool {
         self.mapping_pull(ui);
         self.mapping_draft
             .as_ref()
@@ -61,7 +44,7 @@ impl Controller {
 
     pub(super) fn mapping_leave(
         &mut self,
-        ui: &AppWindow,
+        ui: &mut Presentation,
         next: Option<(Action, String)>,
     ) -> Result<bool> {
         if self.pending_mappings.is_some() {
@@ -72,24 +55,23 @@ impl Controller {
         }
         if self.mapping_dirty(ui) {
             self.mapping_navigation = next;
-            ui.invoke_show_mapping_leave();
+            ui.mapping.leave_open = true;
             return Ok(false);
         }
         self.mapping_close_editor(ui);
         Ok(true)
     }
 
-    fn mapping_close_editor(&mut self, ui: &AppWindow) {
+    fn mapping_close_editor(&mut self, ui: &mut Presentation) {
         self.mapping_draft = None;
-        let view = ui.global::<MappingUi>();
-        view.set_editor(false);
-        view.set_saving(false);
-        view.set_error("".into());
-        view.set_conflict_target("".into());
-        ui.invoke_close_mapping_leave();
+        ui.mapping.editor = false;
+        ui.mapping.saving = false;
+        ui.mapping.error = "".into();
+        ui.mapping.conflict_target = "".into();
+        ui.mapping.leave_open = false;
     }
 
-    fn mapping_finish_leave(&mut self, ui: &AppWindow) -> Result<()> {
+    fn mapping_finish_leave(&mut self, ui: &mut Presentation) -> Result<()> {
         self.mapping_close_editor(ui);
         if let Some((action, value)) = self.mapping_navigation.take() {
             self.action(ui, action, &value)?;
@@ -99,11 +81,10 @@ impl Controller {
 
     pub(super) fn mapping_command(
         &mut self,
-        ui: &AppWindow,
+        ui: &mut Presentation,
         command: &str,
         value: &str,
     ) -> Result<()> {
-        let view = ui.global::<MappingUi>();
         match command {
             "conflict" => {
                 if let Some(id) = value.strip_prefix("mapping/") {
@@ -116,7 +97,7 @@ impl Controller {
                 return Ok(());
             }
             "stay" => {
-                ui.invoke_close_mapping_leave();
+                ui.mapping.leave_open = false;
                 self.mapping_navigation = None;
                 return Ok(());
             }
@@ -124,11 +105,11 @@ impl Controller {
                 return self.mapping_finish_leave(ui);
             }
             "back" => {
-                if view.get_editor() {
+                if ui.mapping.editor {
                     self.mapping_leave(ui, None)?;
                 } else {
-                    view.set_open(false);
-                    view.set_error("".into());
+                    ui.mapping.open = false;
+                    ui.mapping.error = "".into();
                 }
                 return Ok(());
             }
@@ -139,11 +120,11 @@ impl Controller {
             self.tr(keys::RUNTIME_BUSY)
         );
         self.mapping_pull(ui);
-        view.set_error("".into());
-        view.set_conflict_target("".into());
+        ui.mapping.error = "".into();
+        ui.mapping.conflict_target = "".into();
         match command {
             "open" => {
-                view.set_open(true);
+                ui.mapping.open = true;
             }
             "create" | "edit" => {
                 let new = command != "edit";
@@ -179,31 +160,23 @@ impl Controller {
                     .custom_capture_result
                     .as_ref()
                     .map_or(0, |result| result.0);
-                view.set_open(true);
-                view.set_editor(true);
-                view.set_new_mapping(new);
-                view.set_entry_mode(0);
-                view.set_output_filter("".into());
+                ui.mapping.open = true;
+                ui.mapping.editor = true;
+                ui.mapping.new_mapping = new;
+                ui.mapping.entry_mode = 0;
+                ui.mapping.output_filter = "".into();
                 self.sync_output_options(ui);
-                view.set_focus_request(view.get_focus_request() + 1);
-                view.set_name(
-                    self.mapping_draft
-                        .as_ref()
-                        .unwrap()
-                        .mapping
-                        .name
-                        .clone()
-                        .into(),
-                );
-                view.set_ctrl(false);
-                view.set_shift(false);
-                view.set_alt(false);
-                view.set_meta(false);
+                ui.mapping.focus_request += 1;
+                ui.mapping.name = self.mapping_draft.as_ref().unwrap().mapping.name.clone();
+                ui.mapping.ctrl = false;
+                ui.mapping.shift = false;
+                ui.mapping.alt = false;
+                ui.mapping.meta = false;
                 self.mapping_output_to_ui(ui);
                 self.sync_mapping_draft(ui);
             }
             "filter-output" => {
-                view.set_output_filter(value.into());
+                ui.mapping.output_filter = value.into();
                 self.sync_output_options(ui);
             }
             "select-output" => {
@@ -269,7 +242,7 @@ impl Controller {
                     );
                     let name = unique_mapping_name(&base, &self.runtime.config.custom_mappings);
                     self.mapping_draft.as_mut().unwrap().mapping.name = name.clone();
-                    view.set_name(name.into());
+                    ui.mapping.name = name;
                 }
                 let draft = self
                     .mapping_draft
@@ -287,7 +260,7 @@ impl Controller {
                 }
                 if let Err(error) = self.validate_mappings(ui, &candidate) {
                     if command == "save-leave" {
-                        ui.invoke_close_mapping_leave();
+                        ui.mapping.leave_open = false;
                         self.mapping_navigation = None;
                     }
                     return Err(error);
@@ -295,8 +268,8 @@ impl Controller {
                 self.runtime
                     .set_custom_mappings(candidate.clone(), &self.path)?;
                 self.pending_mappings = Some((candidate, MappingSave::Editor));
-                ui.invoke_close_mapping_leave();
-                view.set_saving(true);
+                ui.mapping.leave_open = false;
+                ui.mapping.saving = true;
             }
             "toggle" | "delete" => {
                 let mut candidate = self.runtime.config.custom_mappings.clone();
@@ -334,7 +307,7 @@ impl Controller {
         Ok(())
     }
 
-    fn validate_mappings(&self, ui: &AppWindow, candidate: &[CustomMapping]) -> Result<()> {
+    fn validate_mappings(&self, ui: &mut Presentation, candidate: &[CustomMapping]) -> Result<()> {
         if let Some((first, second)) = mapping::conflict(
             &self.runtime.config.functions,
             &self.runtime.config.foreground_app_rules,
@@ -349,17 +322,14 @@ impl Controller {
             } else {
                 first
             };
-            ui.global::<MappingUi>().set_conflict_target(
-                if first == second {
-                    String::new()
-                } else {
-                    match target {
-                        RuleId::Mapping(id) => format!("mapping/{id}"),
-                        RuleId::Function(id) => format!("function/{}", id.stable_id()),
-                    }
+            ui.mapping.conflict_target = if first == second {
+                String::new()
+            } else {
+                match target {
+                    RuleId::Mapping(id) => format!("mapping/{id}"),
+                    RuleId::Function(id) => format!("function/{}", id.stable_id()),
                 }
-                .into(),
-            );
+            };
             let name = |id| match id {
                 RuleId::Function(id) => self.tr(function::function_definition(id).name_key),
                 RuleId::Mapping(id) => candidate
@@ -385,37 +355,32 @@ impl Controller {
         Ok(())
     }
 
-    fn mapping_output_to_ui(&self, ui: &AppWindow) {
+    fn mapping_output_to_ui(&self, ui: &mut Presentation) {
         let Some(draft) = &self.mapping_draft else {
             return;
         };
-        let view = ui.global::<MappingUi>();
-        view.set_selected_output(output_option(self.locale(), draft.mapping.output));
+        ui.mapping.selected_output = output_option(self.locale(), draft.mapping.output);
         if let MappingOutput::Keyboard { modifiers, .. } = draft.mapping.output {
-            view.set_ctrl(modifiers & 1 != 0);
-            view.set_shift(modifiers & 2 != 0);
-            view.set_alt(modifiers & 4 != 0);
-            view.set_meta(modifiers & 8 != 0);
+            ui.mapping.ctrl = modifiers & 1 != 0;
+            ui.mapping.shift = modifiers & 2 != 0;
+            ui.mapping.alt = modifiers & 4 != 0;
+            ui.mapping.meta = modifiers & 8 != 0;
         }
     }
 
-    fn sync_mapping_draft(&self, ui: &AppWindow) {
+    fn sync_mapping_draft(&self, ui: &mut Presentation) {
         let Some(draft) = &self.mapping_draft else {
             return;
         };
-        let view = ui.global::<MappingUi>();
-        view.set_inputs(update_model(
-            view.get_inputs(),
-            draft
-                .mapping
-                .shortcuts
-                .iter()
-                .map(|input| i18n::shortcut_labels(self.locale(), input).join("+").into())
-                .collect(),
-        ));
+        ui.mapping.inputs = draft
+            .mapping
+            .shortcuts
+            .iter()
+            .map(|input| i18n::shortcut_labels(self.locale(), input).join("+"))
+            .collect();
         let mut scopes = vec![crate::ForegroundAppScopeOption {
             id: "".into(),
-            name: self.tr(keys::COMMON_ALL_APPS).into(),
+            name: self.tr(keys::COMMON_ALL_APPS),
             checked: draft.mapping.groups.is_empty(),
         }];
         scopes.extend(
@@ -425,31 +390,27 @@ impl Controller {
                 .groups
                 .iter()
                 .map(|(id, group)| crate::ForegroundAppScopeOption {
-                    id: id.clone().into(),
-                    name: group.name.clone().into(),
+                    id: id.clone(),
+                    name: group.name.clone(),
                     checked: draft.mapping.groups.contains(id),
                 }),
         );
-        view.set_scopes(update_model(view.get_scopes(), scopes));
-        view.set_scope_label(
-            if draft.mapping.groups.is_empty() {
-                self.tr(keys::COMMON_ALL_APPS)
-            } else {
-                draft
-                    .mapping
-                    .groups
-                    .iter()
-                    .filter_map(|id| self.runtime.config.foreground_app_rules.groups.get(id))
-                    .map(|group| group.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(" / ")
-            }
-            .into(),
-        );
+        ui.mapping.scopes = scopes;
+        ui.mapping.scope_label = if draft.mapping.groups.is_empty() {
+            self.tr(keys::COMMON_ALL_APPS)
+        } else {
+            draft
+                .mapping
+                .groups
+                .iter()
+                .filter_map(|id| self.runtime.config.foreground_app_rules.groups.get(id))
+                .map(|group| group.name.as_str())
+                .collect::<Vec<_>>()
+                .join(" / ")
+        };
     }
 
-    pub(super) fn sync_mapping_operation(&mut self, ui: &AppWindow) {
-        let view = ui.global::<MappingUi>();
+    pub(super) fn sync_mapping_operation(&mut self, ui: &mut Presentation) {
         if !self.runtime.busy()
             && let Some((candidate, purpose)) = self.pending_mappings.take()
         {
@@ -459,7 +420,7 @@ impl Controller {
                 match purpose {
                     MappingSave::Editor => {
                         if let Err(error) = self.mapping_finish_leave(ui) {
-                            view.set_error(error.to_string().into());
+                            ui.mapping.error = error.to_string();
                         }
                     }
                     MappingSave::Delete(before) => {
@@ -471,8 +432,8 @@ impl Controller {
                     }
                 }
             } else {
-                view.set_saving(false);
-                view.set_error(self.tr(keys::COMMON_SAVE_FAILED).into());
+                ui.mapping.saving = false;
+                ui.mapping.error = self.tr(keys::COMMON_SAVE_FAILED);
                 self.mapping_navigation = None;
             }
         }
@@ -504,38 +465,32 @@ impl Controller {
         {
             self.mapping_undo = None;
         }
-        view.set_can_undo(self.mapping_undo.is_some());
-        view.set_busy(self.runtime.busy() || self.runtime.stopped() || self.recording());
+        ui.mapping.can_undo = self.mapping_undo.is_some();
+        ui.mapping.busy = self.runtime.busy() || self.runtime.stopped() || self.recording();
         let capture = self
             .runtime
             .capture()
             .filter(|capture| !matches!(capture.kind, CaptureKind::Function(_)));
-        view.set_capture_slot(capture.map_or(-1, |capture| match capture.kind {
+        ui.mapping.capture_slot = capture.map_or(-1, |capture| match capture.kind {
             CaptureKind::MappingInput { slot, .. } => slot as i32,
             CaptureKind::MappingOutput => 2,
             CaptureKind::Function(_) => -1,
-        }));
-        view.set_capture_text(
-            capture
-                .map(|capture| {
-                    if capture.phase == CapturePhase::WaitingForRelease {
-                        self.tr(keys::CAPTURE_RELEASE)
-                    } else if capture.preview.is_empty() {
-                        self.tr(keys::CAPTURE_RECORDING)
-                    } else {
-                        i18n::capture_preview(self.locale(), capture)
-                    }
-                })
-                .unwrap_or_default()
-                .into(),
-        );
-        view.set_capture_error(
-            capture
-                .and_then(|capture| capture.error.as_ref())
-                .map(|error| self.mapping_capture_error(error))
-                .unwrap_or_default()
-                .into(),
-        );
+        });
+        ui.mapping.capture_text = capture
+            .map(|capture| {
+                if capture.phase == CapturePhase::WaitingForRelease {
+                    self.tr(keys::CAPTURE_RELEASE)
+                } else if capture.preview.is_empty() {
+                    self.tr(keys::CAPTURE_RECORDING)
+                } else {
+                    i18n::capture_preview(self.locale(), capture)
+                }
+            })
+            .unwrap_or_default();
+        ui.mapping.capture_error = capture
+            .and_then(|capture| capture.error.as_ref())
+            .map(|error| self.mapping_capture_error(error))
+            .unwrap_or_default();
         let input_error = self
             .mapping_draft
             .as_ref()
@@ -577,7 +532,7 @@ impl Controller {
                 self.mapping_capture_error(&CaptureError::DuplicateMapping(name))
             })
             .unwrap_or_default();
-        view.set_input_error(input_error.into());
+        ui.mapping.input_error = input_error;
     }
 
     fn mapping_capture_error(&self, error: &CaptureError) -> String {
@@ -601,55 +556,47 @@ impl Controller {
         }
     }
 
-    pub(super) fn sync_mapping_rows(&self, ui: &AppWindow) {
-        let view = ui.global::<MappingUi>();
+    pub(super) fn sync_mapping_rows(&self, ui: &mut Presentation) {
         let rules = &self.runtime.config.foreground_app_rules;
-        view.set_rows(update_model(
-            view.get_rows(),
-            self.runtime
-                .config
-                .custom_mappings
-                .iter()
-                .map(|mapping| MappingRow {
-                    id: mapping.id.to_string().into(),
-                    name: mapping.name.clone().into(),
-                    enabled: mapping.enabled,
-                    input: mapping
-                        .shortcuts
+        ui.mapping.rows = self
+            .runtime
+            .config
+            .custom_mappings
+            .iter()
+            .map(|mapping| MappingRow {
+                id: mapping.id.to_string(),
+                name: mapping.name.clone(),
+                enabled: mapping.enabled,
+                input: mapping
+                    .shortcuts
+                    .iter()
+                    .map(|shortcut| i18n::shortcut_labels(self.locale(), shortcut).join("+"))
+                    .collect::<Vec<_>>()
+                    .join(" / "),
+                output: self.mapping_output_label(mapping.output),
+                scope: if mapping.groups.is_empty() {
+                    self.tr(keys::COMMON_ALL_APPS)
+                } else {
+                    mapping
+                        .groups
                         .iter()
-                        .map(|shortcut| i18n::shortcut_labels(self.locale(), shortcut).join("+"))
+                        .filter_map(|id| rules.groups.get(id))
+                        .map(|group| group.name.as_str())
                         .collect::<Vec<_>>()
                         .join(" / ")
-                        .into(),
-                    output: self.mapping_output_label(mapping.output).into(),
-                    scope: if mapping.groups.is_empty() {
-                        self.tr(keys::COMMON_ALL_APPS)
-                    } else {
-                        mapping
-                            .groups
-                            .iter()
-                            .filter_map(|id| rules.groups.get(id))
-                            .map(|group| group.name.as_str())
-                            .collect::<Vec<_>>()
-                            .join(" / ")
-                    }
-                    .into(),
-                })
-                .collect(),
-        ));
+                },
+            })
+            .collect();
         self.sync_output_options(ui);
-        if let Some(output) = output_from_choice(&view.get_selected_output().value) {
-            view.set_selected_output(output_option(self.locale(), output));
+        if let Some(output) = output_from_choice(&ui.mapping.selected_output.clone().value) {
+            ui.mapping.selected_output = output_option(self.locale(), output);
         }
         self.sync_mapping_draft(ui);
     }
 
-    fn sync_output_options(&self, ui: &AppWindow) {
-        let view = ui.global::<MappingUi>();
-        view.set_output_options(update_model(
-            view.get_output_options(),
-            output_options(self.locale(), &view.get_output_filter()),
-        ));
+    fn sync_output_options(&self, ui: &mut Presentation) {
+        ui.mapping.output_options =
+            output_options(self.locale(), &ui.mapping.output_filter.clone());
     }
 
     pub(super) fn mapping_output_label(&self, output: MappingOutput) -> String {
@@ -679,21 +626,20 @@ impl Controller {
     }
 }
 
-fn with_ui_modifiers(mut output: MappingOutput, ui: &AppWindow) -> MappingOutput {
+fn with_ui_modifiers(mut output: MappingOutput, ui: &mut Presentation) -> MappingOutput {
     if let MappingOutput::Keyboard { modifiers, .. } = &mut output {
-        let view = ui.global::<MappingUi>();
-        *modifiers = u8::from(view.get_ctrl())
-            | (u8::from(view.get_shift()) << 1)
-            | (u8::from(view.get_alt()) << 2)
-            | (u8::from(view.get_meta()) << 3);
+        *modifiers = u8::from(ui.mapping.ctrl)
+            | (u8::from(ui.mapping.shift) << 1)
+            | (u8::from(ui.mapping.alt) << 2)
+            | (u8::from(ui.mapping.meta) << 3);
     }
     output
 }
 
 fn keyboard_option(key: u8, usage: u8) -> MappingOutputOption {
     MappingOutputOption {
-        label: platform::key_name(key).into(),
-        value: format!("key/{usage}").into(),
+        label: platform::key_name(key),
+        value: format!("key/{usage}"),
         is_mouse: false,
     }
 }
@@ -705,8 +651,8 @@ fn output_option(locale: &str, output: MappingOutput) -> MappingOutputOption {
             .find_map(|(key, value)| (value == usage).then(|| keyboard_option(key, usage)))
             .unwrap_or_default(),
         MappingOutput::Mouse { button } => MappingOutputOption {
-            label: i18n::mouse_button_label(locale, button).into(),
-            value: format!("mouse/{}", button as usize).into(),
+            label: i18n::mouse_button_label(locale, button),
+            value: format!("mouse/{}", button as usize),
             is_mouse: true,
         },
     }

@@ -31,7 +31,7 @@ pub fn rows(
     .into_iter()
     .enumerate()
     .map(|(index, key)| CheckRow {
-        title: rust_i18n::t!(key, locale = locale).into_owned().into(),
+        title: rust_i18n::t!(key, locale = locale).into_owned(),
         state: if flags[index] {
             2
         } else if index == first {

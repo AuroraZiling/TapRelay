@@ -17,11 +17,7 @@ mod runtime;
 mod runtime_worker;
 mod startup_checks;
 mod version;
-#[cfg(windows)]
-mod window_rendering;
-slint::include_modules!();
-#[cfg(test)]
-mod ui_tests;
+pub(crate) use gui::presentation::*;
 fn main() {
     #[cfg(windows)]
     if std::env::args().nth(1).as_deref() == Some("--bluetooth-worker") {

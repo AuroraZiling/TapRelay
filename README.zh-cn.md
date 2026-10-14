@@ -22,12 +22,6 @@
 4. 在系统蓝牙设置中将接收设备与电脑配对并连接，然后在 TapRelay 中选择它。
 5. 在接收设备上开始播放，使用“测试播放/暂停”。
 
-## 截图
-
-![TapRelay overview](.github/assets/showcase-home-zh.webp)
-
-![TapRelay bindings](.github/assets/showcase-bindings-zh.webp)
-
 ## 设置与限制
 
 - TapRelay 将 `config.json` 和 `logs/` 文件夹保存在可执行文件旁。
@@ -39,6 +33,8 @@
 - 原生蓝牙和输入功能目前仅在 Windows 上实现。
 
 ## 构建
+
+桌面界面使用 GPUI Kit 0.7.3。请安装 CMake，并将其加入 PATH。
 
 在 Windows 上构建，需要 Rust、MSVC C++ 构建工具和 Windows SDK。构建脚本需要 SDK 中的资源编译器（`rc.exe`）。
 

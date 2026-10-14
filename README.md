@@ -22,12 +22,6 @@ This is a personal project, so it *works on my machine*.
 4. Pair and connect the receiver to the PC in system Bluetooth settings, then select it in TapRelay.
 5. Start playback on the receiver and use **Test Play/Pause**.
 
-## Screenshots
-
-![TapRelay overview](.github/assets/showcase-home-en.webp)
-
-![TapRelay bindings](.github/assets/showcase-bindings-en.webp)
-
 ## Settings and limitations
 
 - TapRelay stores `config.json` and the `logs/` folder beside the executable.
@@ -40,7 +34,7 @@ This is a personal project, so it *works on my machine*.
 
 ## Build
 
-Build on Windows with Rust, the MSVC C++ build tools and a Windows SDK. The build script requires the SDK resource compiler (`rc.exe`).
+The desktop interface uses GPUI Kit 0.7.3. Build on Windows with Rust, CMake, the MSVC C++ build tools and a Windows SDK. The build script requires the SDK resource compiler (`rc.exe`).
 
 Local builds and releases use the Rust `nightly` channel, configured in `rust-toolchain.toml` and the release workflow.
 

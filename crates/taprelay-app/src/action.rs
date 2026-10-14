@@ -12,7 +12,6 @@ macro_rules! actions {
 }
 actions! {
     Show => "show", Close => "close", Quit => "quit",
-    // Payload: the page number declared in ui/navigation.slint.
     Navigate => "navigate",
     EditMapping => "edit-mapping",
     Listen => "listen", Test => "test", Refresh => "refresh", Retry => "retry",
@@ -53,8 +52,6 @@ pub fn toggle(value: &str) -> anyhow::Result<bool> {
     }
 }
 
-/// Payload of [`Action::Navigate`]: the page number declared in
-/// `ui/navigation.slint`, as text because the action channel only carries text.
 pub fn page(value: &str) -> anyhow::Result<i32> {
     value
         .parse()

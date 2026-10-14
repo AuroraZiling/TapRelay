@@ -154,23 +154,74 @@ fn preserves_overview_proportions_in_both_themes_and_window_sizes(cx: &mut TestA
                     let shortcuts = window.find("shortcuts-card").bounds();
                     assert_eq!(nav.size.width, px(60.));
                     assert_eq!(nav.size.height, px(height));
-                    assert_eq!(header.origin, gpui_kit::point(px(88.), px(28.)));
+                    assert_eq!(
+                        header.origin,
+                        gpui_kit::point(nav.right() + px(28.), px(28.))
+                    );
                     assert_eq!(status.size.height, px(180.));
                     assert_eq!(status.origin.x, header.origin.x);
                     assert_eq!(status.right(), px(width - 28.));
                     assert_eq!(shortcuts.top(), status.bottom() + px(16.));
                     assert_eq!(shortcuts.bottom(), px(height - 28.));
                     assert!(shortcuts.size.height > px(100.));
+                    let manage = window.find("manage-bindings").bounds();
+                    let scroll = window
+                        .find((gpui_kit::ElementId::from("overview-shortcuts"), "content"))
+                        .bounds();
+                    assert!(manage.is_contained_within(&shortcuts));
+                    assert_eq!(scroll.left(), shortcuts.left() + px(16.));
+                    assert_eq!(scroll.right(), shortcuts.right() - px(16.));
+                    assert_eq!(scroll.bottom(), shortcuts.bottom() - px(16.));
+                    assert!(scroll.top() >= manage.bottom() + px(16.));
                     assert_eq!(
                         window.find(("nav", 3usize)).bounds().bottom(),
                         px(height - 12.)
                     );
-                    assert_eq!(window.find("listen").bounds().size.height, px(36.));
+                    assert_eq!(window.find("listen").bounds().size.height, px(32.));
                 }
             }
         })
         .unwrap();
     }
+}
+
+#[gpui_kit::test]
+fn overview_group_box_scrolls_long_shortcuts_without_moving_actions(cx: &mut TestAppContext) {
+    let (handle, view, _folder) = open(cx);
+    cx.update_window(handle, |_, window, cx| {
+        view.update(cx, |view, cx| {
+            view.ui.elevated = true;
+            view.ui.bindings = (0..60)
+                .map(|index| super::super::presentation::BindingRow {
+                    text: format!("Ctrl + Shift + Shortcut {index}"),
+                    function_name: format!("Action {index}"),
+                    enabled: true,
+                    ..Default::default()
+                })
+                .collect();
+            cx.notify();
+        });
+        window.render_frame(cx);
+        let first = "summary-Action 0-Ctrl + Shift + Shortcut 0";
+        let last = "summary-Action 59-Ctrl + Shift + Shortcut 59";
+        let card = window.find("shortcuts-card").bounds();
+        let action = window.find("manage-bindings").bounds();
+        assert!(window.find(first).visible());
+        assert!(!window.find(last).visible());
+        window.scroll(
+            first,
+            gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-5000.))),
+            cx,
+        );
+        assert!(!window.find(first).visible());
+        assert!(window.find(last).visible());
+        assert!(window.find(last).bounds().is_contained_within(&card));
+        assert_eq!(window.find("shortcuts-card").bounds(), card);
+        assert_eq!(window.find("manage-bindings").bounds(), action);
+        window.click("manage-bindings", cx);
+        assert_eq!(view.read(cx).ui.page, 1);
+    })
+    .unwrap();
 }
 
 #[gpui_kit::test]
@@ -227,7 +278,7 @@ fn mapping_editor_has_equal_columns_and_keeps_save_outside_scrolling(cx: &mut Te
             assert_eq!(left.size.width, right.size.width);
             assert_eq!(left.top(), right.top());
             assert_eq!(left.right() + px(24.), right.left());
-            assert_eq!(left.left(), px(88.));
+            assert_eq!(left.left(), window.find("page-header").bounds().left());
             assert!(right.right() <= px(872.));
             assert_eq!(save.bottom(), px(472.));
             assert!(
@@ -280,7 +331,7 @@ fn environment_retry_waits_for_startup_checks(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn receivers_use_compact_rows_with_actions_in_the_header(cx: &mut TestAppContext) {
+fn receivers_use_group_box_insets_with_actions_in_the_header(cx: &mut TestAppContext) {
     let (handle, view, _folder) = open(cx);
     cx.update_window(handle, |_, window, cx| {
         view.update(cx, |view, cx| {
@@ -300,7 +351,10 @@ fn receivers_use_compact_rows_with_actions_in_the_header(cx: &mut TestAppContext
         window.render_frame(cx);
         let row = window.find("receiver-row-tablet").bounds();
         let action = window.find("device-tablet").bounds();
-        assert_eq!(row.size.height, px(56.));
+        assert_eq!(row.size.height, px(64.));
+        assert_eq!(action.top(), row.top() + px(16.));
+        assert_eq!(action.bottom(), row.bottom() - px(16.));
+        assert_eq!(action.right(), row.right() - px(16.));
         assert_eq!(action.size.width, px(132.));
         assert_eq!(window.find("device-tablet").label(), Some("Start session"));
         assert!(row.contains(&action.center()));

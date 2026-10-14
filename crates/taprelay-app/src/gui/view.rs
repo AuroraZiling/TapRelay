@@ -8,6 +8,7 @@ use gpui_kit::component::{
     ActiveTheme, Disableable, Icon, Selectable, Sizable, StyledExt, Theme, ThemeMode, WindowExt,
     button::{Button, ButtonVariants},
     checkbox::Checkbox,
+    group_box::{GroupBox, GroupBoxVariants},
     input::{Input, InputEvent, InputState},
     menu::{DropdownMenu, PopupMenuItem},
     scroll::ScrollableElement,
@@ -382,14 +383,9 @@ impl AppView {
         disabled: bool,
         cx: &Context<Self>,
     ) -> Button {
-        Button::new(id)
-            .label(label)
-            .h_9()
-            .text_sm()
-            .disabled(disabled)
-            .on_click(
-                cx.listener(move |this, _, window, cx| this.dispatch(command.clone(), window, cx)),
-            )
+        Button::new(id).label(label).disabled(disabled).on_click(
+            cx.listener(move |this, _, window, cx| this.dispatch(command.clone(), window, cx)),
+        )
     }
 
     fn app_button(
@@ -425,16 +421,10 @@ impl AppView {
             .child(text.into())
     }
     fn error(&self, text: &str, cx: &App) -> Div {
-        div()
-            .text_sm()
-            .text_color(cx.theme().danger)
-            .child(text.to_owned())
+        div().text_color(cx.theme().danger).child(text.to_owned())
     }
-    fn section(&self, key: &str) -> Div {
-        div()
-            .v_flex()
-            .gap_4()
-            .child(div().text_base().font_medium().child(self.tr(key)))
+    fn section(&self, key: &'static str) -> GroupBox {
+        GroupBox::new().id(key).fill().title(self.tr(key))
     }
 }
 
@@ -473,7 +463,6 @@ impl Render for AppView {
             .items_stretch()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
-            .text_sm()
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if !this.controller.recording() {
                     this.key(&event.keystroke.key, true, window, cx);

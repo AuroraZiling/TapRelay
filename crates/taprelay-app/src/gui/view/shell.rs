@@ -19,10 +19,9 @@ impl AppView {
         cx: &Context<Self>,
     ) -> Button {
         Button::new(id)
-            .icon(Icon::new(icon).size_4())
+            .icon(icon)
             .accessibility_label(label.clone())
             .tooltip(label)
-            .size_9()
             .disabled(disabled)
             .on_click(
                 cx.listener(move |this, _, window, cx| this.dispatch(command.clone(), window, cx)),
@@ -30,11 +29,7 @@ impl AppView {
     }
 
     pub(super) fn heading(&self, text: String) -> Div {
-        div()
-            .text_2xl()
-            .line_height(rems(1.875))
-            .font_medium()
-            .child(text)
+        div().text_xl().child(text)
     }
 
     pub(super) fn navigation(&self, cx: &Context<Self>) -> AnyElement {
@@ -115,45 +110,34 @@ impl AppView {
         header = header.child(div().flex_1());
         match self.ui.page {
             1 if !self.ui.mapping.open => {
-                header = header.child(
-                    self.button(
-                        "custom-mappings",
-                        self.tr("mappings.title"),
-                        Command::Mapping("open", String::new()),
-                        self.ui.groups.busy,
-                        cx,
-                    )
-                    .h_8(),
-                );
+                header = header.child(self.button(
+                    "custom-mappings",
+                    self.tr("mappings.title"),
+                    Command::Mapping("open", String::new()),
+                    self.ui.groups.busy,
+                    cx,
+                ));
             }
             1 => {
-                header = header.child(
-                    self.button(
-                        if self.ui.mapping.editor {
-                            "mapping-back"
-                        } else {
-                            "mappings-back"
-                        },
-                        self.tr("common.back"),
-                        Command::Mapping("back", String::new()),
-                        self.ui.mapping.saving,
-                        cx,
-                    )
-                    .h_8()
-                    .ghost(),
-                );
+                header = header.child(self.button(
+                    if self.ui.mapping.editor {
+                        "mapping-back"
+                    } else {
+                        "mappings-back"
+                    },
+                    self.tr("common.back"),
+                    Command::Mapping("back", String::new()),
+                    self.ui.mapping.saving,
+                    cx,
+                ));
                 if !self.ui.mapping.editor {
-                    header = header.child(
-                        self.button(
-                            "mapping-create",
-                            self.tr("mappings.create"),
-                            Command::Mapping("create", String::new()),
-                            self.ui.mapping.busy,
-                            cx,
-                        )
-                        .h_8()
-                        .primary(),
-                    );
+                    header = header.child(self.button(
+                        "mapping-create",
+                        self.tr("mappings.create"),
+                        Command::Mapping("create", String::new()),
+                        self.ui.mapping.busy,
+                        cx,
+                    ));
                 }
             }
             2 => header = header.children(self.receiver_actions(cx)),
@@ -166,8 +150,6 @@ impl AppView {
                         self.ui.groups.saving,
                         cx,
                     )
-                    .h_8()
-                    .ghost()
                 } else {
                     self.button(
                         "group-create",
@@ -176,8 +158,6 @@ impl AppView {
                         self.ui.groups.busy,
                         cx,
                     )
-                    .h_8()
-                    .primary()
                 });
             }
             _ => {}
@@ -206,7 +186,7 @@ impl AppView {
                 })
                 .size_4(),
             )
-            .child(div().text_xs().child(self.ui.adapter_label.clone()))
+            .child(div().child(self.ui.adapter_label.clone()))
     }
 
     pub(super) fn receiver_actions(&self, cx: &Context<Self>) -> [Button; 2] {
@@ -218,8 +198,7 @@ impl AppView {
                 Command::App(Action::Refresh, String::new()),
                 self.ui.scanning,
                 cx,
-            )
-            .ghost(),
+            ),
             self.icon_button(
                 "receiver-settings",
                 IconName::Settings,
@@ -227,8 +206,7 @@ impl AppView {
                 Command::App(Action::BluetoothSettings, String::new()),
                 false,
                 cx,
-            )
-            .ghost(),
+            ),
         ]
     }
 }

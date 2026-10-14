@@ -9,26 +9,17 @@ impl AppView {
         let mut rows = div().v_flex().gap_2();
         for row in &group.groups {
             rows = rows.child(
-                div()
-                    .h_flex()
-                    .h(rems(4.75))
-                    .px_4()
-                    .gap_4()
-                    .rounded_md()
-                    .bg(cx.theme().group_box)
+                GroupBox::new()
+                    .id(SharedString::from(format!("group-{}", row.id)))
+                    .fill()
+                    .content_style(StyleRefinement::default().h_flex())
                     .child(
                         div()
                             .v_flex()
                             .flex_1()
                             .min_w_0()
                             .gap(rems(0.3125))
-                            .child(
-                                div()
-                                    .text_base()
-                                    .font_medium()
-                                    .text_ellipsis()
-                                    .child(row.name.clone()),
-                            )
+                            .child(div().text_ellipsis().child(row.name.clone()))
                             .child(
                                 self.caption(
                                     if row.summary.is_empty() {
@@ -50,18 +41,14 @@ impl AppView {
                         group.busy,
                         cx,
                     ))
-                    .child(
-                        self.icon_button(
-                            SharedString::from(format!("group-delete-{}", row.id)),
-                            IconName::Trash,
-                            self.tr("common.delete"),
-                            Command::Group("request-delete", row.id.clone()),
-                            group.busy,
-                            cx,
-                        )
-                        .danger()
-                        .outline(),
-                    ),
+                    .child(self.icon_button(
+                        SharedString::from(format!("group-delete-{}", row.id)),
+                        IconName::Trash,
+                        self.tr("common.delete"),
+                        Command::Group("request-delete", row.id.clone()),
+                        group.busy,
+                        cx,
+                    )),
             );
         }
         div()
@@ -138,29 +125,21 @@ impl AppView {
                     .h_flex()
                     .gap_2()
                     .child(self.caption(self.tr("groups.running_help"), cx).flex_1())
-                    .child(
-                        self.icon_button(
-                            "group-refresh",
-                            IconName::RefreshCw,
-                            self.tr("groups.refresh"),
-                            Command::Group("running", String::new()),
-                            busy,
-                            cx,
-                        )
-                        .ghost()
-                        .size_7(),
-                    )
-                    .child(
-                        self.button(
-                            "group-browse",
-                            self.tr("groups.browse"),
-                            Command::Group("browse", String::new()),
-                            busy,
-                            cx,
-                        )
-                        .small()
-                        .h_8(),
-                    ),
+                    .child(self.icon_button(
+                        "group-refresh",
+                        IconName::RefreshCw,
+                        self.tr("groups.refresh"),
+                        Command::Group("running", String::new()),
+                        busy,
+                        cx,
+                    ))
+                    .child(self.button(
+                        "group-browse",
+                        self.tr("groups.browse"),
+                        Command::Group("browse", String::new()),
+                        busy,
+                        cx,
+                    )),
             );
         }
         let apps = if group.choosing_running {
@@ -202,42 +181,35 @@ impl AppView {
                 details = details.child(self.error(&self.tr("groups.missing"), cx));
             }
             rows = rows.child(
-                div()
-                    .h_flex()
-                    .min_h(rems(3.875))
-                    .p(rems(0.625))
-                    .gap_3()
-                    .rounded_md()
-                    .bg(cx.theme().group_box)
+                GroupBox::new()
+                    .id(SharedString::from(format!("group-app-row-{}", app.path)))
+                    .fill()
+                    .content_style(StyleRefinement::default().h_flex().gap_3())
                     .child(div().size_8().flex_shrink_0().child(icon))
                     .child(details)
-                    .child(
-                        self.icon_button(
-                            SharedString::from(format!("group-app-{}", app.path)),
+                    .child(self.icon_button(
+                        SharedString::from(format!("group-app-{}", app.path)),
+                        if group.choosing_running {
+                            IconName::Plus
+                        } else {
+                            IconName::X
+                        },
+                        self.tr(if group.choosing_running {
+                            "common.add"
+                        } else {
+                            "common.remove"
+                        }),
+                        Command::Group(
                             if group.choosing_running {
-                                IconName::Plus
+                                "add"
                             } else {
-                                IconName::X
+                                "remove"
                             },
-                            self.tr(if group.choosing_running {
-                                "common.add"
-                            } else {
-                                "common.remove"
-                            }),
-                            Command::Group(
-                                if group.choosing_running {
-                                    "add"
-                                } else {
-                                    "remove"
-                                },
-                                app.path.clone(),
-                            ),
-                            busy,
-                            cx,
-                        )
-                        .ghost()
-                        .size_8(),
-                    ),
+                            app.path.clone(),
+                        ),
+                        busy,
+                        cx,
+                    )),
             );
         }
         body.child(self.scroller("group-editor", rows))
@@ -257,20 +229,17 @@ impl AppView {
                             )
                         },
                     ))
-                    .child(
-                        self.button(
-                            "group-save",
-                            self.tr(if group.saving {
-                                "common.saving"
-                            } else {
-                                "groups.save"
-                            }),
-                            Command::Group("save", String::new()),
-                            busy,
-                            cx,
-                        )
-                        .primary(),
-                    ),
+                    .child(self.button(
+                        "group-save",
+                        self.tr(if group.saving {
+                            "common.saving"
+                        } else {
+                            "groups.save"
+                        }),
+                        Command::Group("save", String::new()),
+                        busy,
+                        cx,
+                    )),
             )
             .into_any_element()
     }
@@ -286,16 +255,13 @@ impl AppView {
                 .gap_3()
                 .child(self.caption(self.tr("mappings.help"), cx).flex_1())
                 .when(mapping.can_undo, |row| {
-                    row.child(
-                        self.button(
-                            "mapping-undo",
-                            self.tr("common.undo"),
-                            Command::Mapping("undo", String::new()),
-                            mapping.busy,
-                            cx,
-                        )
-                        .h_8(),
-                    )
+                    row.child(self.button(
+                        "mapping-undo",
+                        self.tr("common.undo"),
+                        Command::Mapping("undo", String::new()),
+                        mapping.busy,
+                        cx,
+                    ))
                 }),
         );
         if !mapping.error.is_empty() {
@@ -350,14 +316,10 @@ impl AppView {
         for row in &mapping.rows {
             let id = row.id.clone();
             rows = rows.child(
-                div()
-                    .h_flex()
-                    .min_h_16()
-                    .px_4()
-                    .py_2()
-                    .gap_4()
-                    .rounded_md()
-                    .bg(cx.theme().group_box)
+                GroupBox::new()
+                    .id(SharedString::from(format!("mapping-{}", row.id)))
+                    .fill()
+                    .content_style(StyleRefinement::default().h_flex().min_h_16())
                     .child(
                         div().w_9().flex_shrink_0().child(
                             Switch::new(SharedString::from(format!("mapping-toggle-{id}")))
@@ -419,18 +381,14 @@ impl AppView {
                                 mapping.busy,
                                 cx,
                             ))
-                            .child(
-                                self.icon_button(
-                                    SharedString::from(format!("mapping-delete-{}", row.id)),
-                                    IconName::Trash,
-                                    self.tr("common.delete"),
-                                    Command::Mapping("delete", row.id.clone()),
-                                    mapping.busy,
-                                    cx,
-                                )
-                                .danger()
-                                .outline(),
-                            ),
+                            .child(self.icon_button(
+                                SharedString::from(format!("mapping-delete-{}", row.id)),
+                                IconName::Trash,
+                                self.tr("common.delete"),
+                                Command::Mapping("delete", row.id.clone()),
+                                mapping.busy,
+                                cx,
+                            )),
                     ),
             );
         }
@@ -463,35 +421,27 @@ impl AppView {
                             busy,
                             cx,
                         )
-                        .ghost()
-                        .small()
-                        .h_8()
-                        .px_2()
                         .selected(recording),
                     )
-                    .child(
-                        self.icon_button(
-                            ("mapping-remove-input", slot),
-                            IconName::X,
-                            self.tr(if recording {
-                                "capture.cancel_shortcut"
+                    .child(self.icon_button(
+                        ("mapping-remove-input", slot),
+                        IconName::X,
+                        self.tr(if recording {
+                            "capture.cancel_shortcut"
+                        } else {
+                            "common.remove"
+                        }),
+                        Command::Mapping(
+                            if recording {
+                                "cancel-capture"
                             } else {
-                                "common.remove"
-                            }),
-                            Command::Mapping(
-                                if recording {
-                                    "cancel-capture"
-                                } else {
-                                    "remove-input"
-                                },
-                                slot.to_string(),
-                            ),
-                            busy && !recording,
-                            cx,
-                        )
-                        .ghost()
-                        .size_6(),
-                    ),
+                                "remove-input"
+                            },
+                            slot.to_string(),
+                        ),
+                        busy && !recording,
+                        cx,
+                    )),
             );
         }
         if mapping.inputs.len() < 2 {
@@ -508,8 +458,6 @@ impl AppView {
                     busy,
                     cx,
                 )
-                .small()
-                .h_8()
                 .icon(IconName::Plus)
                 .accessibility_label(self.tr("shortcuts.add"))
                 .selected(recording),
@@ -526,16 +474,8 @@ impl AppView {
             modes = modes.child(
                 Button::new(("entry-mode", mode as usize))
                     .label(self.tr(key))
-                    .small()
-                    .h_8()
                     .flex_1()
-                    .map(|button| {
-                        if mapping.entry_mode == mode {
-                            button.secondary()
-                        } else {
-                            button.ghost()
-                        }
-                    })
+                    .selected(mapping.entry_mode == mode)
                     .disabled(busy)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.ui.mapping.entry_mode = mode;
@@ -560,13 +500,10 @@ impl AppView {
             mapping.selected_output.label.clone()
         });
         output = output.child(modes).child(
-            div()
-                .min_h_16()
-                .p_3()
-                .border_1()
-                .border_color(cx.theme().border)
-                .rounded_md()
-                .bg(cx.theme().group_box)
+            GroupBox::new()
+                .id("mapping-output-preview")
+                .fill()
+                .content_style(StyleRefinement::default().min_h_16())
                 .child(if mapping.capture_slot == 2 {
                     mapping.capture_text.clone()
                 } else {
@@ -679,7 +616,6 @@ impl AppView {
         let scopes = Button::new("mapping-scope-choice")
             .label(mapping.scope_label.clone())
             .w_full()
-            .h_9()
             .disabled(busy)
             .dropdown_menu(move |mut menu, _, _| {
                 for option in &options {
@@ -775,20 +711,17 @@ impl AppView {
                     .gap_3()
                     .flex_shrink_0()
                     .child(feedback)
-                    .child(
-                        self.button(
-                            "mapping-save",
-                            self.tr(if mapping.saving {
-                                "common.saving"
-                            } else {
-                                "mappings.save"
-                            }),
-                            Command::Mapping("save", String::new()),
-                            busy,
-                            cx,
-                        )
-                        .primary(),
-                    ),
+                    .child(self.button(
+                        "mapping-save",
+                        self.tr(if mapping.saving {
+                            "common.saving"
+                        } else {
+                            "mappings.save"
+                        }),
+                        Command::Mapping("save", String::new()),
+                        busy,
+                        cx,
+                    )),
             )
             .into_any_element()
     }
@@ -859,31 +792,25 @@ impl AppView {
                             busy,
                             cx,
                         ))
-                        .child(
-                            this.button(
-                                "dialog-save",
-                                this.tr("mappings.save"),
-                                Command::Mapping("save-leave", String::new()),
-                                busy,
-                                cx,
-                            )
-                            .primary(),
-                        );
-                } else {
-                    footer = footer.child(
-                        this.button(
-                            "dialog-delete",
-                            this.tr(if busy {
-                                "common.saving"
-                            } else {
-                                "groups.delete_confirm"
-                            }),
-                            Command::Group("delete", String::new()),
+                        .child(this.button(
+                            "dialog-save",
+                            this.tr("mappings.save"),
+                            Command::Mapping("save-leave", String::new()),
                             busy,
                             cx,
-                        )
-                        .danger(),
-                    );
+                        ));
+                } else {
+                    footer = footer.child(this.button(
+                        "dialog-delete",
+                        this.tr(if busy {
+                            "common.saving"
+                        } else {
+                            "groups.delete_confirm"
+                        }),
+                        Command::Group("delete", String::new()),
+                        busy,
+                        cx,
+                    ));
                 }
                 let weak = cx.entity().downgrade();
                 let _ = window;

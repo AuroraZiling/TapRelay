@@ -6,6 +6,7 @@ impl AppView {
             .id(id)
             .flex_1()
             .min_h_0()
+            .test_support()
             .overflow_y_scrollbar()
             .id(id)
             .child(div().v_flex().gap_4().child(content))
@@ -13,14 +14,7 @@ impl AppView {
     }
 
     pub(super) fn environment(&self, cx: &Context<Self>) -> AnyElement {
-        let mut panel = div()
-            .v_flex()
-            .p_6()
-            .gap(rems(1.375))
-            .rounded(cx.theme().radius_lg)
-            .border_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().group_box);
+        let mut panel = GroupBox::new().id("environment-checks").fill();
         for row in &self.ui.checks {
             let (icon, state, color) = match row.state {
                 1 => (
@@ -79,16 +73,13 @@ impl AppView {
                     .h_flex()
                     .gap_3()
                     .flex_shrink_0()
-                    .child(
-                        self.app_button(
-                            "retry-checks",
-                            "startup.retry",
-                            Action::Retry,
-                            self.ui.busy || self.ui.problem_busy || !self.ui.problem_retry_allowed,
-                            cx,
-                        )
-                        .primary(),
-                    )
+                    .child(self.app_button(
+                        "retry-checks",
+                        "startup.retry",
+                        Action::Retry,
+                        self.ui.busy || self.ui.problem_busy || !self.ui.problem_retry_allowed,
+                        cx,
+                    ))
                     .when(self.ui.mode != 3, |row| {
                         row.child(self.app_button(
                             "startup-bluetooth",
@@ -98,15 +89,12 @@ impl AppView {
                             cx,
                         ))
                     })
-                    .child(
-                        self.app_button("startup-quit", "common.quit", Action::Quit, false, cx)
-                            .ghost(),
-                    ),
+                    .child(self.app_button("startup-quit", "common.quit", Action::Quit, false, cx)),
             )
             .into_any_element()
     }
 
-    fn status_card(&self, window: &mut Window, cx: &Context<Self>) -> Div {
+    fn status_card(&self, window: &mut Window, cx: &Context<Self>) -> GroupBox {
         let frames = self.ripples.frames(Instant::now());
         if !frames.is_empty() {
             window.request_animation_frame();
@@ -155,32 +143,31 @@ impl AppView {
         )
         .size(rems(0.625))
         .flex_shrink_0();
-        div()
-            .relative()
-            .size_full()
-            .overflow_hidden()
-            .border_1()
-            .border_color(cx.theme().border)
-            .rounded(cx.theme().radius_lg)
-            .bg(cx.theme().group_box)
+        GroupBox::new()
+            .id("receiver-status")
+            .fill()
+            .h_full()
+            .grid()
+            .grid_rows(1)
+            .content_style(
+                StyleRefinement::default()
+                    .flex_1()
+                    .min_h_0()
+                    .relative()
+                    .overflow_hidden(),
+            )
             .child(waves)
             .child(
                 div()
                     .v_flex()
-                    .gap(rems(0.625))
-                    .p_5()
+                    .gap_2()
                     .child(self.caption(self.tr("receiver.current"), cx))
-                    .child(
-                        div()
-                            .text_2xl()
-                            .line_height(rems(1.875))
-                            .font_medium()
-                            .child(self.ui.device_name.clone()),
-                    )
+                    .child(self.heading(self.ui.device_name.clone()))
                     .child(
                         div()
                             .h_flex()
-                            .gap(rems(0.625))
+                            .text_sm()
+                            .gap_3()
                             .child(dot)
                             .child(self.ui.stage.clone()),
                     )
@@ -190,20 +177,17 @@ impl AppView {
                             .gap_3()
                             .pt_1()
                             .flex_wrap()
-                            .child(
-                                self.app_button(
-                                    "listen",
-                                    if self.ui.listening {
-                                        "listening.stop"
-                                    } else {
-                                        "listening.start"
-                                    },
-                                    Action::Listen,
-                                    self.ui.busy,
-                                    cx,
-                                )
-                                .primary(),
-                            )
+                            .child(self.app_button(
+                                "listen",
+                                if self.ui.listening {
+                                    "listening.stop"
+                                } else {
+                                    "listening.start"
+                                },
+                                Action::Listen,
+                                self.ui.busy,
+                                cx,
+                            ))
                             .child(self.app_button(
                                 "test-receiver",
                                 "receiver.test",
@@ -296,7 +280,6 @@ impl AppView {
                     .rounded_md()
                     .border_1()
                     .border_color(cx.theme().border)
-                    .text_size(rems(0.8125))
                     .tooltip({
                         let label = binding.function_name.clone();
                         move |window, cx| {
@@ -304,38 +287,42 @@ impl AppView {
                                 .build(window, cx)
                         }
                     })
-                    .child(binding.text.clone()),
+                    .child(binding.text.clone())
+                    .test_support(),
             );
         }
         content
             .child(
                 div()
                     .id("shortcuts-card")
-                    .relative()
                     .v_flex()
                     .flex_1()
                     .min_h_0()
-                    .p_5()
-                    .gap_4()
-                    .rounded(cx.theme().radius_lg)
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .bg(cx.theme().group_box)
-                    .child(self.caption(self.tr("overview.bindings"), cx))
-                    .child(self.scroller("overview-shortcuts", shortcuts))
                     .child(
-                        self.icon_button(
-                            "manage-bindings",
-                            IconName::Settings,
-                            self.tr("overview.manage"),
-                            Command::App(Action::Navigate, "1".into()),
-                            false,
-                            cx,
-                        )
-                        .ghost()
-                        .absolute()
-                        .right_2()
-                        .top_2(),
+                        GroupBox::new()
+                            .id("overview-bindings")
+                            .fill()
+                            .flex_1()
+                            .min_h_0()
+                            .grid()
+                            .grid_rows(1)
+                            .content_style(StyleRefinement::default().flex_1().min_h_0())
+                            .child(
+                                div()
+                                    .h_flex()
+                                    .justify_between()
+                                    .gap_4()
+                                    .child(self.caption(self.tr("overview.bindings"), cx))
+                                    .child(self.icon_button(
+                                        "manage-bindings",
+                                        IconName::Settings,
+                                        self.tr("overview.manage"),
+                                        Command::App(Action::Navigate, "1".into()),
+                                        false,
+                                        cx,
+                                    )),
+                            )
+                            .child(self.scroller("overview-shortcuts", shortcuts)),
                     )
                     .test_support(),
             )
@@ -366,65 +353,64 @@ impl AppView {
             body = body.child(
                 div()
                     .id(SharedString::from(format!("receiver-row-{}", row.id)))
-                    .h_flex()
-                    .h(rems(3.5))
-                    .px_3()
-                    .gap_3()
-                    .rounded(cx.theme().radius_lg)
-                    .bg(cx.theme().group_box)
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .child(Icon::new(kind).size_5().flex_shrink_0())
                     .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_ellipsis()
-                            .child(row.name.clone()),
-                    )
-                    .child(
-                        div()
-                            .id(SharedString::from(format!("receiver-status-{}", row.id)))
-                            .h_flex()
-                            .justify_center()
-                            .size_8()
-                            .flex_shrink_0()
-                            .tooltip({
-                                let text = row.detail.clone();
-                                move |window, cx| {
-                                    gpui_kit::component::tooltip::Tooltip::new(text.clone())
-                                        .build(window, cx)
-                                }
-                            })
-                            .child(Icon::new(status).size(rems(1.125)).text_color(color)),
-                    )
-                    .child(
-                        div()
-                            .id(SharedString::from(format!("device-action-hint-{}", row.id)))
-                            .w(rems(8.25))
-                            .flex_shrink_0()
-                            .tooltip({
-                                let text = row.action_label.clone();
-                                move |window, cx| {
-                                    gpui_kit::component::tooltip::Tooltip::new(text.clone())
-                                        .build(window, cx)
-                                }
-                            })
+                        GroupBox::new()
+                            .id(SharedString::from(format!("receiver-{}", row.id)))
+                            .fill()
+                            .content_style(StyleRefinement::default().h_flex().gap_3())
+                            .child(Icon::new(kind).size_5().flex_shrink_0())
                             .child(
-                                self.button(
-                                    SharedString::from(format!("device-{}", row.id)),
-                                    if row.action.is_empty() {
-                                        self.tr("receiver.connect")
-                                    } else {
-                                        row.action_label.clone()
-                                    },
-                                    Command::App(action, row.id.clone()),
-                                    !row.enabled || row.action.is_empty(),
-                                    cx,
-                                )
-                                .small()
-                                .h_8()
-                                .w_full(),
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_ellipsis()
+                                    .child(row.name.clone()),
+                            )
+                            .child(
+                                div()
+                                    .id(SharedString::from(format!("receiver-status-{}", row.id)))
+                                    .h_flex()
+                                    .justify_center()
+                                    .size_8()
+                                    .flex_shrink_0()
+                                    .tooltip({
+                                        let text = row.detail.clone();
+                                        move |window, cx| {
+                                            gpui_kit::component::tooltip::Tooltip::new(text.clone())
+                                                .build(window, cx)
+                                        }
+                                    })
+                                    .child(Icon::new(status).size(rems(1.125)).text_color(color)),
+                            )
+                            .child(
+                                div()
+                                    .id(SharedString::from(format!(
+                                        "device-action-hint-{}",
+                                        row.id
+                                    )))
+                                    .w(rems(8.25))
+                                    .flex_shrink_0()
+                                    .tooltip({
+                                        let text = row.action_label.clone();
+                                        move |window, cx| {
+                                            gpui_kit::component::tooltip::Tooltip::new(text.clone())
+                                                .build(window, cx)
+                                        }
+                                    })
+                                    .child(
+                                        self.button(
+                                            SharedString::from(format!("device-{}", row.id)),
+                                            if row.action.is_empty() {
+                                                self.tr("receiver.connect")
+                                            } else {
+                                                row.action_label.clone()
+                                            },
+                                            Command::App(action, row.id.clone()),
+                                            !row.enabled || row.action.is_empty(),
+                                            cx,
+                                        )
+                                        .w_full(),
+                                    ),
                             ),
                     )
                     .test_support(),
@@ -506,37 +492,29 @@ impl AppView {
                             !row.enabled || busy,
                             cx,
                         )
-                        .ghost()
-                        .small()
-                        .h_8()
-                        .px_2()
                         .selected(recording),
                     );
                 if row.enabled {
-                    chip = chip.child(
-                        self.icon_button(
-                            SharedString::from(if recording {
-                                format!("capture-cancel-{}", row.id)
-                            } else {
-                                format!("remove-{}-{}", row.id, shortcut.slot)
-                            }),
-                            IconName::X,
-                            self.tr(if recording {
-                                "capture.cancel_shortcut"
-                            } else {
-                                "common.remove"
-                            }),
-                            Command::Binding(if recording {
-                                BindingCommand::CancelCapture
-                            } else {
-                                BindingCommand::DeleteShortcut(target)
-                            }),
-                            busy && !recording,
-                            cx,
-                        )
-                        .ghost()
-                        .size_6(),
-                    );
+                    chip = chip.child(self.icon_button(
+                        SharedString::from(if recording {
+                            format!("capture-cancel-{}", row.id)
+                        } else {
+                            format!("remove-{}-{}", row.id, shortcut.slot)
+                        }),
+                        IconName::X,
+                        self.tr(if recording {
+                            "capture.cancel_shortcut"
+                        } else {
+                            "common.remove"
+                        }),
+                        Command::Binding(if recording {
+                            BindingCommand::CancelCapture
+                        } else {
+                            BindingCommand::DeleteShortcut(target)
+                        }),
+                        busy && !recording,
+                        cx,
+                    ));
                 }
                 shortcuts = shortcuts.child(chip);
             }
@@ -558,25 +536,19 @@ impl AppView {
                         busy,
                         cx,
                     )
-                    .small()
-                    .h_8()
                     .icon(IconName::Plus)
                     .accessibility_label(self.tr("shortcuts.add"))
                     .selected(recording),
                 );
                 if recording {
-                    shortcuts = shortcuts.child(
-                        self.icon_button(
-                            SharedString::from(format!("capture-cancel-{}", row.id)),
-                            IconName::X,
-                            self.tr("capture.cancel_shortcut"),
-                            Command::Binding(BindingCommand::CancelCapture),
-                            false,
-                            cx,
-                        )
-                        .ghost()
-                        .size_6(),
-                    );
+                    shortcuts = shortcuts.child(self.icon_button(
+                        SharedString::from(format!("capture-cancel-{}", row.id)),
+                        IconName::X,
+                        self.tr("capture.cancel_shortcut"),
+                        Command::Binding(BindingCommand::CancelCapture),
+                        false,
+                        cx,
+                    ));
                 }
             } else if !row.enabled && row.shortcuts.is_empty() {
                 shortcuts =
@@ -617,7 +589,6 @@ impl AppView {
                                 .py(rems(0.125))
                                 .rounded_md()
                                 .bg(cx.theme().secondary)
-                                .text_size(rems(0.8125))
                                 .child(gesture.action.clone()),
                         ),
                 );
@@ -625,40 +596,46 @@ impl AppView {
             rows = rows.child(
                 div()
                     .id(SharedString::from(format!("binding-row-{}", row.id)))
-                    .h_flex()
-                    .min_h_16()
-                    .px_4()
-                    .py_2()
-                    .gap_4()
-                    .rounded_md()
-                    .bg(cx.theme().group_box)
                     .child(
-                        div().w_9().flex_shrink_0().child(
-                            Switch::new(SharedString::from(format!("binding-enabled-{}", row.id)))
-                                .accessibility_label(row.label.clone())
-                                .checked(row.enabled)
-                                .disabled(busy)
-                                .on_change(cx.listener(move |this, enabled: &bool, window, cx| {
-                                    this.dispatch(
-                                        Command::Binding(BindingCommand::SetFunctionEnabled {
-                                            id,
-                                            enabled: *enabled,
-                                        }),
-                                        window,
-                                        cx,
-                                    );
-                                })),
-                        ),
-                    )
-                    .child(shortcut_column.test_support())
-                    .child(gestures.test_support())
-                    .child(
-                        div()
-                            .id(SharedString::from(format!("binding-scope-{}", row.id)))
-                            .w(rems(7.75))
-                            .flex_shrink_0()
-                            .child(self.scope_menu(id, row, busy, cx))
-                            .test_support(),
+                        GroupBox::new()
+                            .id(SharedString::from(format!("binding-{}", row.id)))
+                            .fill()
+                            .content_style(StyleRefinement::default().h_flex().min_h_16())
+                            .child(
+                                div().w_9().flex_shrink_0().child(
+                                    Switch::new(SharedString::from(format!(
+                                        "binding-enabled-{}",
+                                        row.id
+                                    )))
+                                    .accessibility_label(row.label.clone())
+                                    .checked(row.enabled)
+                                    .disabled(busy)
+                                    .on_change(cx.listener(
+                                        move |this, enabled: &bool, window, cx| {
+                                            this.dispatch(
+                                                Command::Binding(
+                                                    BindingCommand::SetFunctionEnabled {
+                                                        id,
+                                                        enabled: *enabled,
+                                                    },
+                                                ),
+                                                window,
+                                                cx,
+                                            );
+                                        },
+                                    )),
+                                ),
+                            )
+                            .child(shortcut_column.test_support())
+                            .child(gestures.test_support())
+                            .child(
+                                div()
+                                    .id(SharedString::from(format!("binding-scope-{}", row.id)))
+                                    .w(rems(7.75))
+                                    .flex_shrink_0()
+                                    .child(self.scope_menu(id, row, busy, cx))
+                                    .test_support(),
+                            ),
                     )
                     .test_support(),
             );
@@ -698,8 +675,6 @@ impl AppView {
             .label(row.scope_label.clone())
             .tooltip(row.scope_label.clone())
             .w_full()
-            .h_8()
-            .small()
             .disabled(busy)
             .dropdown_menu(move |mut menu, _, _| {
                 for (group, name, checked) in &options {
@@ -781,16 +756,13 @@ impl AppView {
                 .justify_end()
                 .gap_3()
                 .flex_shrink_0()
-                .child(
-                    self.app_button(
-                        "wizard-skip",
-                        "common.skip",
-                        Action::WizardFinish,
-                        false,
-                        cx,
-                    )
-                    .ghost(),
-                )
+                .child(self.app_button(
+                    "wizard-skip",
+                    "common.skip",
+                    Action::WizardFinish,
+                    false,
+                    cx,
+                ))
                 .child(self.app_button(
                     "wizard-back",
                     "common.previous_step",
@@ -798,25 +770,21 @@ impl AppView {
                     step == 0 || self.controller.recording(),
                     cx,
                 ))
-                .child(
-                    self.app_button(
-                        "wizard-next",
-                        if step == 2 {
-                            "common.finish"
-                        } else {
-                            "common.next_step"
-                        },
-                        if step == 2 {
-                            Action::WizardFinish
-                        } else {
-                            Action::WizardNext
-                        },
-                        self.controller.recording()
-                            || (step == 1 && !self.ui.receiver_next_allowed),
-                        cx,
-                    )
-                    .primary(),
-                ),
+                .child(self.app_button(
+                    "wizard-next",
+                    if step == 2 {
+                        "common.finish"
+                    } else {
+                        "common.next_step"
+                    },
+                    if step == 2 {
+                        Action::WizardFinish
+                    } else {
+                        Action::WizardNext
+                    },
+                    self.controller.recording() || (step == 1 && !self.ui.receiver_next_allowed),
+                    cx,
+                )),
         )
         .into_any_element()
     }
@@ -972,20 +940,20 @@ impl AppView {
                 div()
                     .h_flex()
                     .gap_2()
-                    .child(
-                        self.app_button("license", "settings.license", Action::License, false, cx)
-                            .ghost(),
-                    )
-                    .child(
-                        self.app_button(
-                            "notices",
-                            "settings.third.party.notices",
-                            Action::ThirdPartyNotices,
-                            false,
-                            cx,
-                        )
-                        .ghost(),
-                    ),
+                    .child(self.app_button(
+                        "license",
+                        "settings.license",
+                        Action::License,
+                        false,
+                        cx,
+                    ))
+                    .child(self.app_button(
+                        "notices",
+                        "settings.third.party.notices",
+                        Action::ThirdPartyNotices,
+                        false,
+                        cx,
+                    )),
             );
         let about = self
             .section("settings.about")

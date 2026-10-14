@@ -6,7 +6,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::{
     ActiveTheme, Disableable, Icon, Selectable, StyledExt, Theme, ThemeMode, WindowExt,
-    button::{Button, ButtonVariants},
+    button::Button,
     checkbox::Checkbox,
     group_box::{GroupBox, GroupBoxVariants},
     input::{Input, InputEvent, InputState},
@@ -38,6 +38,7 @@ pub(super) struct AppView {
     ui: Presentation,
     focus: FocusHandle,
     capture_focus: Option<FocusHandle>,
+    sidebar_collapsed: bool,
     group_name: Entity<InputState>,
     mapping_name: Entity<InputState>,
     output_filter: Entity<InputState>,
@@ -166,6 +167,7 @@ impl AppView {
             ui,
             focus: cx.focus_handle(),
             capture_focus: None,
+            sidebar_collapsed: false,
             group_name,
             mapping_name,
             output_filter,
@@ -475,7 +477,7 @@ impl Render for AppView {
                 this.key(&event.keystroke.key, false, window, cx)
             }));
         if self.ui.mode == 2 {
-            root = root.child(self.navigation(cx));
+            root = root.child(self.navigation(window, cx));
         }
         root.child(content).when(!self.ui.toast.is_empty(), |root| {
             root.child(

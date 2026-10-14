@@ -24,14 +24,12 @@ See the [README](README.md#build) for build requirements. Run the relevant check
 
 ```powershell
 cargo fmt --all -- --check
-$env:SLINT_EMIT_DEBUG_INFO = '1'
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
-Remove-Item Env:SLINT_EMIT_DEBUG_INFO
 cargo build --workspace --locked
 ```
 
-Slint's debug metadata enables element queries in the headless UI tests; it is separate from Rust/PDB debug information. Keep it enabled across Clippy and tests to reuse generated UI code. Changing it reruns UI generation. If it was already set in your shell, restore its previous value instead of removing it.
+GPUI Kit UI tests render production views in headless windows and exercise real control events. They do not start Bluetooth, install input hooks, or validate real hardware. No UI code generation environment variable is required.
 
 The default development profile prioritizes incremental builds and disk usage. Use `--profile debugging` for full project and dependency symbols. See [build profiles and measurements](docs/build-performance.md) for details.
 

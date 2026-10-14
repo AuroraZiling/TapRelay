@@ -94,8 +94,7 @@ impl Tracker {
 #[cfg(windows)]
 #[derive(Default)]
 pub struct Overlay {
-    native: std::rc::Rc<std::cell::RefCell<Option<taprelay_windows::overlay::Overlay>>>,
-    timer: std::rc::Rc<slint::Timer>,
+    native: Option<taprelay_windows::overlay::Overlay>,
     notice: Option<Notice>,
     appearance: Option<(String, [u8; 3], [u8; 3])>,
 }
@@ -110,12 +109,11 @@ impl Overlay {
         background: [u8; 3],
         foreground: [u8; 3],
     ) {
-        let mut native = self.native.borrow_mut();
+        let native = &mut self.native;
         if !enabled {
             if let Some(native) = native.as_mut() {
                 native.hide();
             }
-            self.timer.stop();
             self.notice = None;
             return;
         }
@@ -150,27 +148,20 @@ impl Overlay {
             *native = None;
             self.notice = None;
         }
-        if native.as_ref().is_some_and(|native| native.is_visible()) && !self.timer.running() {
-            let native = self.native.clone();
-            let timer = std::rc::Rc::downgrade(&self.timer);
-            self.timer.start(
-                slint::TimerMode::Repeated,
-                Duration::from_millis(16),
-                move || {
-                    let mut native = native.borrow_mut();
-                    if let Some(window) = native.as_mut()
-                        && let Err(error) = window.tick()
-                    {
-                        tracing::warn!(%error, "Passthrough overlay animation failed");
-                        *native = None;
-                    }
-                    if native.as_ref().is_none_or(|window| !window.is_visible())
-                        && let Some(timer) = timer.upgrade()
-                    {
-                        timer.stop();
-                    }
-                },
-            );
+    }
+
+    pub fn is_visible(&self) -> bool {
+        self.native
+            .as_ref()
+            .is_some_and(|window| window.is_visible())
+    }
+
+    pub fn tick(&mut self) {
+        if let Some(window) = self.native.as_mut()
+            && let Err(error) = window.tick()
+        {
+            tracing::warn!(%error, "Passthrough overlay animation failed");
+            self.native = None;
         }
     }
 }

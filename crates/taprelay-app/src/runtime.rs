@@ -97,6 +97,19 @@ pub struct Runtime {
 }
 
 impl Runtime {
+    #[cfg(test)]
+    pub(crate) fn headless_tick(&mut self) {
+        struct Input;
+        impl crate::platform::InputSource for Input {
+            fn is_finished(&self) -> bool {
+                false
+            }
+        }
+        self.input = Some(Box::new(Input));
+        self.tick_with_capture_context(true, false);
+        self.input = Some(Box::new(Input));
+    }
+
     pub fn passthrough_epoch(&self) -> u64 {
         self.transport
             .as_ref()

@@ -7,40 +7,14 @@ authors or copyright holders.
 This manually maintained file covers code and assets copied, vendored or modified
 in this project, and components with special attribution requirements.
 
-## slintcn (vendored UI components and theme)
-
-- Source: [slintcn](https://github.com/zero-sq/slintcn).
-- License: MIT.
-
-```text
-MIT License
-
-Copyright (c) 2026 Steve Kwon
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
-
 ## Lucide / Feather icon artwork
 
 - Source: [Lucide](https://github.com/lucide-icons/lucide), including icons derived
   from [Feather](https://github.com/feathericons/feather), supplied by
-  [lucide-slint](https://github.com/cnlancehu/lucide-slint).
+  [GPUI Kit Assets](https://github.com/longbridge/gpui-kit) 0.7.3.
+- Paths: icons embedded by `gpui_kit::assets::AllAssets`; the ScreenShare path in
+  `crates/taprelay-windows/src/overlay.rs` is drawn with Direct2D.
+- Modifications: the overlay converts the original 24-unit SVG geometry to native drawing commands.
 - License: ISC for Lucide; MIT for the Feather-derived icons.
 
 ```text
@@ -88,45 +62,6 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
-
-## lucide-slint (Slint icon components)
-
-- Source: [lucide-slint](https://github.com/cnlancehu/lucide-slint), Cargo version 1.47.0.
-- License: MIT OR Apache-2.0 for the binding/component code; the MIT option is
-  retained below.
-
-```text
-MIT License
-
-Copyright 2026 Lance
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
-
-## Slint
-
-This desktop application uses [Slint](https://github.com/slint-ui/slint) 1.18.1 (`slint`, `slint-build` and
-related crates). Slint offers multiple licensing options. TapRelay selects the
-**GNU General Public License, version 3 only** (`GPL-3.0-only`) option.
-
-See the [license text](https://github.com/slint-ui/slint/blob/v1.18.1/LICENSES/GPL-3.0-only.txt)
-and [official licensing information](https://slint.dev/pricing).
 
 ## Maintenance
 

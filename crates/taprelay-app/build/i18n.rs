@@ -91,34 +91,13 @@ pub fn generate() -> PathBuf {
         }
     }
 
-    let mut rust = String::from("pub mod keys {\n");
-    let mut slint = String::from(
-        "// Generated typed boundary for rust-i18n catalogs.\nexport struct TranslationText {\n",
-    );
-    let mut defaults = String::new();
-    let mut values = String::new();
-    for (key, value) in &english {
-        let field = key.replace('.', "_");
-        let constant = field.to_uppercase();
-        let property = key.replace('.', "-");
+    let mut rust = String::from("#[allow(dead_code)]\npub mod keys {\n");
+    for key in english.keys() {
+        let constant = key.replace('.', "_").to_uppercase();
         rust.push_str(&format!("    pub const {constant}: &str = {key:?};\n"));
-        slint.push_str(&format!("    {property}: string,\n"));
-        defaults.push_str(&format!(
-            "        {property}: {},\n",
-            serde_json::to_string(value).unwrap()
-        ));
-        values.push_str(&format!(
-            "        {field}: rust_i18n::t!(keys::{constant}, locale = locale).into_owned().into(),\n"
-        ));
     }
-    rust.push_str("}\nfn translation_values(locale: &str) -> crate::TranslationText {\n    crate::TranslationText {\n");
-    rust.push_str(&values);
-    rust.push_str("    }\n}\n");
-    slint.push_str("}\nexport global I18n {\n    in-out property <string> locale: \"en\";\n    in-out property <TranslationText> text: {\n");
-    slint.push_str(&defaults);
-    slint.push_str("    };\n}\n");
+    rust.push_str("}\n");
     let out = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
-    std::fs::write(out.join("i18n_bindings.rs"), rust).expect("Write Rust translation bindings");
-    std::fs::write(out.join("i18n.slint"), slint).expect("Write Slint translation bindings");
-    out.join("i18n.slint")
+    std::fs::write(out.join("i18n_bindings.rs"), rust).expect("Write translation keys");
+    out
 }

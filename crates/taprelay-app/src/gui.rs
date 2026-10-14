@@ -1,6 +1,5 @@
 use crate::{
-    AppWindow, BindingCaptureState, BindingRow, BindingUi, FunctionBindingRow, GestureAction,
-    ShortcutItem, Theme, ThemeMode,
+    BindingCaptureState, BindingRow, FunctionBindingRow, GestureAction, ShortcutItem,
     action::{self, Action, BindingCommand, CaptureTarget},
     administrator,
     config::{self, Config, Device, Language, SaveQueue, Theme as ThemeSetting},
@@ -12,7 +11,7 @@ use crate::{
     runtime_worker::{HandoffError, Notice, RuntimeHandle},
 };
 use anyhow::{Context, Result, bail};
-use slint::{ComponentHandle, Model, ModelRc, VecModel};
+
 use std::{
     cell::RefCell,
     path::PathBuf,
@@ -25,250 +24,6 @@ use taprelay_core::{
 };
 mod custom_mappings;
 mod foreground_app_groups;
-
-/// Refresh data without destroying delegates that own keyboard focus or an open popup.
-pub(crate) fn update_model<T: Clone + 'static>(model: ModelRc<T>, rows: Vec<T>) -> ModelRc<T> {
-    if let Some(current) = model.as_any().downcast_ref::<VecModel<T>>()
-        && current.row_count() == rows.len()
-    {
-        for (index, row) in rows.into_iter().enumerate() {
-            current.set_row_data(index, row);
-        }
-        model
-    } else {
-        ModelRc::new(VecModel::from(rows))
-    }
-}
-
-fn dispatch_controller(
-    controller: &Rc<RefCell<Controller>>,
-    window: &slint::Weak<AppWindow>,
-    command: impl FnOnce(&mut Controller, &AppWindow) -> Result<()>,
-) {
-    let Some(ui) = window.upgrade() else { return };
-    let Ok(mut controller) = controller.try_borrow_mut() else {
-        tracing::error!("Ignored re-entrant UI command");
-        return;
-    };
-    controller.runtime.poll();
-    if let Err(error) = command(&mut controller, &ui) {
-        controller.command_error(&error);
-        controller.sync(&ui);
-    }
-}
-
-fn capture_target(function_id: &str, slot: i32) -> Result<CaptureTarget> {
-    Ok(CaptureTarget {
-        id: FunctionId::from_stable_id(function_id).context("Unknown function")?,
-        slot: usize::try_from(slot).context("Invalid shortcut slot")?,
-    })
-}
-
-pub fn run() -> Result<()> {
-    let args: Vec<_> = std::env::args().skip(1).collect();
-    let startup = parse_startup_options(&args)?;
-    logging::configure_level(startup.log_level)?;
-    let handoff = startup.handoff;
-    if let Some(pid) = handoff {
-        administrator::wait_for_parent(pid)?;
-    } else if desktop::activate_existing() {
-        return Ok(());
-    }
-    let path = config::path()?;
-    let loaded = Config::load(&path);
-    let status = administrator::status()?;
-    let needs_admin = should_request_admin(
-        startup.privilege,
-        loaded.as_ref().is_ok_and(|c| c.options.always_admin),
-    );
-    if handoff.is_none() && needs_admin && !status.elevated {
-        match administrator::restart() {
-            Ok(true) => return Ok(()),
-            Ok(false) if startup.privilege == PrivilegeMode::Admin => {
-                bail!("Administrator privileges are required when starting with --admin")
-            }
-            Ok(false) => {}
-            Err(e) => desktop::show_error(&format!(
-                "Administrator request failed; continuing normally.\n{e:#}"
-            )),
-        }
-    }
-    let _instance = match crate::platform::InstanceLock::acquire() {
-        Ok(i) => i,
-        Err(e) => {
-            if desktop::activate_existing() {
-                return Ok(());
-            }
-            return Err(e.into());
-        }
-    };
-    slint::BackendSelector::new()
-        .backend_name("winit".into())
-        .renderer_name("software".into())
-        .select()?;
-    let ui = AppWindow::new()?;
-    #[cfg(windows)]
-    crate::window_rendering::install(ui.window());
-    let mut startup_error = loaded.as_ref().err().map(|e| format!("{e:#}"));
-    if let Err(e) = config::check_writable(&path) {
-        startup_error = Some(format!("{e:#}"));
-    }
-    let config = loaded.unwrap_or_default();
-    let log_init = logging::init(&path);
-    let (logs, _guard) = match log_init {
-        Ok((l, g)) => (Some(l), Some(g)),
-        Err(e) => {
-            startup_error = Some(format!("Cannot open logs: {e:#}"));
-            (None, None)
-        }
-    };
-    tracing::info!(
-        version = crate::version::VERSION,
-        elevated = status.elevated,
-        account_admin = status.account_admin,
-        "TapRelay started"
-    );
-    let locale = match config.options.language {
-        Language::System => i18n::system_locale(),
-        ref selected => selected.locale(),
-    };
-    let desktop = Desktop::new(i18n::tray_labels(locale))?;
-    restore_geometry(&ui, &config.window);
-    let actions = Rc::new(RefCell::new(Vec::<(Action, String)>::new()));
-    let a = actions.clone();
-    ui.window().on_close_requested(move || {
-        a.borrow_mut().push((Action::Close, String::new()));
-        slint::CloseRequestResponse::KeepWindowShown
-    });
-    let mut controller = Controller::new(config, path, logs, desktop, status, startup_error)?;
-    controller.sync(&ui);
-    if controller.fatal.is_none() {
-        controller.runtime.start_bluetooth()?;
-    }
-    controller.present_startup(&ui)?;
-    let controller = Rc::new(RefCell::new(controller));
-    foreground_app_groups::connect(&controller, &ui);
-    custom_mappings::connect(&controller, &ui);
-    let action_controller = controller.clone();
-    let action_window = ui.as_weak();
-    ui.on_action(move |name, value| match Action::try_from(name.as_str()) {
-        Ok(action) => dispatch_controller(&action_controller, &action_window, |controller, ui| {
-            controller.action(ui, action, &value)
-        }),
-        Err(e) => tracing::error!("{e}"),
-    });
-
-    let binding_ui = ui.global::<BindingUi>();
-    let binding_controller = controller.clone();
-    let binding_window = ui.as_weak();
-    binding_ui.on_begin_capture(move |function_id, slot| {
-        dispatch_controller(&binding_controller, &binding_window, |controller, ui| {
-            controller.binding_action(
-                ui,
-                BindingCommand::BeginCapture(capture_target(&function_id, slot)?),
-            )
-        });
-    });
-    let binding_controller = controller.clone();
-    let binding_window = ui.as_weak();
-    binding_ui.on_cancel_capture(move || {
-        dispatch_controller(&binding_controller, &binding_window, |controller, ui| {
-            controller.binding_action(ui, BindingCommand::CancelCapture)
-        });
-    });
-    let binding_controller = controller.clone();
-    let binding_window = ui.as_weak();
-    binding_ui.on_delete_shortcut(move |function_id, slot| {
-        dispatch_controller(&binding_controller, &binding_window, |controller, ui| {
-            controller.binding_action(
-                ui,
-                BindingCommand::DeleteShortcut(capture_target(&function_id, slot)?),
-            )
-        });
-    });
-    let binding_controller = controller.clone();
-    let binding_window = ui.as_weak();
-    binding_ui.on_set_function_enabled(move |function_id, enabled| {
-        dispatch_controller(&binding_controller, &binding_window, |controller, ui| {
-            let id = FunctionId::from_stable_id(&function_id).context("Unknown function")?;
-            controller.binding_action(ui, BindingCommand::SetFunctionEnabled { id, enabled })
-        });
-    });
-    let key_controller = controller.clone();
-    binding_ui.on_key_input(move |text, down| {
-        if desktop::ui_input_is_injected() {
-            return;
-        }
-        let Ok(mut controller) = key_controller.try_borrow_mut() else {
-            tracing::error!("Ignored re-entrant binding key input");
-            return;
-        };
-        controller.runtime.poll();
-        if !controller.recording() {
-            tracing::warn!("Ignored binding key input while capture was inactive");
-            return;
-        }
-        if let Some(key) = crate::capture_key::virtual_key(&text) {
-            controller
-                .runtime
-                .window_key(taprelay_core::input::InputEvent {
-                    code: taprelay_core::input::InputCode::Key(key),
-                    down,
-                    captured: Instant::now(),
-                });
-        } else {
-            tracing::debug!(key_text = %text, "Ignored unsupported binding key");
-        }
-    });
-    let weak = ui.as_weak();
-    let c = controller.clone();
-    let timer = slint::Timer::default();
-    timer.start(
-        slint::TimerMode::Repeated,
-        Duration::from_millis(50),
-        move || {
-            let Some(ui) = weak.upgrade() else { return };
-            let Ok(mut c) = c.try_borrow_mut() else {
-                return;
-            };
-            for event in desktop::events() {
-                let name = match event {
-                    DesktopEvent::Show => Action::Show,
-                    DesktopEvent::Toggle => Action::Listen,
-                    DesktopEvent::Quit => Action::Quit,
-                    DesktopEvent::Resume => Action::Resume,
-                };
-                actions.borrow_mut().push((name, String::new()));
-            }
-            let pending = std::mem::take(&mut *actions.borrow_mut());
-            for (name, value) in pending {
-                if let Err(e) = c.action(&ui, name, &value) {
-                    c.command_error(&e);
-                }
-            }
-            c.tick(&ui);
-        },
-    );
-    slint::run_event_loop_until_quit()?;
-    timer.stop();
-    let mut c = controller.borrow_mut();
-    c.save_geometry(&ui);
-    c.flush(true);
-    Ok(())
-}
-
-pub(super) fn restore_geometry(ui: &AppWindow, geometry: &config::Geometry) {
-    ui.window().set_size(slint::LogicalSize::new(
-        geometry.width.max(900.),
-        geometry.height.max(500.),
-    ));
-    if let (Some(x), Some(y)) = (geometry.x, geometry.y)
-        && desktop::visible_position(x, y)
-    {
-        ui.window().set_position(slint::PhysicalPosition::new(x, y));
-    }
-    ui.window().set_maximized(geometry.maximized);
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PrivilegeMode {
@@ -444,6 +199,29 @@ enum ExitIntent {
     Elevate,
 }
 
+enum Shell {
+    Native(Desktop),
+    #[cfg(test)]
+    Headless,
+}
+
+impl Shell {
+    fn update(&mut self, state: u8, tip: &str, listening: bool, labels: [String; 4]) {
+        match self {
+            Self::Native(desktop) => desktop.update(state, tip, listening, labels),
+            #[cfg(test)]
+            Self::Headless => {}
+        }
+    }
+    fn notify(&self, title: &str, body: &str) {
+        match self {
+            Self::Native(desktop) => desktop.notify(title, body),
+            #[cfg(test)]
+            Self::Headless => {}
+        }
+    }
+}
+
 struct Controller {
     mapping_draft: Option<custom_mappings::MappingDraft>,
     pending_mappings: Option<(
@@ -461,7 +239,7 @@ struct Controller {
     runtime: RuntimeHandle,
     path: PathBuf,
     logs: Option<tracing_appender::non_blocking::ErrorCounter>,
-    desktop: Desktop,
+    desktop: Shell,
     saves: SaveQueue,
     status: administrator::Status,
     fatal: Option<String>,
@@ -498,15 +276,14 @@ struct Controller {
 }
 impl Controller {
     fn new(
-        mut config: Config,
+        runtime: RuntimeHandle,
         path: PathBuf,
         logs: Option<tracing_appender::non_blocking::ErrorCounter>,
-        desktop: Desktop,
+        desktop: Shell,
         status: administrator::Status,
         fatal: Option<String>,
     ) -> Result<Self> {
-        config.options.autostart = desktop::autostart_enabled();
-        let persisted_remembered_device = config.remembered_device.clone();
+        let persisted_remembered_device = runtime.config.remembered_device.clone();
         let now = Instant::now();
         Ok(Self {
             mapping_draft: None,
@@ -519,7 +296,7 @@ impl Controller {
             group_draft: None,
             foreground_app_icons: Rc::new(RefCell::new(foreground_app_groups::IconCache::new())),
             pending_group_rules: None,
-            runtime: RuntimeHandle::new(config)?,
+            runtime,
             path,
             logs,
             desktop,
@@ -621,7 +398,7 @@ impl Controller {
         self.runtime
             .apply_binding_command(BindingCommand::CancelCapture)
     }
-    fn binding_action(&mut self, ui: &AppWindow, command: BindingCommand) -> Result<()> {
+    fn binding_action(&mut self, ui: &mut Presentation, command: BindingCommand) -> Result<()> {
         if self.exit.is_some() {
             return Ok(());
         }
@@ -629,7 +406,7 @@ impl Controller {
         self.sync(ui);
         result
     }
-    fn action(&mut self, ui: &AppWindow, name: Action, value: &str) -> Result<()> {
+    fn action(&mut self, ui: &mut Presentation, name: Action, value: &str) -> Result<()> {
         self.runtime.poll();
         if self.exit.is_some() && !matches!(name, Action::Show) {
             return Ok(());
@@ -669,8 +446,6 @@ impl Controller {
             }
             Action::Show => {
                 self.show_window(ui)?;
-                ui.window().set_minimized(false);
-                desktop::foreground_app();
             }
             Action::Close => {
                 if self.runtime.config.options.close_to_tray && self.fatal.is_none() {
@@ -683,7 +458,7 @@ impl Controller {
                         self.runtime.config.options.close_hint_seen = true;
                         self.saves.changed();
                     }
-                    ui.hide()?;
+                    ui.window_command = Some(WindowCommand::Hide);
                     self.hidden = true;
                 } else {
                     self.action(ui, Action::Quit, "")?;
@@ -697,11 +472,10 @@ impl Controller {
                 if !self.runtime.stopped() {
                     self.cancel_capture()?;
                 }
-                ui.global::<crate::MappingUi>().set_open(false);
-                ui.set_page(action::page(value)?.clamp(0, 4));
-                ui.global::<crate::ForegroundAppUi>().set_error("".into());
-                ui.global::<crate::ForegroundAppUi>()
-                    .set_confirming_delete(false);
+                ui.mapping.open = false;
+                ui.page = action::page(value)?.clamp(0, 4);
+                ui.groups.error = "".into();
+                ui.groups.confirming_delete = false;
             }
             Action::Listen => {
                 self.runtime.set_listening(!self.runtime.listening)?;
@@ -761,28 +535,28 @@ impl Controller {
             Action::DisconnectDevice => self.runtime.disconnect()?,
             Action::Wizard => {
                 self.cancel_capture()?;
-                ui.set_mode(1);
-                ui.set_wizard_page(0);
+                ui.mode = 1;
+                ui.wizard_page = 0;
                 self.runtime.config.wizard.dismissed = false;
                 self.runtime.config.wizard.page = 0;
                 self.saves.changed();
             }
             Action::WizardNext | Action::WizardBack => {
                 if name == Action::WizardNext
-                    && ui.get_wizard_page() == 2
+                    && ui.wizard_page == 2
                     && !taprelay_core::devices::receiver_next_allowed(&self.runtime.state)
                 {
                     return Ok(());
                 }
-                let page = (ui.get_wizard_page() + if name == Action::WizardNext { 1 } else { -1 })
-                    .clamp(0, 3);
+                let page =
+                    (ui.wizard_page + if name == Action::WizardNext { 1 } else { -1 }).clamp(0, 3);
                 // Preserve step IDs saved by the former four-step wizard.
                 let page = if page == 1 {
                     if name == Action::WizardNext { 2 } else { 0 }
                 } else {
                     page
                 };
-                ui.set_wizard_page(page);
+                ui.wizard_page = page;
                 self.runtime.config.wizard.page = page as u8;
                 self.saves.changed();
             }
@@ -790,8 +564,8 @@ impl Controller {
                 self.cancel_capture()?;
                 self.runtime.config.wizard.dismissed = true;
                 self.saves.changed();
-                ui.set_mode(2);
-                ui.set_page(0);
+                ui.mode = 2;
+                ui.page = 0;
             }
             Action::Theme => {
                 self.runtime.config.options.theme = ThemeSetting::from_name(value)
@@ -855,7 +629,7 @@ impl Controller {
         self.sync(ui);
         Ok(())
     }
-    fn tick(&mut self, ui: &AppWindow) {
+    fn tick(&mut self, ui: &mut Presentation) {
         if self.shutdown {
             return;
         }
@@ -878,13 +652,12 @@ impl Controller {
         }
         #[cfg(windows)]
         {
-            let rgb = |color: slint::Color| [color.red(), color.green(), color.blue()];
             self.overlay.update(
                 passthrough_notice,
                 self.runtime.config.options.passthrough_overlay && self.exit.is_none(),
                 self.locale(),
-                rgb(ui.get_overlay_background()),
-                rgb(ui.get_overlay_foreground()),
+                ui.overlay_background,
+                ui.overlay_foreground,
             );
         }
         #[cfg(not(windows))]
@@ -904,19 +677,19 @@ impl Controller {
         }
         if !self.passed && passed && self.fatal.is_none() {
             self.passed = true;
-            ui.set_mode(if self.runtime.config.wizard.dismissed {
+            ui.mode = if self.runtime.config.wizard.dismissed {
                 2
             } else {
                 1
-            });
-            ui.set_wizard_page(self.runtime.config.wizard.page.into());
+            };
+            ui.wizard_page = self.runtime.config.wizard.page.into();
             if self.runtime.config.options.auto_listen
                 && let Err(e) = self.runtime.set_listening(true)
             {
                 self.error(&e.to_string());
             }
             if self.runtime.config.options.start_hidden && self.runtime.config.wizard.dismissed {
-                let _ = ui.hide();
+                ui.window_command = Some(WindowCommand::Hide);
                 self.hidden = true;
             }
         }
@@ -966,9 +739,13 @@ impl Controller {
         }
         if self.last_slow.elapsed() >= Duration::from_secs(1) {
             self.last_slow = now;
-            let tip = format!("TapRelay · {} · {}", ui.get_device_name(), ui.get_stage());
+            let tip = format!(
+                "TapRelay · {} · {}",
+                ui.device_name.clone(),
+                ui.stage.clone()
+            );
             self.desktop.update(
-                ui.get_state_color() as u8,
+                ui.state_color as u8,
                 &tip,
                 self.runtime.listening,
                 i18n::tray_labels(self.locale()),
@@ -990,28 +767,21 @@ impl Controller {
             }
         }
     }
-    fn show_window(&mut self, ui: &AppWindow) -> Result<()> {
-        ui.show()?;
-        // Initial winit attributes only set ICON_SMALL. Update both icon sizes after creation.
-        let icon_window = ui.as_weak();
-        slint::Timer::single_shot(Duration::ZERO, move || {
-            if let Some(ui) = icon_window.upgrade() {
-                ui.set_app_icon(ui.get_app_icon_artwork());
-            }
-        });
+    fn show_window(&mut self, ui: &mut Presentation) -> Result<()> {
+        ui.window_command = Some(WindowCommand::Show);
         self.hidden = false;
         self.startup_pending = false;
         Ok(())
     }
 
-    fn present_startup(&mut self, ui: &AppWindow) -> Result<()> {
+    fn present_startup(&mut self, ui: &mut Presentation) -> Result<()> {
         if !self.startup_pending {
             return Ok(());
         }
         self.sync(ui);
         if !crate::startup_checks::should_present(
             self.passed,
-            !ui.get_problem().is_empty(),
+            !ui.problem.clone().is_empty(),
             self.started.elapsed(),
         ) {
             return Ok(());
@@ -1026,41 +796,35 @@ impl Controller {
         self.show_window(ui)
     }
 
-    fn sync(&mut self, ui: &AppWindow) {
+    fn sync(&mut self, ui: &mut Presentation) {
         if self.last_system_poll.elapsed() >= Duration::from_secs(1) {
             self.system_theme = desktop::system_dark();
             self.system_language = desktop::system_locale_id();
             self.last_system_poll = Instant::now();
         }
         let locale = self.locale();
-        i18n::apply(ui, locale);
+        ui.locale = locale.to_owned();
         self.sync_group_operation(ui);
         self.sync_mapping_operation(ui);
         let icons_changed = self.foreground_app_icons.borrow_mut().poll();
         if icons_changed {
-            let view = ui.global::<crate::ForegroundAppUi>();
-            view.set_icon_revision(view.get_icon_revision().wrapping_add(1));
+            ui.groups.icon_revision = ui.groups.icon_revision.wrapping_add(1);
         }
-        ui.global::<crate::ForegroundAppUi>()
-            .set_busy(self.runtime.busy() || self.runtime.stopped() || self.recording());
+        ui.groups.busy = self.runtime.busy() || self.runtime.stopped() || self.recording();
         let o = &self.runtime.config.options;
         let dark = match o.theme {
             ThemeSetting::System => self.system_theme,
             ThemeSetting::Dark => true,
             ThemeSetting::Light => false,
         };
-        ui.global::<Theme>().set_mode(if dark {
-            ThemeMode::Dark
-        } else {
-            ThemeMode::Light
-        });
-        ui.set_theme_choice(match o.theme {
+        ui.dark = dark;
+        ui.theme_choice = match o.theme {
             ThemeSetting::System => 0,
             ThemeSetting::Light => 1,
             ThemeSetting::Dark => 2,
-        });
-        ui.set_language_options(i18n::language_options(locale));
-        ui.set_language_choice(match o.language {
+        };
+        ui.language_options = i18n::language_options(locale);
+        ui.language_choice = match o.language {
             Language::System => 0,
             ref selected => {
                 1 + i18n::locale::all()
@@ -1068,40 +832,34 @@ impl Controller {
                     .position(|compiled| compiled == selected.locale())
                     .unwrap_or_default() as i32
             }
-        });
-        ui.set_auto_start(o.autostart);
-        ui.set_auto_listen(o.auto_listen);
-        ui.set_passthrough_overlay(o.passthrough_overlay);
-        ui.set_passthrough_reverse_scroll(o.passthrough_reverse_scroll);
-        ui.set_passthrough_mouse_report_rate(i32::from(o.passthrough_mouse_report_rate));
-        ui.set_start_hidden(o.start_hidden);
-        ui.set_close_to_tray(o.close_to_tray);
-        ui.set_always_admin(o.always_admin);
-        ui.set_notifications(o.notifications);
-        ui.set_connection_wait_warning(o.connection_wait_warning);
-        ui.set_elevated(self.status.elevated);
-        ui.set_app_version(crate::version::VERSION.into());
-        ui.set_data_directory(
-            self.path
-                .parent()
-                .unwrap()
-                .to_string_lossy()
-                .as_ref()
-                .into(),
-        );
+        };
+        ui.auto_start = o.autostart;
+        ui.auto_listen = o.auto_listen;
+        ui.passthrough_overlay = o.passthrough_overlay;
+        ui.passthrough_reverse_scroll = o.passthrough_reverse_scroll;
+        ui.passthrough_mouse_report_rate = i32::from(o.passthrough_mouse_report_rate);
+        ui.start_hidden = o.start_hidden;
+        ui.close_to_tray = o.close_to_tray;
+        ui.always_admin = o.always_admin;
+        ui.notifications = o.notifications;
+        ui.connection_wait_warning = o.connection_wait_warning;
+        ui.elevated = self.status.elevated;
+        ui.app_version = crate::version::VERSION.into();
+        ui.data_directory = self
+            .path
+            .parent()
+            .unwrap()
+            .to_string_lossy()
+            .as_ref()
+            .into();
         let s = &self.runtime.state;
         let flags = [s.adapter, s.peripheral, s.service, s.broadcasting];
-        ui.set_bluetooth_available(
-            s.adapter_state == taprelay_core::devices::AdapterState::Available,
-        );
-        ui.set_scanning(s.discovery == taprelay_core::devices::DiscoveryState::Scanning);
-        ui.set_adapter_label(
-            self.tr(crate::receiver_view::adapter_label_key(s.adapter_state))
-                .into(),
-        );
-        ui.set_receiver_next_allowed(taprelay_core::devices::receiver_next_allowed(s));
-        ui.set_device_selected(s.selected.is_some());
-        ui.set_discovery_status(self.tr(crate::receiver_view::page_status_key(s)).into());
+        ui.bluetooth_available = s.adapter_state == taprelay_core::devices::AdapterState::Available;
+        ui.scanning = s.discovery == taprelay_core::devices::DiscoveryState::Scanning;
+        ui.adapter_label = self.tr(crate::receiver_view::adapter_label_key(s.adapter_state));
+        ui.receiver_next_allowed = taprelay_core::devices::receiver_next_allowed(s);
+        ui.device_selected = s.selected.is_some();
+        ui.discovery_status = self.tr(crate::receiver_view::page_status_key(s));
         let timeout = !self.passed && self.started.elapsed() > Duration::from_secs(30);
         let scope = if self.fatal.is_some() {
             crate::feedback::ErrorScope::Startup
@@ -1129,25 +887,21 @@ impl Controller {
             })
             .or_else(|| timeout.then(|| self.tr(keys::STARTUP_TIMEOUT)));
         if self.fatal.is_some() {
-            ui.set_mode(3);
+            ui.mode = 3;
         }
-        ui.set_problem(if failure.is_some() {
-            self.tr(scope.summary_key(s)).into()
+        ui.problem = if failure.is_some() {
+            self.tr(scope.summary_key(s))
         } else {
             "".into()
-        });
-        ui.set_problem_retry_allowed(scope.can_retry() && !self.runtime.stopped());
-        ui.set_problem_busy(self.runtime.busy() || self.recovering);
-        ui.set_busy((!self.passed || self.recovering) && failure.is_none());
+        };
+        ui.problem_retry_allowed = scope.can_retry() && !self.runtime.stopped();
+        ui.problem_busy = self.runtime.busy() || self.recovering;
+        ui.busy = (!self.passed || self.recovering) && failure.is_none();
         let checks_key = (flags, self.fatal.is_some(), failure.is_some(), locale);
         if self.previous_checks != Some(checks_key) {
             self.previous_checks = Some(checks_key);
-            ui.set_checks(ModelRc::new(VecModel::from(crate::startup_checks::rows(
-                locale,
-                self.fatal.is_some(),
-                flags,
-                failure.is_some(),
-            ))));
+            ui.checks =
+                crate::startup_checks::rows(locale, self.fatal.is_some(), flags, failure.is_some());
         }
         let target = s.selected_target();
         let (key, stage) = if s.profile_switching && failure.is_none() {
@@ -1197,21 +951,20 @@ impl Controller {
             self.stage_key = key.into();
             self.stage_since = Instant::now();
         }
-        ui.set_stage(stage.into());
-        ui.set_ready(s.ready && !s.profile_switching && key != keys::RECEIVER_SUSPENDED);
-        ui.set_listening(self.runtime.listening);
-        ui.set_state_color(if (!self.passed && failure.is_some()) || key == "fault" {
+        ui.stage = stage;
+        ui.ready = s.ready && !s.profile_switching && key != keys::RECEIVER_SUSPENDED;
+        ui.listening = self.runtime.listening;
+        ui.state_color = if (!self.passed && failure.is_some()) || key == "fault" {
             3
         } else {
             signal
-        });
+        };
         let receiver_none = self.tr(keys::RECEIVER_NONE);
-        ui.set_device_name(
-            s.selected_target()
-                .map(|t| t.name.as_str())
-                .unwrap_or(&receiver_none)
-                .into(),
-        );
+        ui.device_name = s
+            .selected_target()
+            .map(|t| t.name.as_str())
+            .unwrap_or(&receiver_none)
+            .into();
         let diagnostics = format!(
             "Adapter={} · Peripheral={} · Service={} · Advertising={}\nLink={:?} · Subscription={:?} · Input={} · HID={:?}\n{}: {}",
             s.adapter,
@@ -1225,7 +978,7 @@ impl Controller {
             self.tr(keys::DIAGNOSTICS_INPUTS),
             self.runtime.matched
         );
-        ui.set_diagnostics(diagnostics.into());
+        ui.diagnostics = diagnostics;
         let keyboard_layout = crate::platform::keyboard_layout();
         if self.previous_bindings != Some((self.runtime.bindings_revision, locale, keyboard_layout))
         {
@@ -1243,19 +996,19 @@ impl Controller {
                 // row shows exactly what each one does instead of naming the
                 // pair and leaving the reader to guess which half is the hold.
                 let mut gestures = vec![GestureAction {
-                    gesture: self.tr(keys::BINDINGS_GESTURE_PRESS).into(),
-                    action: self.tr(definition.tap_action.name_key()).into(),
+                    gesture: self.tr(keys::BINDINGS_GESTURE_PRESS),
+                    action: self.tr(definition.tap_action.name_key()),
                 }];
                 if let Some(hold) = definition.hold_action {
                     gestures.push(GestureAction {
-                        gesture: self.tr(keys::BINDINGS_GESTURE_HOLD).into(),
-                        action: self.tr(hold.name_key()).into(),
+                        gesture: self.tr(keys::BINDINGS_GESTURE_HOLD),
+                        action: self.tr(hold.name_key()),
                     });
                 }
                 if definition.repeats() {
                     gestures.push(GestureAction {
-                        gesture: self.tr(keys::BINDINGS_GESTURE_HOLD).into(),
-                        action: self.tr(keys::BINDINGS_GESTURE_REPEAT).into(),
+                        gesture: self.tr(keys::BINDINGS_GESTURE_HOLD),
+                        action: self.tr(keys::BINDINGS_GESTURE_REPEAT),
                     });
                 }
                 let shortcuts = config
@@ -1265,12 +1018,8 @@ impl Controller {
                     .map(|(slot, shortcut)| {
                         let keys = i18n::shortcut_labels(self.locale(), shortcut);
                         ShortcutItem {
-                            text: keys.join("+").into(),
-                            keys: ModelRc::new(VecModel::from(
-                                keys.into_iter()
-                                    .map(Into::into)
-                                    .collect::<Vec<slint::SharedString>>(),
-                            )),
+                            text: keys.join("+"),
+                            keys: keys.into_iter().collect::<Vec<String>>(),
                             slot: slot as i32,
                             enabled: config.enabled,
                         }
@@ -1280,13 +1029,9 @@ impl Controller {
                     for shortcut in &config.shortcuts {
                         let keys = i18n::shortcut_labels(self.locale(), shortcut);
                         summary.push(BindingRow {
-                            text: keys.join("+").into(),
-                            function_name: self.tr(definition.name_key).into(),
-                            keys: ModelRc::new(VecModel::from(
-                                keys.into_iter()
-                                    .map(Into::into)
-                                    .collect::<Vec<slint::SharedString>>(),
-                            )),
+                            text: keys.join("+"),
+                            function_name: self.tr(definition.name_key),
+                            keys: keys.into_iter().collect::<Vec<String>>(),
                             enabled: true,
                         });
                     }
@@ -1307,37 +1052,31 @@ impl Controller {
                                 .collect::<Vec<_>>()
                                 .join(" / ")
                         })
-                        .unwrap_or_else(|| self.tr(keys::COMMON_ALL_APPS))
-                        .into(),
+                        .unwrap_or_else(|| self.tr(keys::COMMON_ALL_APPS)),
                     scope_editable: definition.category == function::CategoryId::Media,
                     id: definition.id.stable_id().into(),
-                    label: self.tr(definition.name_key).into(),
-                    gestures: ModelRc::new(VecModel::from(gestures)),
+                    label: self.tr(definition.name_key),
+                    gestures,
                     enabled: config.enabled,
-                    shortcuts: ModelRc::new(VecModel::from(shortcuts)),
+                    shortcuts,
                 };
                 rows.push(row);
             }
-            ui.global::<BindingUi>()
-                .set_rows(update_model(ui.global::<BindingUi>().get_rows(), rows));
+            ui.binding.rows = rows;
             for mapping in &self.runtime.config.custom_mappings {
                 if mapping.enabled {
                     for shortcut in &mapping.shortcuts {
                         let keys = i18n::shortcut_labels(self.locale(), shortcut);
                         summary.push(BindingRow {
-                            text: keys.join("+").into(),
-                            function_name: mapping.name.clone().into(),
-                            keys: ModelRc::new(VecModel::from(
-                                keys.into_iter()
-                                    .map(Into::into)
-                                    .collect::<Vec<slint::SharedString>>(),
-                            )),
+                            text: keys.join("+"),
+                            function_name: mapping.name.clone(),
+                            keys: keys.into_iter().collect::<Vec<String>>(),
                             enabled: true,
                         });
                     }
                 }
             }
-            ui.set_bindings(ModelRc::new(VecModel::from(summary)));
+            ui.bindings = summary;
         }
         if self
             .previous_devices
@@ -1360,12 +1099,11 @@ impl Controller {
                 .iter()
                 .map(|d| crate::receiver_view::row(d, s, |key| self.tr(key)))
                 .collect();
-            ui.set_paired_devices(ModelRc::new(VecModel::from(
-                rows.iter()
-                    .filter(|r| r.paired)
-                    .cloned()
-                    .collect::<Vec<_>>(),
-            )));
+            ui.paired_devices = rows
+                .iter()
+                .filter(|r| r.paired)
+                .cloned()
+                .collect::<Vec<_>>();
         }
         let capture = self
             .runtime
@@ -1375,7 +1113,7 @@ impl Controller {
             CaptureKind::Function(target) => Some(target),
             _ => None,
         });
-        ui.global::<BindingUi>().set_capture(BindingCaptureState {
+        ui.binding.capture = BindingCaptureState {
             function_id: target
                 .map(|target| target.id.stable_id())
                 .unwrap_or("")
@@ -1389,8 +1127,7 @@ impl Controller {
                     i18n::capture_preview(self.locale(), session)
                 }
                 _ => self.tr(keys::CAPTURE_RECORDING),
-            }
-            .into(),
+            },
             error: match capture.and_then(|session| session.error.as_ref()) {
                 Some(CaptureError::Invalid) => self.tr(keys::CAPTURE_INVALID),
                 Some(CaptureError::Duplicate(id)) => format!(
@@ -1403,31 +1140,30 @@ impl Controller {
                     format!("{}: {}", self.tr(keys::CAPTURE_DUPLICATE), name)
                 }
                 None => String::new(),
-            }
-            .into(),
-        });
-        ui.set_input_count(self.runtime.matched.min(i32::MAX as u64) as i32);
-        ui.set_toast(if self.runtime.slow() {
-            self.tr(keys::RUNTIME_SLOW).into()
+            },
+        };
+        ui.input_count = self.runtime.matched;
+        ui.toast = if self.runtime.slow() {
+            self.tr(keys::RUNTIME_SLOW)
         } else if self.exit.is_some() {
-            self.tr(keys::RUNTIME_FINISHING).into()
+            self.tr(keys::RUNTIME_FINISHING)
         } else if self.runtime.progress_pending() {
-            self.tr(keys::RUNTIME_BUSY).into()
+            self.tr(keys::RUNTIME_BUSY)
         } else if matches!(self.runtime.test, TestStatus::Pending(_)) {
-            self.tr(keys::TEST_SENDING).into()
+            self.tr(keys::TEST_SENDING)
         } else if Instant::now() < self.toast_until {
-            self.toast.clone().into()
+            self.toast.clone()
         } else {
             "".into()
-        });
+        };
     }
-    fn finish_exit(&mut self, ui: &AppWindow) -> Result<()> {
+    fn finish_exit(&mut self, ui: &mut Presentation) -> Result<()> {
         match self.exit {
             Some(ExitIntent::Quit) if self.runtime.stopped() => {
                 self.save_geometry(ui);
                 self.flush(true);
                 self.shutdown = true;
-                slint::quit_event_loop()?;
+                ui.window_command = Some(WindowCommand::Quit);
             }
             Some(ExitIntent::Elevate) if !self.runtime.busy() => {
                 self.save_geometry(ui);
@@ -1442,20 +1178,16 @@ impl Controller {
         }
         Ok(())
     }
-    fn save_geometry(&mut self, ui: &AppWindow) {
-        if self.hidden || self.fatal.is_some() {
-            return;
-        }
-        let g = &mut self.runtime.config.window;
-        g.maximized = ui.window().is_maximized();
-        if !g.maximized && !ui.window().is_minimized() {
-            let size = ui.window().size().to_logical(ui.window().scale_factor());
-            g.width = size.width;
-            g.height = size.height;
-            let p = ui.window().position();
-            g.x = Some(p.x);
-            g.y = Some(p.y);
-        }
+    fn save_geometry(&mut self, ui: &mut Presentation) {
+        self.runtime.config.window = ui.geometry.clone();
         self.saves.changed();
     }
 }
+
+mod bootstrap;
+pub(crate) mod presentation;
+mod ripple;
+mod theme;
+mod view;
+pub use bootstrap::run;
+use presentation::{Presentation, WindowCommand};

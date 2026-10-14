@@ -17,8 +17,6 @@ jobs:
     timeout-minutes: 90
     permissions:
       contents: read
-    env:
-      SLINT_EMIT_DEBUG_INFO: '1'
     steps:
       - uses: actions/checkout@v6
         with:

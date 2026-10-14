@@ -1,44 +1,49 @@
-use slint::platform::Key;
-
 pub fn virtual_key(text: &str) -> Option<u8> {
+    let named = match text {
+        "backspace" => Some(0x08),
+        "tab" => Some(0x09),
+        "enter" => Some(0x0d),
+        "escape" => Some(0x1b),
+        "space" => Some(0x20),
+        "left" => Some(0x25),
+        "up" => Some(0x26),
+        "right" => Some(0x27),
+        "down" => Some(0x28),
+        "delete" => Some(0x2e),
+        "insert" => Some(0x2d),
+        "home" => Some(0x24),
+        "end" => Some(0x23),
+        "pageup" => Some(0x21),
+        "pagedown" => Some(0x22),
+        _ => None,
+    };
+    if named.is_some() {
+        return named;
+    }
+    if let Some(number) = text
+        .strip_prefix('f')
+        .and_then(|n| n.parse::<u8>().ok())
+        .filter(|n| (1..=24).contains(n))
+    {
+        return Some(0x6f + number);
+    }
     let mut chars = text.chars();
     let ch = chars.next()?;
     if chars.next().is_some() {
         return None;
     }
-    let named = [
-        (Key::Backspace, 0x08),
-        (Key::Tab, 0x09),
-        (Key::Backtab, 0x09),
-        (Key::Return, 0x0d),
-        (Key::Escape, 0x1b),
-        (Key::Space, 0x20),
-        (Key::Shift, 0xa0),
-        (Key::ShiftR, 0xa1),
-        (Key::Control, 0xa2),
-        (Key::ControlR, 0xa3),
-        (Key::Alt, 0xa4),
-        (Key::AltGr, 0xa5),
-        (Key::Meta, 0x5b),
-        (Key::MetaR, 0x5c),
-        (Key::CapsLock, 0x14),
-        (Key::LeftArrow, 0x25),
-        (Key::UpArrow, 0x26),
-        (Key::RightArrow, 0x27),
-        (Key::DownArrow, 0x28),
-        (Key::Delete, 0x2e),
-        (Key::Insert, 0x2d),
-        (Key::Home, 0x24),
-        (Key::End, 0x23),
-        (Key::PageUp, 0x21),
-        (Key::PageDown, 0x22),
-    ];
-    if let Some((_, vk)) = named.into_iter().find(|(key, _)| char::from(*key) == ch) {
-        return Some(vk);
-    }
-    let first = char::from(Key::F1) as u32;
-    if (first..=char::from(Key::F24) as u32).contains(&(ch as u32)) {
-        return Some((0x70 + ch as u32 - first) as u8);
-    }
     crate::platform::desktop::virtual_key_for_character(ch)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn named_keys_do_not_depend_on_text_input_or_ime() {
+        assert_eq!(virtual_key("enter"), Some(0x0d));
+        assert_eq!(virtual_key("f24"), Some(0x87));
+        assert_eq!(virtual_key("pageup"), Some(0x21));
+        assert_eq!(virtual_key("f25"), None);
+        assert_eq!(virtual_key("你好"), None);
+    }
 }

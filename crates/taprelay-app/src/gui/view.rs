@@ -53,6 +53,7 @@ impl AppView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        super::theme::init(cx);
         let group_name = cx.new(|cx| InputState::new(window, cx));
         let mapping_name = cx.new(|cx| InputState::new(window, cx));
         let output_filter = cx.new(|cx| InputState::new(window, cx));
@@ -259,9 +260,8 @@ impl AppView {
         } else {
             ThemeMode::Light
         };
-        if Theme::global(cx).mode != mode || Theme::global(cx).font_family.as_ref() != "Segoe UI" {
+        if Theme::global(cx).mode != mode {
             Theme::change(mode, Some(window), cx);
-            super::theme::apply(cx);
         }
         gpui_kit::component::set_locale(&self.ui.locale);
         let bytes = |c: Hsla| {

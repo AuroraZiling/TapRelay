@@ -1,70 +1,24 @@
-use gpui_kit::component::Theme;
-use gpui_kit::{App, Hsla, px, rgb};
+use gpui_kit::App;
+use gpui_kit::component::{Theme, ThemeRegistry};
 
-pub(super) fn apply(cx: &mut App) {
+pub(super) fn init(cx: &mut App) {
+    let registry = ThemeRegistry::global_mut(cx);
+    registry
+        .load_themes_from_str(include_str!("../../resources/themes/catppuccin.json"))
+        .expect("embedded Catppuccin themes must be valid");
+    let light = registry
+        .themes()
+        .get("Catppuccin Latte")
+        .expect("embedded Catppuccin Latte theme must exist")
+        .clone();
+    let dark = registry
+        .themes()
+        .get("Catppuccin Macchiato")
+        .expect("embedded Catppuccin Macchiato theme must exist")
+        .clone();
     Theme::update(cx, |theme| {
-        let dark = theme.is_dark();
-        let color = |light, dark_value| Hsla::from(rgb(if dark { dark_value } else { light }));
-        let background = color(0xfafafa, 0x0a0a0a);
-        let foreground = color(0x171717, 0xfafafa);
-        let card = color(0xf5f5f5, 0x171717);
-        let muted = color(0xf5f5f5, 0x262626);
-        let primary = color(0x171717, 0xe5e5e5);
-        let tint = color(0x000000, 0xffffff);
-        let colors = &mut theme.colors;
-        colors.background = background;
-        colors.foreground = foreground;
-        colors.group_box = card;
-        colors.group_box_foreground = foreground;
-        colors.sidebar = card;
-        colors.sidebar_foreground = foreground;
-        colors.border = tint.opacity(0.10);
-        colors.input = colors.border;
-        colors.sidebar_border = colors.border;
-        colors.muted = muted;
-        colors.muted_foreground = color(0x737373, 0xa1a1a1);
-        colors.accent = tint.opacity(0.08);
-        colors.accent_foreground = foreground;
-        colors.primary = primary;
-        colors.primary_foreground = color(0xfafafa, 0x171717);
-        colors.primary_hover = primary.opacity(0.9);
-        colors.primary_active = primary.opacity(0.8);
-        colors.secondary = muted;
-        colors.secondary_foreground = foreground;
-        colors.secondary_hover = tint.opacity(0.12);
-        colors.secondary_active = tint.opacity(0.16);
-        colors.button = Hsla::transparent_black();
-        colors.button_foreground = foreground;
-        colors.button_hover = colors.accent;
-        colors.button_active = tint.opacity(0.12);
-        colors.button_primary = colors.primary;
-        colors.button_primary_foreground = colors.primary_foreground;
-        colors.button_primary_hover = colors.primary_hover;
-        colors.button_primary_active = colors.primary_active;
-        colors.button_secondary = colors.secondary;
-        colors.button_secondary_foreground = colors.secondary_foreground;
-        colors.button_secondary_hover = colors.secondary_hover;
-        colors.button_secondary_active = colors.secondary_active;
-        colors.switch = muted;
-        colors.switch_thumb = color(0xfafafa, 0x171717);
-        colors.ring = color(0x404040, 0x737373);
-        colors.caret = foreground;
-        colors.selection = tint.opacity(0.2);
-        colors.popover = card;
-        colors.popover_foreground = foreground;
-        colors.list = card;
-        colors.list_hover = colors.accent;
-        colors.list_active = muted;
-        colors.list_active_border = colors.border;
-        colors.danger = rgb(0xff6467).into();
-        colors.success = rgb(0x4ade80).into();
-        colors.warning = rgb(0xe8ae36).into();
-        colors.info = rgb(0x60a5fa).into();
-        colors.title_bar = card;
-        colors.title_bar_border = colors.border;
-        theme.font_family = "Segoe UI".into();
-        theme.font_size = px(16.);
-        theme.radius = px(8.);
-        theme.radius_lg = px(10.);
+        theme.apply_config(if theme.is_dark() { &dark } else { &light });
+        theme.light_theme = light;
+        theme.dark_theme = dark;
     });
 }

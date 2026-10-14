@@ -901,7 +901,14 @@ impl Controller {
                 crate::startup_checks::rows(locale, self.fatal.is_some(), flags, failure.is_some());
         }
         let target = s.selected_target();
-        let (key, stage) = if s.profile_switching && failure.is_none() {
+        let (key, stage) = if !self.passed {
+            let key = if failure.is_some() {
+                keys::STARTUP_ERROR
+            } else {
+                keys::STARTUP_PREPARING
+            };
+            (key, self.tr(key))
+        } else if s.profile_switching && failure.is_none() {
             ("switching", self.tr(keys::RECEIVER_SWITCHING))
         } else if self.recovering && failure.is_none() {
             ("prepare", self.tr(keys::RECEIVER_PREPARING))
@@ -934,8 +941,12 @@ impl Controller {
                 .custom_mappings
                 .iter()
                 .any(|mapping| mapping.enabled);
-        let (display_key, signal) =
-            crate::receiver_view::relay_presentation(key, self.runtime.listening, has_bindings);
+        let (display_key, signal) = crate::receiver_view::relay_presentation(
+            key,
+            self.runtime.listening,
+            has_bindings,
+            self.runtime.passthrough,
+        );
         let stage = if display_key != key {
             self.tr(display_key)
         } else {
@@ -959,7 +970,13 @@ impl Controller {
         let receiver_none = self.tr(keys::RECEIVER_NONE);
         ui.device_name = s
             .selected_target()
-            .map(|t| t.name.as_str())
+            .map(|t| {
+                if t.name.trim().is_empty() {
+                    t.id.as_str()
+                } else {
+                    t.name.as_str()
+                }
+            })
             .unwrap_or(&receiver_none)
             .into();
         let diagnostics = format!(

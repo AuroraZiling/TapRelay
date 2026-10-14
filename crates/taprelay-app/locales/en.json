@@ -164,6 +164,7 @@
   "receiver.pair.unknown": "Pairing state unavailable",
   "receiver.pair.wait": "Complete pairing in the operating system. TapRelay is watching for the device.",
   "receiver.paired.disconnected": "Paired · Not connected to TapRelay",
+  "receiver.passthrough": "Passthrough",
   "receiver.preparing": "Preparing Bluetooth services",
   "receiver.ready": "Session ready",
   "receiver.refresh": "Refresh devices",

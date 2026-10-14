@@ -53,12 +53,18 @@ pub fn relay_presentation(
     key: &'static str,
     listening: bool,
     has_bindings: bool,
+    passthrough: bool,
 ) -> (&'static str, i32) {
-    if key == "fault" {
+    if matches!(key, "fault" | keys::STARTUP_ERROR) {
         return (key, 3);
     }
+    if key == keys::STARTUP_PREPARING {
+        return (key, 1);
+    }
     let key = if key == keys::RECEIVER_READY {
-        if !listening {
+        if passthrough {
+            keys::RECEIVER_PASSTHROUGH
+        } else if !listening {
             keys::RECEIVER_LISTENING_PAUSED
         } else if !has_bindings {
             keys::RECEIVER_NO_BINDINGS
@@ -70,10 +76,10 @@ pub fn relay_presentation(
     };
     (
         key,
-        if !listening {
-            1
-        } else if key == keys::RECEIVER_FORWARDING {
+        if matches!(key, keys::RECEIVER_FORWARDING | keys::RECEIVER_PASSTHROUGH) {
             0
+        } else if !listening {
+            1
         } else {
             2
         },
@@ -263,15 +269,15 @@ mod tests {
     #[test]
     fn forwarding_text_and_dot_agree_with_listening_and_bindings() {
         assert_eq!(
-            relay_presentation(keys::RECEIVER_READY, false, true),
+            relay_presentation(keys::RECEIVER_READY, false, true, false),
             (keys::RECEIVER_LISTENING_PAUSED, 1)
         );
         assert_eq!(
-            relay_presentation(keys::RECEIVER_READY, true, false),
+            relay_presentation(keys::RECEIVER_READY, true, false, false),
             (keys::RECEIVER_NO_BINDINGS, 2)
         );
         assert_eq!(
-            relay_presentation(keys::RECEIVER_READY, true, true),
+            relay_presentation(keys::RECEIVER_READY, true, true, false),
             (keys::RECEIVER_FORWARDING, 0)
         );
         for key in [
@@ -280,13 +286,83 @@ mod tests {
             "switching",
             "identity",
         ] {
-            assert_ne!(relay_presentation(key, true, true).1, 0);
+            assert_ne!(relay_presentation(key, true, true, false).1, 0);
             assert_ne!(
-                relay_presentation(key, false, true).0,
+                relay_presentation(key, false, true, false).0,
                 keys::RECEIVER_FORWARDING
             );
         }
-        assert_eq!(relay_presentation("fault", false, true), ("fault", 3));
+        assert_eq!(
+            relay_presentation("fault", false, true, false),
+            ("fault", 3)
+        );
+    }
+
+    #[test]
+    fn passthrough_is_green_without_listening_but_never_overrides_an_unready_session() {
+        for listening in [false, true] {
+            for bindings in [false, true] {
+                assert_eq!(
+                    relay_presentation(keys::RECEIVER_READY, listening, bindings, true),
+                    (keys::RECEIVER_PASSTHROUGH, 0),
+                );
+                for key in [
+                    "fault",
+                    "switching",
+                    keys::RECEIVER_SUSPENDED,
+                    keys::RECEIVER_SYNCHRONIZING,
+                    keys::RECEIVER_PAIRED_DISCONNECTED,
+                ] {
+                    assert_eq!(
+                        relay_presentation(key, listening, bindings, true),
+                        relay_presentation(key, listening, bindings, false),
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn session_details_distinguish_connection_progress_and_pause_reasons() {
+        let mut state = Snapshot {
+            selected: Some("tablet".into()),
+            targets: vec![Target {
+                id: "tablet".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let mut previous = "";
+        for connection in [
+            Connection::AwaitingHostSubscription,
+            Connection::Synchronizing,
+        ] {
+            state.targets[0].connection = connection;
+            let (detail, _) = relay_presentation(session_status_key(&state), true, true, false);
+            assert_ne!(detail, previous);
+            previous = detail;
+        }
+        state.targets[0].connection = Connection::Connected;
+        state.ready = true;
+        let (listening_paused, _) =
+            relay_presentation(session_status_key(&state), false, true, false);
+        state.hid_suspended = true;
+        let (receiver_paused, _) =
+            relay_presentation(session_status_key(&state), true, true, false);
+        for locale in ["en", "zh-CN"] {
+            assert_ne!(
+                rust_i18n::t!(listening_paused, locale = locale),
+                rust_i18n::t!(receiver_paused, locale = locale),
+            );
+        }
+        assert_eq!(
+            relay_presentation(keys::STARTUP_PREPARING, true, true, true).1,
+            1
+        );
+        assert_eq!(
+            relay_presentation(keys::STARTUP_ERROR, true, true, true).1,
+            3
+        );
     }
 
     #[test]

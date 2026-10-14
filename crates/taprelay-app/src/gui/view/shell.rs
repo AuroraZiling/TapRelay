@@ -1,9 +1,14 @@
-use super::*;
+use super::{AppView, Command};
+use crate::action::Action;
+use gpui_kit::assets::IconName;
+use gpui_kit::base::TestSupportExt;
 use gpui_kit::base::motion::{Transition, transition};
-use gpui_kit::component::Collapsible;
-use gpui_kit::component::sidebar::{
-    SidebarItem, SidebarMenu, SidebarMenuItem, SidebarToggleButton,
+use gpui_kit::component::{
+    ActiveTheme, Collapsible, Icon, StyledExt,
+    sidebar::{SidebarItem, SidebarMenu, SidebarMenuItem, SidebarToggleButton},
 };
+use gpui_kit::{prelude::*, *};
+use std::time::Duration;
 
 const TITLES: [&str; 5] = [
     "nav.overview",
@@ -14,29 +19,6 @@ const TITLES: [&str; 5] = [
 ];
 
 impl AppView {
-    pub(super) fn icon_button(
-        &self,
-        id: impl Into<ElementId>,
-        icon: IconName,
-        label: String,
-        command: Command,
-        disabled: bool,
-        cx: &Context<Self>,
-    ) -> Button {
-        Button::new(id)
-            .icon(icon)
-            .accessibility_label(label.clone())
-            .tooltip(label)
-            .disabled(disabled)
-            .on_click(
-                cx.listener(move |this, _, window, cx| this.dispatch(command.clone(), window, cx)),
-            )
-    }
-
-    pub(super) fn heading(&self, text: String) -> Div {
-        div().text_xl().child(text)
-    }
-
     pub(super) fn navigation(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let target_width = if self.sidebar_collapsed {
             window.rem_size() * 3.5 + px(1.)
@@ -212,50 +194,5 @@ impl AppView {
             _ => {}
         }
         header.test_support().into_any_element()
-    }
-
-    pub(super) fn bluetooth_status(&self, cx: &App) -> Div {
-        div()
-            .h_flex()
-            .gap(rems(0.375))
-            .h_8()
-            .px_2()
-            .rounded_md()
-            .border_2()
-            .border_color(if self.ui.bluetooth_available {
-                cx.theme().success
-            } else {
-                cx.theme().danger
-            })
-            .child(
-                Icon::new(if self.ui.bluetooth_available {
-                    IconName::Bluetooth
-                } else {
-                    IconName::BluetoothOff
-                })
-                .size_4(),
-            )
-            .child(div().child(self.ui.adapter_label.clone()))
-    }
-
-    pub(super) fn receiver_actions(&self, cx: &Context<Self>) -> [Button; 2] {
-        [
-            self.icon_button(
-                "receiver-refresh",
-                IconName::RefreshCw,
-                self.tr("receiver.refresh"),
-                Command::App(Action::Refresh, String::new()),
-                self.ui.scanning,
-                cx,
-            ),
-            self.icon_button(
-                "receiver-settings",
-                IconName::Settings,
-                self.tr("receiver.open.settings"),
-                Command::App(Action::BluetoothSettings, String::new()),
-                false,
-                cx,
-            ),
-        ]
     }
 }

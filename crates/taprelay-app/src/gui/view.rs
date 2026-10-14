@@ -1,32 +1,18 @@
 use super::{
-    Action, BindingCommand, CaptureTarget, Controller, DesktopEvent, FunctionId, Presentation,
-    WindowCommand, config, desktop,
+    Action, BindingCommand, Controller, DesktopEvent, FunctionId, Presentation, config, desktop,
 };
-use gpui_kit::assets::IconName;
-use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::{
-    ActiveTheme, Disableable, Icon, Selectable, StyledExt, Theme, ThemeMode, WindowExt,
-    button::Button,
-    checkbox::Checkbox,
-    group_box::{GroupBox, GroupBoxVariants},
-    input::{Input, InputEvent, InputState},
-    menu::{DropdownMenu, PopupMenuItem},
-    notification::Notification,
-    scroll::ScrollableElement,
-    switch::Switch,
+    ActiveTheme, StyledExt,
+    input::{InputEvent, InputState},
 };
 use gpui_kit::{prelude::*, *};
 use std::time::{Duration, Instant};
 
-mod action_alert;
-mod editors;
+mod components;
+mod dialogs;
 mod pages;
 mod shell;
-
-use action_alert::ActionAlert;
-
-struct FeedbackNotification;
-struct ProgressNotification;
+mod window;
 
 #[derive(Clone)]
 enum Command {
@@ -243,227 +229,6 @@ impl AppView {
             self.ui.mapping.name = self.mapping_name.read(cx).value().to_string();
         }
     }
-
-    fn save_geometry(&mut self, window: &Window) {
-        if self.controller.hidden || !window.is_visible() {
-            return;
-        }
-        self.ui.geometry.maximized = window.is_maximized();
-        if !window.is_maximized() {
-            let WindowBounds::Windowed(bounds) = window.window_bounds() else {
-                return;
-            };
-            if bounds.size.width >= px(900.) && bounds.size.height >= px(500.) {
-                self.ui.geometry.width = bounds.size.width.into();
-                self.ui.geometry.height = bounds.size.height.into();
-                let scale = window.scale_factor();
-                self.ui.geometry.x = Some((f32::from(bounds.origin.x) * scale).round() as i32);
-                self.ui.geometry.y = Some((f32::from(bounds.origin.y) * scale).round() as i32);
-            }
-        }
-        if self.controller.runtime.config.window != self.ui.geometry {
-            self.controller.save_geometry(&mut self.ui);
-        }
-    }
-
-    fn effects(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let mode = if self.ui.dark {
-            ThemeMode::Dark
-        } else {
-            ThemeMode::Light
-        };
-        if Theme::global(cx).mode != mode {
-            Theme::change(mode, Some(window), cx);
-        }
-        gpui_kit::component::set_locale(&self.ui.locale);
-        if let Some(message) = self.controller.pending_notification.take() {
-            window.defer(cx, move |window, cx| {
-                window.push_notification(
-                    Notification::new()
-                        .id::<FeedbackNotification>()
-                        .message(message),
-                    cx,
-                );
-            });
-        }
-        if self.last_progress_message != self.ui.progress_message {
-            self.last_progress_message = self.ui.progress_message.clone();
-            let message = self.last_progress_message.clone();
-            window.defer(cx, move |window, cx| {
-                if message.is_empty() {
-                    window.remove_notification::<ProgressNotification>(cx);
-                } else {
-                    window.push_notification(
-                        Notification::new()
-                            .id::<ProgressNotification>()
-                            .message(message)
-                            .autohide(false),
-                        cx,
-                    );
-                }
-            });
-        }
-        let bytes = |c: Hsla| {
-            let c = c.to_rgb();
-            [(c.r * 255.) as u8, (c.g * 255.) as u8, (c.b * 255.) as u8]
-        };
-        self.ui.overlay_background = bytes(cx.theme().group_box);
-        self.ui.overlay_foreground = bytes(cx.theme().foreground);
-        for (input, value) in [
-            (&self.group_name, &self.ui.groups.selected_name),
-            (&self.mapping_name, &self.ui.mapping.name),
-            (&self.output_filter, &self.ui.mapping.output_filter),
-        ] {
-            if input.read(cx).value().as_ref() != value.as_str() {
-                input.update(cx, |input, cx| input.set_value(value.clone(), window, cx));
-            }
-        }
-        for (input, key) in [
-            (&self.group_name, "groups.name_example"),
-            (&self.mapping_name, "mappings.name_example"),
-        ] {
-            let placeholder = self.tr(key);
-            if input.read(cx).presentation().placeholder().as_ref() != placeholder.as_str() {
-                input.update(cx, |input, cx| {
-                    input.set_placeholder(placeholder, window, cx)
-                });
-            }
-        }
-        if self.ui.groups.focus_request != self.group_focus_request {
-            self.group_focus_request = self.ui.groups.focus_request;
-            if self.ui.groups.editor_open {
-                self.group_name
-                    .update(cx, |input, cx| input.focus(window, cx));
-            }
-        }
-        if self.ui.mapping.focus_request != self.mapping_focus_request {
-            self.mapping_focus_request = self.ui.mapping.focus_request;
-            if self.ui.mapping.editor {
-                self.mapping_name
-                    .update(cx, |input, cx| input.focus(window, cx));
-            }
-        }
-        if self.controller.recording() && self.capture_focus.is_none() {
-            self.capture_focus = window.focused(cx);
-            self.focus.focus(window, cx);
-        } else if !self.controller.recording()
-            && let Some(focus) = self.capture_focus.take()
-        {
-            focus.focus(window, cx);
-        }
-        self.update_dialog(window, cx);
-        if let Some(command) = self.ui.window_command.take() {
-            match command {
-                WindowCommand::Quit => {
-                    self.controller.save_geometry(&mut self.ui);
-                    self.controller.flush(true);
-                    cx.quit();
-                }
-                WindowCommand::Show | WindowCommand::Hide => {
-                    #[cfg(windows)]
-                    if let Some(handle) = native_handle(window) {
-                        desktop::set_window_visible(handle, command == WindowCommand::Show);
-                    }
-                    if command == WindowCommand::Show {
-                        window.activate_window();
-                    }
-                }
-            }
-        }
-        let color = self.signal(cx);
-        self.ripples.update(
-            self.ui.input_count,
-            [color.h, color.s, color.l, color.a],
-            Instant::now(),
-            !self.controller.hidden
-                && window.is_visible()
-                && !cx.reduce_motion()
-                && ((self.ui.mode == 2 && self.ui.page == 0)
-                    || (self.ui.mode == 1 && self.ui.wizard_page == 3)),
-        );
-    }
-
-    fn key(&mut self, key: &str, down: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.controller.recording() {
-            if key == "escape" && down && self.dialog == 0 {
-                if self.ui.groups.editor_open && !self.ui.groups.saving {
-                    self.dispatch(Command::Group("cancel", String::new()), window, cx);
-                    cx.stop_propagation();
-                } else if self.ui.mapping.editor && !self.ui.mapping.saving {
-                    self.dispatch(Command::Mapping("back", String::new()), window, cx);
-                    cx.stop_propagation();
-                }
-            }
-            return;
-        }
-        if desktop::ui_input_is_injected() {
-            return;
-        }
-        if key == "escape" && down && self.ui.mapping.capture_slot != 2 {
-            self.dispatch(Command::Binding(BindingCommand::CancelCapture), window, cx);
-        } else if let Some(code) = crate::capture_key::virtual_key(key) {
-            self.controller
-                .runtime
-                .window_key(taprelay_core::input::InputEvent {
-                    code: taprelay_core::input::InputCode::Key(code),
-                    down,
-                    captured: Instant::now(),
-                });
-        }
-        cx.stop_propagation();
-    }
-
-    fn button(
-        &self,
-        id: impl Into<ElementId>,
-        label: impl Into<SharedString>,
-        command: Command,
-        disabled: bool,
-        cx: &Context<Self>,
-    ) -> Button {
-        Button::new(id).label(label).disabled(disabled).on_click(
-            cx.listener(move |this, _, window, cx| this.dispatch(command.clone(), window, cx)),
-        )
-    }
-
-    fn app_button(
-        &self,
-        id: &'static str,
-        key: &str,
-        action: Action,
-        disabled: bool,
-        cx: &Context<Self>,
-    ) -> Button {
-        self.button(
-            id,
-            self.tr(key),
-            Command::App(action, String::new()),
-            disabled,
-            cx,
-        )
-    }
-
-    fn signal(&self, cx: &App) -> Hsla {
-        match self.ui.state_color {
-            0 => cx.theme().success,
-            1 => cx.theme().muted_foreground,
-            2 => cx.theme().warning,
-            _ => cx.theme().danger,
-        }
-    }
-
-    fn caption(&self, text: impl Into<SharedString>, cx: &App) -> Div {
-        div()
-            .text_sm()
-            .text_color(cx.theme().muted_foreground)
-            .child(text.into())
-    }
-    fn error(&self, text: &str, cx: &App) -> Div {
-        div().text_color(cx.theme().danger).child(text.to_owned())
-    }
-    fn section(&self, key: &'static str) -> GroupBox {
-        GroupBox::new().id(key).fill().title(self.tr(key))
-    }
 }
 
 impl Render for AppView {
@@ -513,15 +278,6 @@ impl Render for AppView {
             root = root.child(self.navigation(window, cx));
         }
         root.child(content)
-    }
-}
-
-#[cfg(windows)]
-fn native_handle(window: &Window) -> Option<isize> {
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    match HasWindowHandle::window_handle(window).ok()?.as_raw() {
-        RawWindowHandle::Win32(handle) => Some(handle.hwnd.get()),
-        _ => None,
     }
 }
 

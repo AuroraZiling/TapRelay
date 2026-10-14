@@ -20,7 +20,7 @@ use gpui_kit::component::{
 type CloseHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 
 #[derive(IntoElement)]
-pub(super) struct ActionAlert {
+pub(in crate::gui::view) struct ActionAlert {
     id: ElementId,
     style: StyleRefinement,
     variant: AlertVariant,

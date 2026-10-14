@@ -198,7 +198,7 @@ pub(super) struct Presentation {
     pub problem_retry_allowed: bool,
     pub problem_busy: bool,
     pub input_count: u64,
-    pub toast: String,
+    pub progress_message: String,
     pub state_color: i32,
     pub data_directory: String,
     pub app_version: String,

@@ -11,11 +11,9 @@ use windows::{
             OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
             QueryFullProcessImageNameW,
         },
-        UI::{
-            Controls::Dialogs::*, Input::KeyboardAndMouse::GetActiveWindow, WindowsAndMessaging::*,
-        },
+        UI::WindowsAndMessaging::*,
     },
-    core::{BOOL, PCWSTR, PWSTR},
+    core::{BOOL, PWSTR},
 };
 
 fn process_path(pid: u32) -> Option<String> {
@@ -94,36 +92,6 @@ pub fn running() -> windows::core::Result<Vec<String>> {
             == taprelay_core::foreground_app::executable_identity(b)
     });
     Ok(foreground_apps)
-}
-
-pub fn browse() -> windows::core::Result<Option<String>> {
-    let mut buffer = vec![0u16; 32768];
-    let filter: Vec<u16> = "*.exe\0*.exe\0\0".encode_utf16().collect();
-    unsafe {
-        let mut dialog = OPENFILENAMEW {
-            lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
-            hwndOwner: GetActiveWindow(),
-            lpstrFile: PWSTR(buffer.as_mut_ptr()),
-            nMaxFile: buffer.len() as u32,
-            lpstrFilter: PCWSTR(filter.as_ptr()),
-            Flags: OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR,
-            ..Default::default()
-        };
-        if GetOpenFileNameW(&mut dialog).as_bool() {
-            let length = buffer
-                .iter()
-                .position(|&ch| ch == 0)
-                .unwrap_or(buffer.len());
-            Ok(Some(String::from_utf16_lossy(&buffer[..length])))
-        } else if CommDlgExtendedError().0 == 0 {
-            Ok(None)
-        } else {
-            Err(windows::core::Error::new(
-                windows::core::HRESULT(0x80004005u32 as i32),
-                "Cannot open application picker",
-            ))
-        }
-    }
 }
 
 #[cfg(test)]

@@ -4,6 +4,96 @@ use gpui_kit::test::TestWindowExt;
 use gpui_kit::{AppContext, TestAppContext};
 
 #[gpui_kit::test]
+fn browsing_an_executable_is_async_and_handles_cancel_invalid_and_selected_paths(
+    cx: &mut TestAppContext,
+) {
+    let (handle, view, folder) = open(cx);
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("0-2", cx);
+    })
+    .unwrap();
+    settle(cx, handle, &view);
+    cx.update_window(handle, |_, window, cx| window.click("group-create", cx))
+        .unwrap();
+    settle(cx, handle, &view);
+    for path in [
+        None,
+        Some(r"C:\Apps\Notes.txt"),
+        Some(r"C:\Apps\Editor.exe"),
+    ] {
+        cx.update_window(handle, |_, window, cx| window.click("group-browse", cx))
+            .unwrap();
+        assert!(cx.did_prompt_for_paths());
+        cx.run_until_parked();
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            assert!(window.find("group-name").visible());
+        })
+        .unwrap();
+        cx.simulate_path_prompt_response(|options| {
+            assert!(options.files);
+            assert!(!options.directories && !options.multiple);
+            path.map(|path| vec![path.into()])
+        });
+        cx.run_until_parked();
+        settle(cx, handle, &view);
+        cx.update(|cx| {
+            let groups = &view.read(cx).ui.groups;
+            assert!(groups.editor_open);
+            match path {
+                None => {
+                    assert!(groups.foreground_apps.is_empty());
+                    assert!(groups.form_error.is_empty());
+                }
+                Some(path) if path.ends_with(".txt") => {
+                    assert!(groups.foreground_apps.is_empty());
+                    assert!(!groups.form_error.is_empty());
+                }
+                Some(path) => {
+                    assert_eq!(groups.foreground_apps.len(), 1);
+                    assert_eq!(groups.foreground_apps[0].path, path);
+                    assert!(!groups.choosing_running);
+                    assert!(groups.form_error.is_empty());
+                }
+            }
+        });
+    }
+    cx.update_window(handle, |_, window, cx| window.click("group-save", cx))
+        .unwrap();
+    settle(cx, handle, &view);
+    let saved = Config::load(&folder.path().join("config.json")).unwrap();
+    let group = saved.foreground_app_rules.groups.values().next().unwrap();
+    assert_eq!(group.foreground_apps, [r"C:\Apps\Editor.exe"]);
+}
+
+#[gpui_kit::test]
+fn a_late_file_picker_result_does_not_change_another_group_editor(cx: &mut TestAppContext) {
+    let (handle, view, _folder) = open(cx);
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("0-2", cx);
+    })
+    .unwrap();
+    settle(cx, handle, &view);
+    cx.update_window(handle, |_, window, cx| {
+        window.click("group-create", cx);
+        window.click("group-browse", cx);
+        window.click("group-cancel", cx);
+        window.click("group-create", cx);
+    })
+    .unwrap();
+    assert!(cx.did_prompt_for_paths());
+    cx.simulate_path_prompt_response(|_| Some(vec![r"C:\Apps\OldEditor.exe".into()]));
+    cx.run_until_parked();
+    settle(cx, handle, &view);
+    cx.update(|cx| {
+        assert!(view.read(cx).ui.groups.editor_open);
+        assert!(view.read(cx).ui.groups.foreground_apps.is_empty());
+    });
+}
+
+#[gpui_kit::test]
 fn invalid_group_name_stays_in_editor_and_save_persists(cx: &mut TestAppContext) {
     let (handle, view, folder) = open(cx);
     cx.update_window(handle, |_, window, cx| {

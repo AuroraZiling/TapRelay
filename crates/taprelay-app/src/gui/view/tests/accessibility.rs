@@ -26,6 +26,10 @@ fn sidebar_destinations_are_named_and_keyboard_operable_in_both_states(cx: &mut 
             window.render_frame(cx);
             window.press("tab", cx);
             assert_eq!(window.find("collapse").focused(), Some(true));
+            window.press("space", cx);
+            assert_eq!(view.read(cx).sidebar_collapsed, !collapsed);
+            window.press("enter", cx);
+            assert_eq!(view.read(cx).sidebar_collapsed, collapsed);
             for (id, page) in [("0-0", 0), ("0-1", 1), ("0-2", 4), ("0-3", 2)] {
                 window.press("tab", cx);
                 assert_eq!(window.find(id).focused(), Some(true));

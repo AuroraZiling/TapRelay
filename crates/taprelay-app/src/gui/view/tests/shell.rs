@@ -8,7 +8,7 @@ use std::time::Duration;
 #[gpui_kit::test]
 fn title_bar_remains_above_every_screen_in_both_locales_and_themes(cx: &mut TestAppContext) {
     let (handle, view, _folder) = open(cx);
-    for scale in [1., 1.5, 2.] {
+    for scale in [1., 1.25, 1.5, 2.] {
         cx.simulate_window_scale_factor_change(handle, scale);
         cx.update_window(handle, |_, window, cx| {
             for language in ["english", "chinese"] {
@@ -31,11 +31,17 @@ fn title_bar_remains_above_every_screen_in_both_locales_and_themes(cx: &mut Test
                         let workspace = window.find("workspace").bounds();
                         let brand = window.find("titlebar-brand").bounds();
                         let controls = window.find("window-controls").bounds();
-                        assert_eq!(bar.size.height, px(40.));
+                        assert_eq!(bar.size.height, px(44.));
                         assert_eq!(bar.size.width, px(900.));
                         assert_eq!(workspace.top(), bar.bottom());
                         assert_eq!(workspace.bottom(), px(500.));
-                        assert!(brand.is_contained_within(&bar));
+                        assert!(
+                            brand.left() >= bar.left()
+                                && brand.top() >= bar.top()
+                                && brand.right() <= bar.right()
+                                && brand.bottom() <= bar.bottom(),
+                            "scale={scale} mode={mode}: brand={brand:?}, bar={bar:?}"
+                        );
                         assert!(window.try_find("titlebar-status").is_none());
                         assert_eq!(controls.right(), bar.right());
                         assert!(controls.top() >= bar.top());
@@ -46,8 +52,18 @@ fn title_bar_remains_above_every_screen_in_both_locales_and_themes(cx: &mut Test
                         }
                         assert_eq!(window.try_find("navigation").is_some(), mode == 2);
                         assert_eq!(window.try_find("page-header").is_some(), mode == 2);
+                        assert_eq!(window.try_find("collapse").is_some(), mode == 2);
+                        let icon = window.find("titlebar-icon").bounds();
+                        let title = window.find("titlebar-title").bounds();
+                        assert!(title.left() >= icon.right() + px(8.));
+                        assert!(title.left() <= icon.right() + px(12.));
                         if mode == 2 {
+                            let toggle = window.within("title-bar").find("collapse").bounds();
+                            assert!((toggle.center().x - px(22.)).abs() <= px(1. / scale));
+                            assert!((toggle.center().y - px(22.)).abs() <= px(1. / scale));
+                            assert!(icon.left() > toggle.right());
                             assert_eq!(window.find("navigation").bounds().top(), bar.bottom());
+                            assert_eq!(window.find("0-0").bounds().top(), bar.bottom() + px(12.));
                             assert_eq!(
                                 window.find("receiver-status-indicator").label(),
                                 Some(view.read(cx).ui.stage.as_str()),
@@ -108,12 +124,25 @@ fn sidebar_toggle_keeps_its_position_when_collapsed(cx: &mut TestAppContext) {
         cx.set_reduce_motion(true);
         window.render_frame(cx);
         let expanded = window.find("collapse").bounds();
+        let icon = window.find("titlebar-icon").bounds();
+        let title = window.find("titlebar-title").bounds();
         window.click("collapse", cx);
         assert_eq!(window.find("collapse").bounds(), expanded);
+        let sidebar = window.find("navigation").bounds();
+        assert_eq!(
+            sidebar.size.width,
+            window.find("title-bar").bounds().size.height
+        );
+        assert_eq!(expanded.center().x, sidebar.center().x);
         let collapsed_item = window.find("0-0").bounds();
         assert_eq!(expanded.center().x, collapsed_item.center().x);
+        assert_eq!(collapsed_item.size.width, collapsed_item.size.height);
+        assert_eq!(window.find("titlebar-icon").bounds(), icon);
+        assert_eq!(window.find("titlebar-title").bounds(), title);
         window.click("collapse", cx);
         assert_eq!(window.find("collapse").bounds(), expanded);
+        assert_eq!(window.find("titlebar-icon").bounds(), icon);
+        assert_eq!(window.find("titlebar-title").bounds(), title);
     })
     .unwrap();
 }
@@ -125,6 +154,7 @@ fn sidebar_animates_and_reverses_without_moving_the_toggle(cx: &mut TestAppConte
     let measure = |cx: &mut TestAppContext| {
         cx.update_window(handle, |_, window, cx| {
             window.render_frame(cx);
+            assert_eq!(window.find("titlebar-title").bounds().left(), px(88.));
             (
                 window.find("navigation").bounds().size.width,
                 window.find("collapse").bounds(),

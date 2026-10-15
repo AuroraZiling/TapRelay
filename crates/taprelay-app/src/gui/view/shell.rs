@@ -11,6 +11,9 @@ use gpui_kit::component::{
 use gpui_kit::{prelude::*, *};
 use std::time::Duration;
 
+const CHROME_SIZE_REMS: f32 = 2.75;
+const SIDEBAR_PADDING_REMS: f32 = 0.375;
+
 const TITLES: [&str; 5] = [
     "nav.overview",
     "nav.bindings",
@@ -20,30 +23,73 @@ const TITLES: [&str; 5] = [
 ];
 
 impl AppView {
-    pub(super) fn title_bar(&self, cx: &App) -> TitleBar {
+    pub(super) fn title_bar(&mut self, window: &Window, cx: &Context<Self>) -> TitleBar {
+        let icon = self.app_icon.image(window.rem_size() * 1.5, window);
+        let origin = f32::from(window.rem_size()) * (CHROME_SIZE_REMS - 1.5) * 0.5;
+        // A fractional device-pixel origin softens the raster even at its native size.
+        let offset = px((origin * window.scale_factor()).round() / window.scale_factor() - origin);
         TitleBar::new()
-            .h_10()
-            .pl(rems(1.125))
+            .h(rems(CHROME_SIZE_REMS))
+            .pl_0()
             .bg(cx.theme().title_bar)
             .border_b_0()
             .child(
                 div()
                     .id("titlebar-brand")
                     .h_flex()
-                    .gap_2()
                     .flex_shrink_0()
                     .text_sm()
-                    .child(img(self.app_icon.clone()).size_4())
-                    .child(self.text("TapRelay"))
+                    .when(self.ui.mode == 2, |brand| {
+                        brand.child(
+                            div()
+                                .w(rems(CHROME_SIZE_REMS))
+                                .h(rems(CHROME_SIZE_REMS))
+                                .flex_shrink_0()
+                                .h_flex()
+                                .justify_center()
+                                // Native title-bar hit testing must not treat this control as a drag area.
+                                .occlude()
+                                .child(
+                                    SidebarToggleButton::new()
+                                        .collapsed(self.sidebar_collapsed)
+                                        .accessibility_label(self.tr(if self.sidebar_collapsed {
+                                            "nav.expand"
+                                        } else {
+                                            "nav.collapse"
+                                        }))
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.sidebar_collapsed = !this.sidebar_collapsed;
+                                            cx.notify();
+                                        })),
+                                ),
+                        )
+                    })
+                    .child(
+                        div()
+                            .w(rems(CHROME_SIZE_REMS))
+                            .flex_shrink_0()
+                            .h_flex()
+                            .justify_center()
+                            .child(
+                                img(icon)
+                                    .id("titlebar-icon")
+                                    .size_6()
+                                    .relative()
+                                    .left(offset)
+                                    .top(offset)
+                                    .test_support(),
+                            ),
+                    )
+                    .child(self.text("TapRelay").id("titlebar-title").test_support())
                     .test_support(),
             )
     }
 
     pub(super) fn navigation(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let target_width = if self.sidebar_collapsed {
-            window.rem_size() * 3.25
+            window.rem_size() * CHROME_SIZE_REMS
         } else {
-            window.rem_size() * 11.75
+            window.rem_size() * 11.
         };
         let width = transition(
             "sidebar-width",
@@ -52,18 +98,21 @@ impl AppView {
             window,
             cx,
         );
-        let content_width = target_width - window.rem_size() * 1.25;
+        let content_width = target_width - window.rem_size() * SIDEBAR_PADDING_REMS * 2.;
         let nav = |id: ElementId, page: usize, icon| {
             let label = self.tr(TITLES[page]);
             Button::new(id)
                 .ghost()
-                .icon(icon)
+                .child(Icon::new(icon).size_4())
                 .accessibility_label(label.clone())
                 .tooltip(label.clone())
-                .h_9()
+                .h_8()
                 .w_full()
+                .px_1p5()
                 .when(!self.sidebar_collapsed, |button| {
-                    button.label(label).justify_start()
+                    button
+                        .px_2()
+                        .child(div().flex_1().min_w_0().text_ellipsis().child(label))
                 })
                 .selected(self.ui.page == page as i32)
                 .toggled(self.ui.page == page as i32)
@@ -87,32 +136,11 @@ impl AppView {
             .flex_shrink_0()
             .v_flex()
             .py_3()
-            .px_2p5()
+            .px(rems(SIDEBAR_PADDING_REMS))
             .gap_3()
             .overflow_hidden()
             .bg(cx.theme().sidebar)
             .text_color(cx.theme().sidebar_foreground)
-            .child(
-                div()
-                    .w_8()
-                    .h_9()
-                    .flex_shrink_0()
-                    .h_flex()
-                    .justify_center()
-                    .child(
-                        SidebarToggleButton::new()
-                            .collapsed(self.sidebar_collapsed)
-                            .accessibility_label(self.tr(if self.sidebar_collapsed {
-                                "nav.expand"
-                            } else {
-                                "nav.collapse"
-                            }))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.sidebar_collapsed = !this.sidebar_collapsed;
-                                cx.notify();
-                            })),
-                    ),
-            )
             .child(
                 div()
                     .id("navigation-menu")

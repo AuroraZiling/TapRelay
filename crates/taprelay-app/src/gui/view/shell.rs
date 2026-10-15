@@ -22,6 +22,7 @@ impl AppView {
     pub(super) fn title_bar(&self, cx: &App) -> TitleBar {
         TitleBar::new()
             .h_10()
+            .pl(rems(1.125))
             .bg(cx.theme().title_bar)
             .border_b_0()
             .child(

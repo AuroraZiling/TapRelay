@@ -1,6 +1,7 @@
 mod accessibility;
 mod alerts;
 mod bindings;
+mod contrast;
 mod devices;
 mod environment;
 mod groups;

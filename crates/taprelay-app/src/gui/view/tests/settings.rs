@@ -20,9 +20,9 @@ fn settings_switch_between_catppuccin_themes_and_follow_system(cx: &mut TestAppC
         window.click(("nav", 3usize), cx);
         for (choice, system_dark, name, background, primary) in [
             (2, false, "Catppuccin Macchiato", 0x1e2030, 0x8aadf4),
-            (1, true, "Catppuccin Latte", 0xe5e9ef, 0x7287fd),
+            (1, true, "Catppuccin Latte", 0xe5e9ef, 0x435ac4),
             (0, true, "Catppuccin Macchiato", 0x1e2030, 0x8aadf4),
-            (0, false, "Catppuccin Latte", 0xe5e9ef, 0x7287fd),
+            (0, false, "Catppuccin Latte", 0xe5e9ef, 0x435ac4),
         ] {
             view.update(cx, |view, _| {
                 view.controller.system_theme = system_dark;

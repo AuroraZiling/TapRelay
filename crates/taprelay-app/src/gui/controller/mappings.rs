@@ -119,7 +119,7 @@ impl Controller {
             _ => {}
         }
         anyhow::ensure!(
-            !self.runtime.busy() && !self.recording() && !self.runtime.stopped(),
+            !self.runtime.edits_blocked() && !self.recording() && !self.runtime.stopped(),
             self.tr(keys::RUNTIME_BUSY)
         );
         self.mapping_pull(ui);
@@ -471,7 +471,8 @@ impl Controller {
             self.mapping_undo = None;
         }
         ui.mapping.can_undo = self.mapping_undo.is_some();
-        ui.mapping.busy = self.runtime.busy() || self.runtime.stopped() || self.recording();
+        ui.mapping.busy =
+            self.runtime.edits_blocked() || self.runtime.stopped() || self.recording();
         let capture = self
             .runtime
             .capture()

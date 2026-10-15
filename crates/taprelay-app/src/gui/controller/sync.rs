@@ -15,7 +15,7 @@ impl Controller {
         if icons_changed {
             ui.groups.icon_revision = ui.groups.icon_revision.wrapping_add(1);
         }
-        ui.groups.busy = self.runtime.busy() || self.runtime.stopped() || self.recording();
+        ui.groups.busy = self.runtime.edits_blocked() || self.runtime.stopped() || self.recording();
         let o = &self.runtime.config.options;
         let dark = match o.theme {
             ThemeSetting::System => self.system_theme,
@@ -268,6 +268,7 @@ impl Controller {
                     label: self.tr(definition.name_key),
                     gestures,
                     enabled: config.enabled,
+                    pending: false,
                     shortcuts,
                 };
                 rows.push(row);
@@ -287,6 +288,10 @@ impl Controller {
                 }
             }
             ui.bindings = summary;
+        }
+        for row in &mut ui.binding.rows {
+            row.pending = FunctionId::from_stable_id(&row.id)
+                .is_some_and(|id| self.runtime.toggling_function(id));
         }
         if self
             .previous_devices

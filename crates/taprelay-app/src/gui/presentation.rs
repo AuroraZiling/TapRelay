@@ -31,6 +31,7 @@ pub(crate) struct FunctionBindingRow {
     pub label: String,
     pub gestures: Vec<GestureAction>,
     pub enabled: bool,
+    pub pending: bool,
     pub shortcuts: Vec<ShortcutItem>,
     pub scope_label: String,
     pub scope_editable: bool,

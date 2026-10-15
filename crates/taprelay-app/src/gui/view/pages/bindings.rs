@@ -57,6 +57,7 @@ impl AppView {
             let Some(id) = FunctionId::from_stable_id(&row.id) else {
                 continue;
             };
+            let busy = busy || row.pending;
             let capturing = self.ui.binding.capture.function_id == row.id;
             let mut shortcuts = div().h_flex().gap_2().flex_wrap();
             for shortcut in &row.shortcuts {

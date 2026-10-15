@@ -62,7 +62,7 @@ impl Controller {
             return Ok(());
         }
         anyhow::ensure!(
-            !self.runtime.busy() && !self.recording(),
+            !self.runtime.edits_blocked() && !self.recording(),
             self.tr(keys::RUNTIME_BUSY)
         );
         let rules = &self.runtime.config.foreground_app_rules;

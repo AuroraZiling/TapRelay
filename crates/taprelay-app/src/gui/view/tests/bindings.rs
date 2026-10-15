@@ -1,4 +1,4 @@
-use super::support::{open, settle, wait_until};
+use super::support::{open, open_sized, settle, wait_until};
 use crate::action::Action;
 use crate::gui::view::Command;
 use gpui_kit::test::TestWindowExt;
@@ -34,6 +34,47 @@ fn bindings_keep_four_aligned_columns_and_a_header_action(cx: &mut TestAppContex
         }
     })
     .unwrap();
+}
+
+#[gpui_kit::test]
+fn function_badges_fit_their_rows_without_overlapping(cx: &mut TestAppContext) {
+    for width in [900., 1280.] {
+        let (handle, view, _folder) = open_sized(cx, width, 500.);
+        for scale in [1., 1.5, 2.] {
+            cx.simulate_window_scale_factor_change(handle, scale);
+            cx.update_window(handle, |_, window, cx| {
+                for language in ["english", "chinese"] {
+                    view.update(cx, |view, cx| {
+                        view._pump = gpui_kit::Task::ready(());
+                        view.controller.runtime.config.options.language =
+                            crate::config::Language::from_name(language).unwrap();
+                        view.controller.sync(&mut view.ui);
+                        view.ui.page = 1;
+                        view.effects(window, cx);
+                        cx.notify();
+                    });
+                    window.render_frame(cx);
+                    for row in &view.read(cx).ui.binding.rows {
+                        let column = window.within(gpui_kit::SharedString::from(format!(
+                            "binding-function-{}", row.id
+                        )));
+                        let mut previous_bottom = None;
+                        for index in 0..row.gestures.len() {
+                            let gesture = column.find(("gesture", index)).bounds();
+                            let badge = column.find(("gesture-badge", index)).bounds();
+                            assert!(badge.top() >= gesture.top() && badge.bottom() <= gesture.bottom(),
+                                "{language}, scale={scale}, {}: badge {badge:?} exceeds row {gesture:?}", row.id);
+                            assert!(badge.left() >= gesture.left() && badge.right() <= gesture.right());
+                            if let Some(bottom) = previous_bottom {
+                                assert!(badge.top() >= bottom + px(4.), "{}: badges need a visible gap", row.id);
+                            }
+                            previous_bottom = Some(badge.bottom());
+                        }
+                    }
+                }
+            }).unwrap();
+        }
+    }
 }
 
 #[gpui_kit::test]

@@ -26,7 +26,7 @@ fn bindings_keep_four_aligned_columns_and_a_header_action(cx: &mut TestAppContex
             let scope = find("binding-scope");
             assert!(bounds.size.height >= px(64.));
             assert_eq!(function.size.width, px(240.));
-            assert_eq!(scope.size.width, px(124.));
+            assert_eq!(scope.size.width, px(160.));
             assert_eq!(shortcuts.right() + px(16.), function.left());
             assert_eq!(function.right() + px(16.), scope.left());
             assert_eq!(scope.right() + px(16.), bounds.right());

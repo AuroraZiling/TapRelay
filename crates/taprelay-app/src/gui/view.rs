@@ -8,6 +8,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::{prelude::*, *};
 use std::{
+    collections::{BTreeMap, BTreeSet},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -24,7 +25,7 @@ enum Command {
     Binding(BindingCommand),
     Group(&'static str, String),
     Mapping(&'static str, String),
-    Scope(FunctionId, String),
+    Scope(FunctionId, BTreeSet<String>),
 }
 
 pub(super) struct AppView {
@@ -39,6 +40,7 @@ pub(super) struct AppView {
     group_name: Entity<InputState>,
     mapping_name: Entity<InputState>,
     output_filter: Entity<InputState>,
+    scope_pickers: BTreeMap<FunctionId, components::ScopePicker>,
     ripples: super::ripple::Ripples,
     dialog: u8,
     group_focus_request: i32,
@@ -175,6 +177,7 @@ impl AppView {
             group_name,
             mapping_name,
             output_filter,
+            scope_pickers: BTreeMap::new(),
             ripples: Default::default(),
             dialog: 0,
             group_focus_request: 0,
@@ -214,9 +217,13 @@ impl AppView {
                 self.controller
                     .mapping_command(&mut self.ui, command, value)
             }
-            Command::Scope(id, group) => {
+            Command::Scope(id, groups) => {
                 let mut rules = self.controller.runtime.config.foreground_app_rules.clone();
-                rules.toggle_scope(*id, group);
+                if groups.is_empty() {
+                    rules.assignments.remove(id);
+                } else {
+                    rules.assignments.insert(*id, groups.clone());
+                }
                 self.controller
                     .save_foreground_app_rules(&mut self.ui, rules)
             }
@@ -269,7 +276,7 @@ impl Render for AppView {
             _ => match self.ui.page {
                 0 => self.overview(window, cx),
                 1 if self.ui.mapping.open => self.mappings(cx),
-                1 => self.bindings(cx),
+                1 => self.bindings(window, cx),
                 2 => self.devices(cx),
                 3 => self.settings(cx),
                 _ => self.groups(cx),

@@ -4,15 +4,15 @@ use gpui_kit::assets::IconName;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::{
     ActiveTheme, Disableable, Icon, Selectable, StyledExt,
-    button::Button,
     group_box::{GroupBox, GroupBoxVariants},
-    menu::{DropdownMenu, PopupMenuItem},
     switch::Switch,
 };
 use gpui_kit::{prelude::*, *};
 
 impl AppView {
-    pub(in crate::gui::view) fn bindings(&self, cx: &Context<Self>) -> AnyElement {
+    pub(in crate::gui::view) fn bindings(&self, window: &Window, cx: &Context<Self>) -> AnyElement {
+        let wide = window.viewport_size().width >= px(1100.);
+        let scope_width = rems(if wide { 16. } else { 10. });
         let mut page = div()
             .v_flex()
             .flex_1()
@@ -45,7 +45,7 @@ impl AppView {
                 )
                 .child(
                     self.caption(self.tr("common.effective_scope"), cx)
-                        .w(rems(7.75))
+                        .w(scope_width)
                         .flex_shrink_0(),
                 ),
         );
@@ -229,9 +229,15 @@ impl AppView {
                             .child(
                                 div()
                                     .id(SharedString::from(format!("binding-scope-{}", row.id)))
-                                    .w(rems(7.75))
+                                    .w(scope_width)
                                     .flex_shrink_0()
-                                    .child(self.scope_menu(id, row, busy, cx))
+                                    .child(self.scope_picker(
+                                        id,
+                                        row,
+                                        busy,
+                                        if wide { 2 } else { 1 },
+                                        cx,
+                                    ))
                                     .test_support(),
                             ),
                     )
@@ -248,11 +254,12 @@ impl AppView {
             .into_any_element()
     }
 
-    fn scope_menu(
+    fn scope_picker(
         &self,
         id: FunctionId,
         row: &crate::FunctionBindingRow,
         busy: bool,
+        visible_limit: usize,
         cx: &Context<Self>,
     ) -> AnyElement {
         if !row.scope_editable {
@@ -260,43 +267,21 @@ impl AppView {
                 .caption(self.tr("common.all_apps"), cx)
                 .into_any_element();
         }
-        let rules = &self.controller.runtime.config.foreground_app_rules;
-        let selected = rules.assignments.get(&id);
-        let mut options = vec![(
-            String::new(),
-            self.tr("common.all_apps"),
-            selected.is_none_or(|s| s.is_empty()),
-        )];
-        options.extend(rules.groups.iter().map(|(key, group)| {
-            (
-                key.clone(),
-                group.name.clone(),
-                selected.is_some_and(|s| s.contains(key)),
-            )
-        }));
-        let weak = cx.entity().downgrade();
-        Button::new(SharedString::from(format!("scope-{}", row.id)))
-            .label(row.scope_label.clone())
-            .accessibility_label(
+        let picker = &self.scope_pickers[&id];
+        div()
+            .id(SharedString::from(format!("scope-{}", row.id)))
+            .role(Role::Group)
+            .aria_label(
                 self.tr_object("a11y.scope", &format!("{}: {}", row.label, row.scope_label)),
             )
-            .tooltip(row.scope_label.clone())
             .w_full()
-            .disabled(busy)
-            .dropdown_menu(move |mut menu, _, _| {
-                for (group, name, checked) in &options {
-                    let weak = weak.clone();
-                    let group = group.clone();
-                    menu = menu.item(PopupMenuItem::new(name.clone()).checked(*checked).on_click(
-                        move |_, window, cx| {
-                            let _ = weak.update(cx, |this, cx| {
-                                this.dispatch(Command::Scope(id, group.clone()), window, cx)
-                            });
-                        },
-                    ));
-                }
-                menu
-            })
+            .child(picker.element(
+                visible_limit,
+                self.ui.locale.clone(),
+                self.tr("common.all_apps"),
+                busy,
+            ))
+            .test_support()
             .into_any_element()
     }
 }

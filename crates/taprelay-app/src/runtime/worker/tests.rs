@@ -294,6 +294,69 @@ fn slow_worker_does_not_block_polling_or_accept_duplicate_edits() {
 }
 
 #[test]
+fn function_toggles_are_serialized_without_blocking_other_rows_and_scope_saves() {
+    let mut handle = RuntimeHandle::new(Config::default()).unwrap();
+    let (entered, started) = mpsc::channel();
+    let (release, wait) = mpsc::channel();
+    handle
+        .enqueue(
+            Kind::Poll,
+            Box::new(move |_| {
+                entered.send(()).unwrap();
+                wait.recv_timeout(Duration::from_secs(3)).unwrap();
+                Ok(())
+            }),
+        )
+        .unwrap();
+    started.recv_timeout(Duration::from_secs(3)).unwrap();
+    for id in [FunctionId::MediaMute, FunctionId::MediaPrevious] {
+        handle
+            .apply_binding_command(BindingCommand::SetFunctionEnabled { id, enabled: true })
+            .unwrap();
+        assert!(handle.toggling_function(id));
+    }
+    assert!(handle.busy());
+    assert!(!handle.edits_blocked());
+    assert!(matches!(
+        handle
+            .apply_binding_command(BindingCommand::SetFunctionEnabled {
+                id: FunctionId::MediaMute,
+                enabled: false,
+            })
+            .unwrap_err()
+            .downcast_ref::<HandoffError>(),
+        Some(HandoffError::Busy)
+    ));
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("config.json");
+    handle
+        .set_foreground_app_rules(Default::default(), &path)
+        .unwrap();
+    assert!(handle.edits_blocked());
+    assert!(matches!(
+        handle
+            .apply_binding_command(BindingCommand::SetFunctionEnabled {
+                id: FunctionId::MediaNext,
+                enabled: true,
+            })
+            .unwrap_err()
+            .downcast_ref::<HandoffError>(),
+        Some(HandoffError::Busy)
+    ));
+    release.send(()).unwrap();
+    idle(&mut handle);
+    let saved = Config::load(&path).unwrap();
+    for id in [FunctionId::MediaMute, FunctionId::MediaPrevious] {
+        assert!(handle.config.functions[&id].enabled);
+        assert!(saved.functions[&id].enabled);
+        assert!(!handle.toggling_function(id));
+    }
+    assert!(!handle.config.functions[&FunctionId::MediaNext].enabled);
+    assert!(!handle.edits_blocked());
+    assert!(handle.take_notice().is_none());
+}
+
+#[test]
 fn delayed_binding_edit_is_applied_once_without_overwriting_new_preferences() {
     let mut handle = RuntimeHandle::new(Config::default()).unwrap();
     let (release, wait) = mpsc::channel();

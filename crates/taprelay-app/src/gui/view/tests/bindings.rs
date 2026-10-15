@@ -3,6 +3,129 @@ use crate::gui::action::Action;
 use crate::gui::view::Command;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{AppContext, TestAppContext, px};
+#[gpui_kit::test]
+fn toggling_a_binding_keeps_other_switches_visually_stable(cx: &mut TestAppContext) {
+    let (handle, view, folder) = open(cx);
+    settle(cx, handle, &view);
+    cx.update_window(handle, |_, _, cx| {
+        cx.set_reduce_motion(true);
+        view.update(cx, |view, cx| {
+            view._pump = gpui_kit::Task::ready(());
+            view.ui.page = 1;
+            cx.notify();
+        });
+    })
+    .unwrap();
+    for enabled in [false, true] {
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            let other = window.find("binding-enabled-media.previous").bounds();
+            let colors = |window: &gpui_kit::Window| {
+                let scale = window.scale_factor();
+                window
+                    .painted_quads()
+                    .into_iter()
+                    .filter(|quad| {
+                        let center = quad.bounds.center();
+                        other.contains(&gpui_kit::point(
+                            px(center.x.as_f32() / scale),
+                            px(center.y.as_f32() / scale),
+                        ))
+                    })
+                    .map(|quad| quad.background)
+                    .collect::<Vec<_>>()
+            };
+            let before = colors(window);
+            assert!(!before.is_empty());
+            window.click("binding-enabled-media.play-pause", cx);
+            assert!(view.read(cx).controller.runtime.busy());
+            assert!(!view.read(cx).ui.groups.busy);
+            assert!(
+                view.read(cx)
+                    .ui
+                    .binding
+                    .rows
+                    .iter()
+                    .find(|row| row.id == "media.play-pause")
+                    .unwrap()
+                    .pending
+            );
+            assert_ne!(
+                window.find("binding-enabled-media.previous").disabled(),
+                Some(true)
+            );
+            assert_ne!(window.find("custom-mappings").disabled(), Some(true));
+            let scope = view.read(cx).scope_pickers
+                [&taprelay_core::function::FunctionId::MediaPrevious]
+                .state
+                .entity_id();
+            assert_ne!(
+                window.find(("multi-combo-box", scope)).disabled(),
+                Some(true)
+            );
+            assert_eq!(
+                colors(window),
+                before,
+                "toggling one binding must not dim unrelated switches"
+            );
+        })
+        .unwrap();
+        settle(cx, handle, &view);
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            assert_ne!(
+                window.find("binding-enabled-media.play-pause").disabled(),
+                Some(true)
+            );
+            assert_eq!(
+                view.read(cx).controller.runtime.config.functions
+                    [&taprelay_core::function::FunctionId::MediaPlayPause]
+                    .enabled,
+                enabled
+            );
+            view.update(cx, |view, _| view.controller.flush(true));
+        })
+        .unwrap();
+        let saved = crate::config::Config::load(&folder.path().join("config.json")).unwrap();
+        assert_eq!(
+            saved.functions[&taprelay_core::function::FunctionId::MediaPlayPause].enabled,
+            enabled
+        );
+    }
+}
+
+#[gpui_kit::test]
+fn completing_an_unchanged_binding_toggle_still_clears_its_pending_presentation(
+    cx: &mut TestAppContext,
+) {
+    let (handle, view, _folder) = open(cx);
+    settle(cx, handle, &view);
+    let pending = cx
+        .update_window(handle, |_, window, cx| {
+            view.update(cx, |view, cx| {
+                view._pump = gpui_kit::Task::ready(());
+                view.dispatch(
+                    Command::Binding(
+                        crate::runtime::commands::BindingCommand::SetFunctionEnabled {
+                            id: taprelay_core::function::FunctionId::MediaPlayPause,
+                            enabled: true,
+                        },
+                    ),
+                    window,
+                    cx,
+                );
+                assert!(view.ui.binding.rows.iter().any(|row| row.pending));
+                view.ui.binding.clone()
+            })
+        })
+        .unwrap();
+    settle(cx, handle, &view);
+    cx.update(|cx| {
+        let binding = &view.read(cx).ui.binding;
+        assert_ne!(binding, &pending);
+        assert!(binding.rows.iter().all(|row| !row.pending));
+    });
+}
 
 #[gpui_kit::test]
 fn bindings_keep_four_aligned_columns_and_a_header_action(cx: &mut TestAppContext) {

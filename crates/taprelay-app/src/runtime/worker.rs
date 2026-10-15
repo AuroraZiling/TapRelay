@@ -12,7 +12,11 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use taprelay_core::{function::FunctionConfigs, input::InputEvent, state::Snapshot};
+use taprelay_core::{
+    function::{FunctionConfigs, FunctionId},
+    input::InputEvent,
+    state::Snapshot,
+};
 
 type Command = Box<dyn FnOnce(&mut Runtime) -> Result<()> + Send>;
 
@@ -59,6 +63,7 @@ enum Kind {
     SaveMappings,
     Poll,
     Edit,
+    ToggleFunction(FunctionId),
     SaveRules,
     Cancel,
     Shutdown,
@@ -276,7 +281,12 @@ impl RuntimeHandle {
     fn enqueue(&mut self, kind: Kind, command: Command) -> Result<()> {
         self.poll();
         anyhow::ensure!(!self.stopped && !self.closing, HandoffError::Stopped);
-        if matches!(kind, Kind::Edit | Kind::SaveRules | Kind::SaveMappings) && self.busy() {
+        if matches!(
+            kind,
+            Kind::Edit | Kind::ToggleFunction(_) | Kind::SaveRules | Kind::SaveMappings
+        ) && (self.edits_blocked()
+            || matches!(kind, Kind::ToggleFunction(id) if self.toggling_function(id)))
+        {
             return Err(HandoffError::Busy.into());
         }
         if matches!(kind, Kind::Poll | Kind::Cancel)
@@ -424,6 +434,16 @@ impl RuntimeHandle {
             .values()
             .any(|pending| pending.kind != Kind::Poll)
     }
+    pub fn edits_blocked(&self) -> bool {
+        self.pending
+            .values()
+            .any(|pending| !matches!(pending.kind, Kind::Poll | Kind::ToggleFunction(_)))
+    }
+    pub fn toggling_function(&self, id: FunctionId) -> bool {
+        self.pending
+            .values()
+            .any(|pending| pending.kind == Kind::ToggleFunction(id))
+    }
     pub fn slow(&self) -> bool {
         self.pending
             .values()
@@ -452,10 +472,10 @@ impl RuntimeHandle {
         self.ui_input = Some(Instant::now());
     }
     pub fn apply_binding_command(&mut self, command: BindingCommand) -> Result<()> {
-        let kind = if command == BindingCommand::CancelCapture {
-            Kind::Cancel
-        } else {
-            Kind::Edit
+        let kind = match command {
+            BindingCommand::CancelCapture => Kind::Cancel,
+            BindingCommand::SetFunctionEnabled { id, .. } => Kind::ToggleFunction(id),
+            _ => Kind::Edit,
         };
         self.enqueue(
             kind,

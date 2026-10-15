@@ -28,6 +28,27 @@ fn app_theme_text_boundaries_and_focus_meet_contrast_thresholds(cx: &mut TestApp
                 view.effects(window, cx);
             });
             let theme = cx.theme();
+            let original: gpui_kit::component::ThemeSet =
+                serde_json::from_str(include_str!("../../../../resources/themes/catppuccin.json"))
+                    .unwrap();
+            let config = original
+                .themes
+                .into_iter()
+                .find(|config| {
+                    config.name.as_ref()
+                        == if dark {
+                            "Catppuccin Macchiato"
+                        } else {
+                            "Catppuccin Latte"
+                        }
+                })
+                .unwrap();
+            let mut native = theme.clone();
+            native.apply_config(&std::rc::Rc::new(config));
+            assert_eq!(theme.input, native.input);
+            assert_eq!(theme.button, native.button);
+            assert_eq!(theme.button_hover, native.button_hover);
+            assert_eq!(theme.button_active, native.button_active);
             for surface in [
                 theme.background,
                 theme.group_box,
@@ -54,11 +75,7 @@ fn app_theme_text_boundaries_and_focus_meet_contrast_thresholds(cx: &mut TestApp
                         contrast(color, surface.blend(tint))
                     );
                 }
-                for (name, color) in [
-                    ("input", theme.input),
-                    ("focus", theme.ring),
-                    ("switch", theme.switch),
-                ] {
+                for (name, color) in [("focus", theme.ring), ("switch", theme.switch)] {
                     assert!(
                         contrast(color, surface) >= 3.,
                         "dark={dark} {name}: {}",

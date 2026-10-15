@@ -282,6 +282,22 @@ fn shortcut_button_records_cancels_and_removes_without_cross_triggering(cx: &mut
             window.find("binding-media.play-pause-0").label(),
             Some("Record shortcut for Play / Pause: F8")
         );
+        assert_eq!(
+            window
+                .find("binding-media.play-pause-0")
+                .bounds()
+                .size
+                .height,
+            px(32.)
+        );
+        assert_eq!(
+            window
+                .find("binding-add-media.play-pause")
+                .bounds()
+                .size
+                .height,
+            px(32.)
+        );
         view.update(cx, |view, _| view.controller.flush(true));
     })
     .unwrap();

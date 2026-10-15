@@ -44,12 +44,13 @@ impl ScopePicker {
         Combobox::new(&self.state)
             .placeholder(all_apps.clone())
             .w_full()
+            .px_1()
             .disabled(disabled)
             .render_trigger(move |trigger, _, _| {
                 let selection = trigger.selection();
                 let mut tags = div().h_flex().w_full().min_w_0().gap_1().overflow_hidden();
                 if selection.is_empty() || selection[0].1.id.is_empty() {
-                    return tags.child(div().truncate().child(all_apps.clone()));
+                    return tags.child(div().px_1p5().truncate().child(all_apps.clone()));
                 }
                 for (index, (_, item)) in selection.iter().take(visible_limit).enumerate() {
                     tags = tags.child(
@@ -62,6 +63,8 @@ impl ScopePicker {
                             .child(
                                 Tag::new()
                                     .large()
+                                    .border_0()
+                                    .px_1p5()
                                     .min_w_0()
                                     .max_w_full()
                                     .child(div().min_w_0().truncate().child(item.title())),
@@ -83,7 +86,7 @@ impl ScopePicker {
                             .flex_shrink_0()
                             .role(Role::Label)
                             .aria_label(label.clone())
-                            .child(Tag::new().large().child(label))
+                            .child(Tag::new().large().border_0().px_1p5().child(label))
                             .test_support(),
                     );
                 }

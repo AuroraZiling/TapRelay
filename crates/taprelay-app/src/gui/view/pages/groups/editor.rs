@@ -182,7 +182,7 @@ impl AppView {
                 GroupBox::new()
                     .id(SharedString::from(format!("group-app-row-{}", app.path)))
                     .fill()
-                    .content_style(StyleRefinement::default().h_flex().gap_3().px_3().py_2())
+                    .content_style(self.card_style(cx).h_flex().gap_3().px_3().py_2())
                     .child(div().size_6().flex_shrink_0().child(icon))
                     .child(details)
                     .child(

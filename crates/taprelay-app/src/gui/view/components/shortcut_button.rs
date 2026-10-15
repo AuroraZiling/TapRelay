@@ -33,18 +33,18 @@ impl RenderOnce for ShortcutButton {
             .child(
                 self.button
                     .max_w_full()
-                    .when(self.clear_button.is_some(), |button| button.pr_8()),
+                    .when(self.clear_button.is_some(), |button| button.pr_7()),
             )
             .when_some(self.clear_button, |this, button| {
                 this.child(
                     div()
                         .absolute()
                         .block_mouse_except_scroll()
-                        .right_1()
+                        .right_0p5()
                         .top_0()
                         .h_full()
                         .h_flex()
-                        .child(button.ghost().small()),
+                        .child(button.ghost().xsmall()),
                 )
             })
     }

@@ -54,7 +54,7 @@ impl AppView {
             .grid()
             .grid_rows(1)
             .content_style(
-                StyleRefinement::default()
+                self.card_style(cx)
                     .flex_1()
                     .min_h_0()
                     .relative()
@@ -64,6 +64,8 @@ impl AppView {
             .child(
                 div()
                     .v_flex()
+                    .flex_1()
+                    .min_h_0()
                     .gap_2()
                     .child(self.caption(self.tr("receiver.current"), cx))
                     .child(self.heading(self.ui.device_name.clone()))
@@ -79,6 +81,8 @@ impl AppView {
                     .child(
                         div()
                             .h_flex()
+                            .mt_auto()
+                            .flex_shrink_0()
                             .gap_3()
                             .pt_1()
                             .flex_wrap()

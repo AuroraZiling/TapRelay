@@ -60,7 +60,7 @@ impl AppView {
     }
 
     pub(in crate::gui::view) fn settings(&self, cx: &Context<Self>) -> AnyElement {
-        let mut appearance = self.section("settings.appearance");
+        let mut appearance = self.section("settings.appearance", cx);
         let mut themes = div().h_flex().gap_2();
         for (index, name) in ["system", "light", "dark"].iter().enumerate() {
             themes = themes.child(
@@ -111,7 +111,7 @@ impl AppView {
                 ),
             );
         let passthrough = self
-            .section("settings.passthrough")
+            .section("settings.passthrough", cx)
             .child(self.setting(
                 "overlay",
                 "settings.passthrough_overlay",
@@ -156,7 +156,7 @@ impl AppView {
                 cx,
             ));
         let startup = self
-            .section("settings.startup")
+            .section("settings.startup", cx)
             .child(self.setting(
                 "autostart",
                 "settings.autostart",
@@ -199,7 +199,7 @@ impl AppView {
             (Tag::info(), IconName::UserRound, "permissions.badge.user")
         };
         let permissions = self
-            .section("settings.app.permissions")
+            .section("settings.app.permissions", cx)
             .child(
                 self.reveal_focus(
                     "admin-action",
@@ -236,7 +236,7 @@ impl AppView {
                 cx,
             ));
         let notifications = self
-            .section("settings.notifications")
+            .section("settings.notifications", cx)
             .child(self.setting(
                 "wait-warning",
                 "settings.connection.wait.warning",
@@ -254,7 +254,7 @@ impl AppView {
                 cx,
             ));
         let licensing = self
-            .section("settings.licensing")
+            .section("settings.licensing", cx)
             .child(self.text("GPL-3.0-only"))
             .child(
                 self.reveal_focus(
@@ -280,7 +280,7 @@ impl AppView {
                 ),
             );
         let about = self
-            .section("settings.about")
+            .section("settings.about", cx)
             .child(self.text(format!("TapRelay {}", self.ui.app_version)))
             .child(self.caption(self.ui.data_directory.clone(), cx))
             .child(
@@ -334,10 +334,11 @@ impl AppView {
         )
     }
 
-    fn section(&self, key: &'static str) -> GroupBox {
+    fn section(&self, key: &'static str, cx: &App) -> GroupBox {
         GroupBox::new()
             .id(key)
             .fill()
+            .content_style(self.card_style(cx))
             .title(self.text(self.tr(key)).role(Role::Heading).aria_level(2))
     }
 

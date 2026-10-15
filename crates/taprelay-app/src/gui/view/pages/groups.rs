@@ -22,7 +22,7 @@ impl AppView {
                 GroupBox::new()
                     .id(SharedString::from(format!("group-{}", row.id)))
                     .fill()
-                    .content_style(StyleRefinement::default().h_flex())
+                    .content_style(self.card_style(cx).h_flex())
                     .child(
                         div()
                             .v_flex()

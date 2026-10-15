@@ -49,6 +49,11 @@ fn title_bar_remains_above_every_screen_in_both_locales_and_themes(cx: &mut Test
                         assert!(controls.left() >= brand.right() + px(100.));
                         for control in ["minimize", "maximize", "close"] {
                             assert!(window.within("title-bar").find(control).visible());
+                            #[cfg(windows)]
+                            assert_eq!(
+                                window.within("title-bar").find(control).bounds().size.width,
+                                px(48.)
+                            );
                         }
                         assert_eq!(window.try_find("navigation").is_some(), mode == 2);
                         assert_eq!(window.try_find("page-header").is_some(), mode == 2);

@@ -55,6 +55,9 @@ impl AppView {
                                 }))
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.sidebar_collapsed = !this.sidebar_collapsed;
+                                    this.controller.runtime.config.options.sidebar_collapsed =
+                                        this.sidebar_collapsed;
+                                    this.controller.saves.changed();
                                     cx.notify();
                                 })),
                         ),

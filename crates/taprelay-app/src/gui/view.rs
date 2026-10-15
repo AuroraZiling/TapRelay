@@ -185,12 +185,13 @@ impl AppView {
         ui.binding.capture.slot = -1;
         ui.mapping.capture_slot = -1;
         controller.sync(&mut ui);
+        let sidebar_collapsed = controller.runtime.config.options.sidebar_collapsed;
         let mut this = Self {
             controller,
             ui,
             focus: cx.focus_handle(),
             capture_focus: None,
-            sidebar_collapsed: false,
+            sidebar_collapsed,
             content_scroll: ScrollHandle::new(),
             scroll_region: std::cell::Cell::new(""),
             app_icon: components::AppIcon::default(),

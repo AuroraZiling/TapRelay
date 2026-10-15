@@ -1,6 +1,30 @@
 use super::*;
 
 #[test]
+fn sidebar_defaults_expanded_for_old_configs_and_round_trips_both_states() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.json");
+    let mut json = serde_json::to_value(Config::default()).unwrap();
+    json["options"]
+        .as_object_mut()
+        .unwrap()
+        .remove("sidebar_collapsed");
+    let bytes = serde_json::to_vec(&json).unwrap();
+    std::fs::write(&path, &bytes).unwrap();
+    let mut config = Config::load(&path).unwrap();
+    assert!(!config.options.sidebar_collapsed);
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    for collapsed in [true, false] {
+        config.options.sidebar_collapsed = collapsed;
+        config.save(&path).unwrap();
+        assert_eq!(
+            Config::load(&path).unwrap().options.sidebar_collapsed,
+            collapsed
+        );
+    }
+}
+
+#[test]
 fn overlay_defaults_on_for_old_configs_and_disabled_setting_round_trips() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.json");

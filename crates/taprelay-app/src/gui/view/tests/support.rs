@@ -34,8 +34,6 @@ pub(super) fn open_with_transport(
     height: f32,
     transport: Option<Box<dyn crate::platform::Transport + Send>>,
 ) -> (AnyWindowHandle, Entity<AppView>, tempfile::TempDir) {
-    cx.update(gpui_kit::init);
-    let folder = tempfile::tempdir().unwrap();
     let mut config = Config::default();
     config.options.language = crate::config::Language::from_name("english").unwrap();
     config.options.notifications = false;
@@ -45,6 +43,18 @@ pub(super) fn open_with_transport(
         .get_mut(&taprelay_core::function::FunctionId::MediaPlayPause)
         .unwrap()
         .enabled = true;
+    open_with_config(cx, width, height, config, transport)
+}
+
+pub(super) fn open_with_config(
+    cx: &mut TestAppContext,
+    width: f32,
+    height: f32,
+    config: Config,
+    transport: Option<Box<dyn crate::platform::Transport + Send>>,
+) -> (AnyWindowHandle, Entity<AppView>, tempfile::TempDir) {
+    cx.update(gpui_kit::init);
+    let folder = tempfile::tempdir().unwrap();
     let runtime = RuntimeHandle::spawn(
         config,
         move |config| {

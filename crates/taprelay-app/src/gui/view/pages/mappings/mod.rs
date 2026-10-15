@@ -2,6 +2,7 @@ use crate::gui::view::{AppView, Command};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     Disableable, StyledExt,
+    button::ButtonVariants,
     group_box::{GroupBox, GroupBoxVariants},
     switch::Switch,
 };
@@ -150,14 +151,17 @@ impl AppView {
                                 mapping.busy,
                                 cx,
                             ))
-                            .child(self.icon_button(
-                                SharedString::from(format!("mapping-delete-{}", row.id)),
-                                IconName::Trash,
-                                self.tr_object("a11y.delete", &row.name),
-                                Command::Mapping("delete", row.id.clone()),
-                                mapping.busy,
-                                cx,
-                            )),
+                            .child(
+                                self.icon_button(
+                                    SharedString::from(format!("mapping-delete-{}", row.id)),
+                                    IconName::Trash,
+                                    self.tr_object("a11y.delete", &row.name),
+                                    Command::Mapping("delete", row.id.clone()),
+                                    mapping.busy,
+                                    cx,
+                                )
+                                .danger(),
+                            ),
                     )
                     .map(|row_view| {
                         self.reveal_focus(

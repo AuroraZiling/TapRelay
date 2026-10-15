@@ -2,7 +2,8 @@ use crate::gui::view::{AppView, Command};
 use gpui_kit::assets::IconName;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::{
-    Icon, StyledExt,
+    Icon, Sizable, StyledExt,
+    button::ButtonVariants,
     group_box::{GroupBox, GroupBoxVariants},
     input::Input,
 };
@@ -74,14 +75,17 @@ impl AppView {
                     .h_flex()
                     .gap_2()
                     .child(self.caption(self.tr("groups.running_help"), cx).flex_1())
-                    .child(self.icon_button(
-                        "group-refresh",
-                        IconName::RefreshCw,
-                        self.tr("groups.refresh"),
-                        Command::Group("running", String::new()),
-                        busy,
-                        cx,
-                    ))
+                    .child(
+                        self.icon_button(
+                            "group-refresh",
+                            IconName::RefreshCw,
+                            self.tr("groups.refresh"),
+                            Command::Group("running", String::new()),
+                            busy,
+                            cx,
+                        )
+                        .ghost(),
+                    )
                     .child(self.button(
                         "group-browse",
                         self.tr("groups.browse"),
@@ -96,7 +100,7 @@ impl AppView {
         } else {
             &group.foreground_apps
         };
-        let mut rows = div().v_flex().gap_2();
+        let mut rows = div().v_flex().gap_1();
         if apps.is_empty() {
             rows = rows.child(self.caption(
                 self.tr(if group.choosing_running {
@@ -111,56 +115,61 @@ impl AppView {
             let mut icons = self.controller.foreground_app_icons.borrow_mut();
             icons.request(&app.path);
             let icon = if let Some(image) = icons.image(&app.path) {
-                img(image).size_8().into_any_element()
+                img(image).size_6().into_any_element()
             } else {
-                Icon::new(IconName::AppWindow).size_7().into_any_element()
+                Icon::new(IconName::AppWindow).size_6().into_any_element()
             };
             let mut details = div()
                 .v_flex()
                 .flex_1()
                 .min_w_0()
-                .gap_1()
+                .gap_0p5()
                 .child(
                     self.text(icons.name(&app.path).unwrap_or(&app.name).to_string())
+                        .text_sm()
                         .text_ellipsis(),
                 )
-                .child(self.caption(app.path.clone(), cx).text_ellipsis());
+                .child(self.caption(app.path.clone(), cx).text_xs().text_ellipsis());
             if icons.missing(&app.path) {
-                details = details.child(self.error(&self.tr("groups.missing"), cx));
+                details = details.child(self.error(&self.tr("groups.missing"), cx).text_xs());
             }
             rows = rows.child(
                 GroupBox::new()
                     .id(SharedString::from(format!("group-app-row-{}", app.path)))
                     .fill()
-                    .content_style(StyleRefinement::default().h_flex().gap_3())
-                    .child(div().size_8().flex_shrink_0().child(icon))
+                    .content_style(StyleRefinement::default().h_flex().gap_3().px_3().py_2())
+                    .child(div().size_6().flex_shrink_0().child(icon))
                     .child(details)
-                    .child(self.icon_button(
-                        SharedString::from(format!("group-app-{}", app.path)),
-                        if group.choosing_running {
-                            IconName::Plus
-                        } else {
-                            IconName::X
-                        },
-                        self.tr_object(
+                    .child(
+                        self.icon_button(
+                            SharedString::from(format!("group-app-{}", app.path)),
                             if group.choosing_running {
-                                "a11y.add_app"
+                                IconName::Plus
                             } else {
-                                "a11y.remove_app"
+                                IconName::X
                             },
-                            icons.name(&app.path).unwrap_or(&app.name),
-                        ),
-                        Command::Group(
-                            if group.choosing_running {
-                                "add"
-                            } else {
-                                "remove"
-                            },
-                            app.path.clone(),
-                        ),
-                        busy,
-                        cx,
-                    ))
+                            self.tr_object(
+                                if group.choosing_running {
+                                    "a11y.add_app"
+                                } else {
+                                    "a11y.remove_app"
+                                },
+                                icons.name(&app.path).unwrap_or(&app.name),
+                            ),
+                            Command::Group(
+                                if group.choosing_running {
+                                    "add"
+                                } else {
+                                    "remove"
+                                },
+                                app.path.clone(),
+                            ),
+                            busy,
+                            cx,
+                        )
+                        .ghost()
+                        .small(),
+                    )
                     .map(|row| {
                         self.reveal_focus(
                             SharedString::from(format!("app-focus-{}", app.path)),
@@ -186,17 +195,20 @@ impl AppView {
                             )
                         },
                     ))
-                    .child(self.button(
-                        "group-save",
-                        self.tr(if group.saving {
-                            "common.saving"
-                        } else {
-                            "groups.save"
-                        }),
-                        Command::Group("save", String::new()),
-                        busy,
-                        cx,
-                    )),
+                    .child(
+                        self.button(
+                            "group-save",
+                            self.tr(if group.saving {
+                                "common.saving"
+                            } else {
+                                "groups.save"
+                            }),
+                            Command::Group("save", String::new()),
+                            busy,
+                            cx,
+                        )
+                        .primary(),
+                    ),
             )
             .into_any_element()
     }

@@ -4,8 +4,10 @@ use crate::gui::view::{AppView, Command};
 use gpui_kit::assets::IconName;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::{
-    ActiveTheme, StyledExt,
+    StyledExt,
+    button::ButtonVariants,
     group_box::{GroupBox, GroupBoxVariants},
+    tag::Tag,
 };
 use gpui_kit::{prelude::*, *};
 
@@ -53,11 +55,6 @@ impl AppView {
                     )))
                     .role(Role::Label)
                     .aria_label(format!("{}: {}", binding.function_name, binding.text))
-                    .px_2()
-                    .py(rems(0.375))
-                    .rounded_md()
-                    .border_1()
-                    .border_color(cx.theme().border)
                     .tooltip({
                         let label = binding.function_name.clone();
                         move |window, cx| {
@@ -65,7 +62,7 @@ impl AppView {
                                 .build(window, cx)
                         }
                     })
-                    .child(binding.text.clone())
+                    .child(Tag::secondary().outline().child(binding.text.clone()))
                     .test_support(),
             );
         }
@@ -91,14 +88,17 @@ impl AppView {
                                     .justify_between()
                                     .gap_4()
                                     .child(self.caption(self.tr("overview.bindings"), cx))
-                                    .child(self.icon_button(
-                                        "manage-bindings",
-                                        IconName::Settings,
-                                        self.tr("overview.manage"),
-                                        Command::App(Action::Navigate, "1".into()),
-                                        false,
-                                        cx,
-                                    )),
+                                    .child(
+                                        self.icon_button(
+                                            "manage-bindings",
+                                            IconName::Settings,
+                                            self.tr("overview.manage"),
+                                            Command::App(Action::Navigate, "1".into()),
+                                            false,
+                                            cx,
+                                        )
+                                        .ghost(),
+                                    ),
                             )
                             .child(self.scroller("overview-shortcuts", shortcuts)),
                     )

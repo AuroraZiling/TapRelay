@@ -3,6 +3,7 @@ use crate::gui::view::AppView;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::{
     StyledExt,
+    button::ButtonVariants,
     group_box::{GroupBox, GroupBoxVariants},
 };
 use gpui_kit::{prelude::*, *};
@@ -81,32 +82,41 @@ impl AppView {
                             .gap_3()
                             .pt_1()
                             .flex_wrap()
-                            .child(self.app_button(
-                                "listen",
-                                if self.ui.listening {
-                                    "listening.stop"
-                                } else {
-                                    "listening.start"
-                                },
-                                Action::Listen,
-                                self.ui.busy,
-                                cx,
-                            ))
-                            .child(self.app_button(
-                                "test-receiver",
-                                "receiver.test",
-                                Action::Test,
-                                !self.ui.ready,
-                                cx,
-                            ))
-                            .when(self.ui.state_color != 0, |row| {
-                                row.child(self.app_button(
-                                    "retry-receiver",
-                                    "common.retry",
-                                    Action::Retry,
-                                    self.ui.problem_busy,
+                            .child(
+                                self.app_button(
+                                    "listen",
+                                    if self.ui.listening {
+                                        "listening.stop"
+                                    } else {
+                                        "listening.start"
+                                    },
+                                    Action::Listen,
+                                    self.ui.busy,
                                     cx,
-                                ))
+                                )
+                                .primary(),
+                            )
+                            .child(
+                                self.app_button(
+                                    "test-receiver",
+                                    "receiver.test",
+                                    Action::Test,
+                                    !self.ui.ready,
+                                    cx,
+                                )
+                                .secondary(),
+                            )
+                            .when(self.ui.state_color != 0, |row| {
+                                row.child(
+                                    self.app_button(
+                                        "retry-receiver",
+                                        "common.retry",
+                                        Action::Retry,
+                                        self.ui.problem_busy,
+                                        cx,
+                                    )
+                                    .ghost(),
+                                )
                             }),
                     ),
             )

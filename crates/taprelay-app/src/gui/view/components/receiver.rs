@@ -1,18 +1,22 @@
 use crate::action::Action;
 use crate::gui::view::{AppView, Command};
 use gpui_kit::assets::IconName;
-use gpui_kit::component::{ActiveTheme, Icon, StyledExt, button::Button};
+use gpui_kit::component::{
+    ActiveTheme, Icon, StyledExt,
+    button::{Button, ButtonVariants},
+};
 use gpui_kit::{prelude::*, *};
 
 impl AppView {
     pub(in crate::gui::view) fn bluetooth_status(&self, cx: &App) -> Div {
         div()
             .h_flex()
-            .gap(rems(0.375))
-            .h_8()
+            .gap_1()
+            .h_6()
             .px_2()
+            .text_sm()
             .rounded_md()
-            .border_2()
+            .border_1()
             .border_color(if self.ui.bluetooth_available {
                 cx.theme().success
             } else {
@@ -24,7 +28,7 @@ impl AppView {
                 } else {
                     IconName::BluetoothOff
                 })
-                .size_4(),
+                .size(rems(0.875)),
             )
             .child(self.text(self.ui.adapter_label.clone()))
     }
@@ -38,7 +42,8 @@ impl AppView {
                 Command::App(Action::Refresh, String::new()),
                 self.ui.scanning,
                 cx,
-            ),
+            )
+            .ghost(),
             self.icon_button(
                 "receiver-settings",
                 IconName::Settings,
@@ -46,7 +51,8 @@ impl AppView {
                 Command::App(Action::BluetoothSettings, String::new()),
                 false,
                 cx,
-            ),
+            )
+            .ghost(),
         ]
     }
 }

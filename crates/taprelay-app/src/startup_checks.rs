@@ -2,10 +2,12 @@ use crate::{
     CheckRow,
     i18n::{self, keys},
 };
-use std::time::Duration;
 
-pub fn should_present(passed: bool, failed: bool, elapsed: Duration) -> bool {
-    passed || failed || elapsed >= Duration::from_millis(300)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum State {
+    Checking,
+    Ready,
+    Failed,
 }
 
 pub fn rows(

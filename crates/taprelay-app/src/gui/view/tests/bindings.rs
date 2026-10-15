@@ -3,6 +3,8 @@ use crate::gui::action::Action;
 use crate::gui::view::Command;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{AppContext, TestAppContext, px};
+use std::time::Duration;
+
 #[gpui_kit::test]
 fn toggling_a_binding_keeps_other_switches_visually_stable(cx: &mut TestAppContext) {
     let (handle, view, folder) = open(cx);
@@ -125,6 +127,55 @@ fn completing_an_unchanged_binding_toggle_still_clears_its_pending_presentation(
         assert_ne!(binding, &pending);
         assert!(binding.rows.iter().all(|row| !row.pending));
     });
+}
+
+#[gpui_kit::test]
+fn bindings_scrollbar_stays_visible_when_idle_and_moves_the_list(cx: &mut TestAppContext) {
+    let (handle, view, _folder) = open(cx);
+    cx.update_window(handle, |_, window, cx| {
+        view.update(cx, |view, cx| {
+            view._pump = gpui_kit::Task::ready(());
+            view.ui.page = 1;
+            cx.notify();
+        });
+        window.render_frame(cx);
+        window.hover("titlebar-title", cx);
+    })
+    .unwrap();
+    for after_scroll in [false, true] {
+        cx.executor().advance_clock(Duration::from_secs(5));
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            let viewport = window.find("bindings").bounds();
+            let scale = window.scale_factor();
+            let thumb = window
+                .painted_quads()
+                .into_iter()
+                .find(|quad| {
+                    let bounds = quad.bounds;
+                    !quad.background.is_transparent()
+                        && bounds.left().as_f32() / scale >= f32::from(viewport.right()) - 12.
+                        && bounds.right().as_f32() / scale <= f32::from(viewport.right())
+                        && bounds.top().as_f32() / scale >= f32::from(viewport.top())
+                        && bounds.bottom().as_f32() / scale <= f32::from(viewport.bottom())
+                        && bounds.size.width.as_f32() / scale < 12.
+                        && bounds.size.height.as_f32() / scale > 20.
+                        && bounds.size.height.as_f32() / scale < f32::from(viewport.size.height)
+                })
+                .expect("the scrollbar thumb must be painted even while idle");
+            if !after_scroll {
+                let before = view.read(cx).content_scroll.offset();
+                let position = gpui_kit::point(
+                    px(thumb.bounds.center().x.as_f32() / scale),
+                    viewport.bottom() - px(8.),
+                );
+                window.click_at("bindings", position - viewport.origin, cx);
+                assert!(view.read(cx).content_scroll.offset().y < before.y);
+                window.hover("titlebar-title", cx);
+            }
+        })
+        .unwrap();
+    }
 }
 
 #[gpui_kit::test]

@@ -75,6 +75,7 @@ impl AppView {
             Theme::change(mode, Some(window), cx);
         }
         gpui_kit::component::set_locale(&self.ui.locale);
+        self.sync_report_rate(window, cx);
         self.sync_scope_pickers(window, cx);
         if let Some(message) = self.controller.pending_notification.take() {
             let close_label = self.tr("a11y.dismiss_notification");

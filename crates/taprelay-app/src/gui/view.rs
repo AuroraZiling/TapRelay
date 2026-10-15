@@ -1,9 +1,11 @@
 use super::{
     Action, BindingCommand, Controller, DesktopEvent, FunctionId, Presentation, config, desktop,
+    presentation::ChoiceOption,
 };
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::{
     ActiveTheme, StyledExt,
+    combobox::{ComboboxEvent, ComboboxState},
     input::{InputEvent, InputState},
 };
 use gpui_kit::{prelude::*, *};
@@ -40,6 +42,8 @@ pub(super) struct AppView {
     group_name: Entity<InputState>,
     mapping_name: Entity<InputState>,
     output_filter: Entity<InputState>,
+    report_rate: Entity<ComboboxState<Vec<ChoiceOption>>>,
+    report_rate_auto_label: String,
     scope_pickers: BTreeMap<FunctionId, components::ScopePicker>,
     ripples: super::ripple::Ripples,
     dialog: u8,
@@ -62,7 +66,20 @@ impl AppView {
         let group_name = cx.new(|cx| InputState::new(window, cx));
         let mapping_name = cx.new(|cx| InputState::new(window, cx));
         let output_filter = cx.new(|cx| InputState::new(window, cx));
+        let report_rate =
+            cx.new(|cx| ComboboxState::new(Vec::<ChoiceOption>::new(), Vec::new(), window, cx));
         let mut subscriptions = vec![
+            cx.subscribe_in(&report_rate, window, |this, _, event, window, cx| {
+                if let ComboboxEvent::Change(values) = event
+                    && let Some(value) = values.first()
+                {
+                    this.dispatch(
+                        Command::App(Action::SetPassthroughMouseReportRate, value.clone()),
+                        window,
+                        cx,
+                    );
+                }
+            }),
             cx.subscribe_in(
                 &group_name,
                 window,
@@ -177,6 +194,8 @@ impl AppView {
             group_name,
             mapping_name,
             output_filter,
+            report_rate,
+            report_rate_auto_label: String::new(),
             scope_pickers: BTreeMap::new(),
             ripples: Default::default(),
             dialog: 0,

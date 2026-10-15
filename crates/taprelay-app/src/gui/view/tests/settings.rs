@@ -1,6 +1,6 @@
 use super::support::{open, open_sized, settle};
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{AppContext, TestAppContext};
+use gpui_kit::{AppContext, Role, Task, TestAppContext};
 use std::time::Instant;
 
 #[gpui_kit::test]
@@ -63,6 +63,7 @@ fn settings_switch_between_catppuccin_themes_and_follow_system(cx: &mut TestAppC
 fn settings_controls_update_their_own_preferences_and_persist(cx: &mut TestAppContext) {
     let (handle, view, folder) = open_sized(cx, 900., 2200.);
     cx.update_window(handle, |_, window, cx| {
+        cx.set_reduce_motion(true);
         window.render_frame(cx);
         window.click(("nav", 3usize), cx);
     })
@@ -110,22 +111,55 @@ fn settings_controls_update_their_own_preferences_and_persist(cx: &mut TestAppCo
         let saved = crate::config::Config::load(&folder.path().join("config.json")).unwrap();
         assert_eq!(serde_json::to_value(saved.options).unwrap(), expected);
     }
-    for rate in [60usize, 125, 250, 500, 1000, 0] {
+    let report_rate = cx.update(|cx| view.read(cx).report_rate.clone());
+    let combobox_id = ("multi-combo-box", report_rate.entity_id());
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        let control = window.find("report-rate");
+        assert_eq!(window.find(combobox_id).role(), Some(Role::ComboBox));
+        assert_eq!(
+            control.bounds().right(),
+            window.find("overlay").bounds().right()
+        );
+        assert_eq!(
+            control.label(),
+            Some(
+                view.read(cx)
+                    .tr("settings.passthrough.mouse.report.rate")
+                    .as_str()
+            )
+        );
+        report_rate.update(cx, |state, cx| state.focus(window, cx));
+    })
+    .unwrap();
+    for (index, rate) in [60usize, 125, 250, 500, 1000, 0].into_iter().enumerate() {
         cx.update_window(handle, |_, window, cx| {
-            window.click(("report-rate", rate), cx)
+            window.press("enter", cx);
+            assert_eq!(window.find(combobox_id).expanded(), Some(true));
+            window.press("down", cx);
+            if index == 0 {
+                window.press("down", cx);
+            }
+            window.press("enter", cx);
         })
         .unwrap();
         settle(cx, handle, &view);
-        cx.update(|cx| {
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            assert_eq!(window.find(combobox_id).expanded(), Some(false));
+            assert_eq!(window.find(combobox_id).focused(), Some(true));
+            assert_eq!(report_rate.read(cx).selected_values(), [rate.to_string()]);
             assert_eq!(view.read(cx).ui.passthrough_mouse_report_rate, rate as i32);
             view.update(cx, |view, _| view.controller.flush(true));
-        });
+        })
+        .unwrap();
         let saved = crate::config::Config::load(&folder.path().join("config.json")).unwrap();
         assert_eq!(saved.options.passthrough_mouse_report_rate, rate as u16);
     }
     cx.update_window(handle, |_, window, cx| {
         window.click(("language", 2usize), cx);
         assert_eq!(view.read(cx).ui.locale, "zh-CN");
+        assert_eq!(report_rate.read(cx).selection()[0].1.label, "自动");
         assert!(window.find("overlay").visible());
         assert!(window.find("overlay").bounds().right() <= window.viewport_size().width);
         assert_eq!(
@@ -138,4 +172,45 @@ fn settings_controls_update_their_own_preferences_and_persist(cx: &mut TestAppCo
     let saved = crate::config::Config::load(&folder.path().join("config.json")).unwrap();
     assert_eq!(saved.options.language.locale(), "zh-CN");
     assert_eq!(saved.options.passthrough_mouse_report_rate, 0);
+}
+
+#[gpui_kit::test]
+fn report_rate_combobox_syncs_existing_preferences_and_escape_keeps_selection(
+    cx: &mut TestAppContext,
+) {
+    let (handle, view, _folder) = open_sized(cx, 900., 1200.);
+    settle(cx, handle, &view);
+    cx.update_window(handle, |_, window, cx| {
+        cx.set_reduce_motion(true);
+        let report_rate = view.read(cx).report_rate.clone();
+        view.update(cx, |view, cx| {
+            view._pump = Task::ready(());
+            view.controller
+                .runtime
+                .config
+                .options
+                .passthrough_mouse_report_rate = 500;
+            view.controller.sync(&mut view.ui);
+            view.effects(window, cx);
+        });
+        window.render_frame(cx);
+        window.click(("nav", 3usize), cx);
+        assert_eq!(report_rate.read(cx).selected_values(), ["500"]);
+        assert_eq!(report_rate.read(cx).selection()[0].1.label, "500 Hz");
+        window.click("report-rate", cx);
+        let id = ("multi-combo-box", report_rate.entity_id());
+        assert_eq!(window.find(id).expanded(), Some(true));
+        view.update(cx, |view, cx| view.effects(window, cx));
+        window.press("down", cx);
+        window.press("escape", cx);
+        assert_eq!(window.find(id).expanded(), Some(false));
+        assert_eq!(window.find(id).focused(), Some(true));
+        assert_eq!(report_rate.read(cx).selected_values(), ["500"]);
+        assert_eq!(view.read(cx).ui.passthrough_mouse_report_rate, 500);
+        assert_eq!(
+            view.read(cx).report_rate.entity_id(),
+            report_rate.entity_id()
+        );
+    })
+    .unwrap();
 }

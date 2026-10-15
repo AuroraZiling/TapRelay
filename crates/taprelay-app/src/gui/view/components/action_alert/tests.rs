@@ -188,7 +188,7 @@ fn matches_native_variants_sizes_banner_and_rich_content_without_action(cx: &mut
                                     banner,
                                     content,
                                     title: true,
-                                    closable: true,
+                                    closable: false,
                                     ..Default::default()
                                 };
                                 cx.notify();
@@ -326,7 +326,10 @@ fn action_and_close_remain_independent_in_normal_and_banner_modes(cx: &mut TestA
             window.press("enter", cx);
             assert_eq!(view.read(cx).actions, 2);
             assert_eq!(view.read(cx).closes, 0);
-            window.within("alert").click("close", cx);
+            window.press("tab", cx);
+            assert_eq!(window.find("close").focused(), Some(true));
+            assert_eq!(window.find("close").label(), Some("Close alert"));
+            window.press("enter", cx);
             assert_eq!(view.read(cx).closes, 1);
             assert!(window.try_find("alert").is_none());
             assert!(window.try_find("action").is_none());

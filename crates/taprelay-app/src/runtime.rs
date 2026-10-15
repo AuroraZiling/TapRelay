@@ -937,7 +937,7 @@ impl Runtime {
                             .capture
                             .as_ref()
                             .is_some_and(|capture| capture.kind == CaptureKind::MappingOutput);
-                        if event.code == InputCode::Key(0x1b) && event.down && !output {
+                        if event.code == InputCode::Key(0x1b) && event.down {
                             self.finish_recording();
                             continue;
                         }
@@ -1842,7 +1842,7 @@ mod tests {
     }
 
     #[test]
-    fn receiver_recording_accepts_mouse_buttons_and_escape() {
+    fn receiver_recording_accepts_mouse_buttons_and_escape_cancels() {
         let mut runtime = capture_runtime();
         runtime
             .apply_binding_command(BindingCommand::BeginCustomCapture {
@@ -1878,7 +1878,7 @@ mod tests {
         assert!(runtime.capture().is_none());
         assert_eq!(
             runtime.custom_capture_result.as_ref().unwrap().3,
-            Shortcut::keyboard(ModifierSet::empty(), 0x1b)
+            Shortcut::mouse(ModifierSet::empty(), MouseButton::Left)
         );
     }
 

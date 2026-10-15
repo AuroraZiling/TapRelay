@@ -20,7 +20,8 @@ impl AppView {
                     false,
                     cx,
                 )
-                .selected(self.ui.theme_choice == index as i32),
+                .selected(self.ui.theme_choice == index as i32)
+                .toggled(self.ui.theme_choice == index as i32),
             );
         }
         let mut languages = div().h_flex().gap_2();
@@ -33,10 +34,13 @@ impl AppView {
                     false,
                     cx,
                 )
-                .selected(self.ui.language_choice == index as i32),
+                .selected(self.ui.language_choice == index as i32)
+                .toggled(self.ui.language_choice == index as i32),
             );
         }
-        appearance = appearance.child(themes).child(languages);
+        appearance = appearance
+            .child(self.reveal_focus("theme-options", themes.flex_wrap()))
+            .child(self.reveal_focus("language-options", languages.flex_wrap()));
         let mut rates = div().h_flex().gap_2().flex_wrap();
         for rate in [0, 60, 125, 250, 500, 1000] {
             rates = rates.child(
@@ -51,7 +55,8 @@ impl AppView {
                     false,
                     cx,
                 )
-                .selected(self.ui.passthrough_mouse_report_rate == rate),
+                .selected(self.ui.passthrough_mouse_report_rate == rate)
+                .toggled(self.ui.passthrough_mouse_report_rate == rate),
             );
         }
         let passthrough = self
@@ -64,8 +69,8 @@ impl AppView {
                 Action::SetPassthroughOverlay,
                 cx,
             ))
-            .child(self.tr("settings.passthrough.mouse.report.rate"))
-            .child(rates)
+            .child(self.text(self.tr("settings.passthrough.mouse.report.rate")))
+            .child(self.reveal_focus("rate-options", rates))
             .child(self.caption(self.tr("settings.passthrough.mouse.report.rate.hint"), cx))
             .child(self.setting(
                 "reverse-scroll",
@@ -127,13 +132,16 @@ impl AppView {
                 Action::SetAlwaysAdmin,
                 cx,
             ))
-            .child(div().child(self.app_button(
-                "settings-elevate",
-                "permissions.restart",
-                Action::Elevate,
-                self.ui.elevated,
-                cx,
-            )));
+            .child(self.reveal_focus(
+                "admin-action",
+                div().child(self.app_button(
+                    "settings-elevate",
+                    "permissions.restart",
+                    Action::Elevate,
+                    self.ui.elevated,
+                    cx,
+                )),
+            ));
         let notifications = self
             .section("settings.notifications")
             .child(self.setting(
@@ -154,57 +162,70 @@ impl AppView {
             ));
         let licensing = self
             .section("settings.licensing")
-            .child("GPL-3.0-only")
+            .child(self.text("GPL-3.0-only"))
             .child(
-                div()
-                    .h_flex()
-                    .gap_2()
-                    .child(self.app_button(
-                        "license",
-                        "settings.license",
-                        Action::License,
-                        false,
-                        cx,
-                    ))
-                    .child(self.app_button(
-                        "notices",
-                        "settings.third.party.notices",
-                        Action::ThirdPartyNotices,
-                        false,
-                        cx,
-                    )),
+                self.reveal_focus(
+                    "license-actions",
+                    div()
+                        .h_flex()
+                        .gap_2()
+                        .flex_wrap()
+                        .child(self.app_button(
+                            "license",
+                            "settings.license",
+                            Action::License,
+                            false,
+                            cx,
+                        ))
+                        .child(self.app_button(
+                            "notices",
+                            "settings.third.party.notices",
+                            Action::ThirdPartyNotices,
+                            false,
+                            cx,
+                        )),
+                ),
             );
         let about = self
             .section("settings.about")
-            .child(format!("TapRelay {}", self.ui.app_version))
+            .child(self.text(format!("TapRelay {}", self.ui.app_version)))
             .child(self.caption(self.ui.data_directory.clone(), cx))
             .child(
-                div()
-                    .h_flex()
-                    .gap_2()
-                    .flex_wrap()
-                    .child(self.app_button(
-                        "repository",
-                        "settings.repository",
-                        Action::Repository,
-                        false,
-                        cx,
-                    ))
-                    .child(self.app_button(
-                        "data-folder",
-                        "settings.data.folder",
-                        Action::DataFolder,
-                        false,
-                        cx,
-                    ))
-                    .child(self.app_button(
-                        "logs-folder",
-                        "logs.folder",
-                        Action::LogsFolder,
-                        false,
-                        cx,
-                    ))
-                    .child(self.app_button("wizard", "settings.wizard", Action::Wizard, false, cx)),
+                self.reveal_focus(
+                    "about-actions",
+                    div()
+                        .h_flex()
+                        .gap_2()
+                        .flex_wrap()
+                        .child(self.app_button(
+                            "repository",
+                            "settings.repository",
+                            Action::Repository,
+                            false,
+                            cx,
+                        ))
+                        .child(self.app_button(
+                            "data-folder",
+                            "settings.data.folder",
+                            Action::DataFolder,
+                            false,
+                            cx,
+                        ))
+                        .child(self.app_button(
+                            "logs-folder",
+                            "logs.folder",
+                            Action::LogsFolder,
+                            false,
+                            cx,
+                        ))
+                        .child(self.app_button(
+                            "wizard",
+                            "settings.wizard",
+                            Action::Wizard,
+                            false,
+                            cx,
+                        )),
+                ),
             );
         self.scroller(
             "settings",
@@ -221,7 +242,10 @@ impl AppView {
     }
 
     fn section(&self, key: &'static str) -> GroupBox {
-        GroupBox::new().id(key).fill().title(self.tr(key))
+        GroupBox::new()
+            .id(key)
+            .fill()
+            .title(self.text(self.tr(key)).role(Role::Heading).aria_level(2))
     }
 
     fn setting(
@@ -232,32 +256,36 @@ impl AppView {
         value: bool,
         action: Action,
         cx: &Context<Self>,
-    ) -> Div {
-        div()
-            .h_flex()
-            .gap_4()
-            .child(
-                div()
-                    .v_flex()
-                    .gap_1()
-                    .flex_1()
-                    .min_w_0()
-                    .child(self.tr(label))
-                    .when(!hint.is_empty(), |row| {
-                        row.child(self.caption(self.tr(hint), cx))
-                    }),
-            )
-            .child(
-                Switch::new(id)
-                    .accessibility_label(self.tr(label))
-                    .checked(value)
-                    .on_change(cx.listener(move |this, checked: &bool, window, cx| {
-                        this.dispatch(
-                            Command::App(action, if *checked { "1" } else { "0" }.into()),
-                            window,
-                            cx,
-                        )
-                    })),
-            )
+    ) -> AnyElement {
+        self.reveal_focus(
+            (ElementId::from(id), "row"),
+            div()
+                .h_flex()
+                .gap_4()
+                .child(
+                    div()
+                        .v_flex()
+                        .gap_1()
+                        .flex_1()
+                        .min_w_0()
+                        .child(self.text(self.tr(label)))
+                        .when(!hint.is_empty(), |row| {
+                            row.child(self.caption(self.tr(hint), cx))
+                        }),
+                )
+                .child(
+                    Switch::new(id)
+                        .accessibility_label(self.tr(label))
+                        .checked(value)
+                        .on_change(cx.listener(move |this, checked: &bool, window, cx| {
+                            this.dispatch(
+                                Command::App(action, if *checked { "1" } else { "0" }.into()),
+                                window,
+                                cx,
+                            )
+                        })),
+                ),
+        )
+        .into_any_element()
     }
 }

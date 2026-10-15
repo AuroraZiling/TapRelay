@@ -15,7 +15,7 @@ impl AppView {
     pub(super) fn mapping_editor(&self, cx: &Context<Self>) -> AnyElement {
         let mapping = &self.ui.mapping;
         let busy = mapping.busy || mapping.saving || self.controller.recording();
-        let field = |key: &str| div().v_flex().gap_3().child(self.tr(key));
+        let field = |key: &str| div().v_flex().gap_3().child(self.text(self.tr(key)));
         let mut input = div().h_flex().gap_2().flex_wrap();
         for (slot, text) in mapping.inputs.iter().enumerate() {
             let recording = mapping.capture_slot == slot as i32;
@@ -37,16 +37,17 @@ impl AppView {
                             busy,
                             cx,
                         )
+                        .accessibility_label(self.tr_object("a11y.record_shortcut", text))
                         .selected(recording),
                     )
                     .child(self.icon_button(
                         ("mapping-remove-input", slot),
                         IconName::X,
-                        self.tr(if recording {
-                            "capture.cancel_shortcut"
+                        if recording {
+                            self.tr("capture.cancel_shortcut")
                         } else {
-                            "common.remove"
-                        }),
+                            self.tr_object("a11y.remove_shortcut", text)
+                        },
                         Command::Mapping(
                             if recording {
                                 "cancel-capture"
@@ -92,6 +93,7 @@ impl AppView {
                     .label(self.tr(key))
                     .flex_1()
                     .selected(mapping.entry_mode == mode)
+                    .toggled(mapping.entry_mode == mode)
                     .disabled(busy)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.ui.mapping.entry_mode = mode;
@@ -115,86 +117,104 @@ impl AppView {
         } else {
             mapping.selected_output.label.clone()
         });
-        output = output.child(modes).child(
-            GroupBox::new()
-                .id("mapping-output-preview")
-                .fill()
-                .content_style(StyleRefinement::default().min_h_16())
-                .child(if mapping.capture_slot == 2 {
-                    mapping.capture_text.clone()
-                } else {
-                    preview.join(" + ")
-                }),
-        );
+        output = output
+            .child(self.reveal_focus("output-mode-focus", modes))
+            .child(
+                GroupBox::new()
+                    .id("mapping-output-preview")
+                    .fill()
+                    .content_style(StyleRefinement::default().min_h_16())
+                    .child(
+                        self.text(if mapping.capture_slot == 2 {
+                            mapping.capture_text.clone()
+                        } else {
+                            preview.join(" + ")
+                        })
+                        .role(Role::Status),
+                    ),
+            );
         if mapping.entry_mode == 0 {
             output = output
                 .child(
-                    div().h_flex().gap_2().child(
-                        self.button(
-                            "mapping-record-output",
-                            if mapping.capture_slot == 2 {
-                                self.tr("capture.cancel_shortcut")
-                            } else {
-                                self.tr("mappings.record_output")
-                            },
-                            Command::Mapping(
+                    self.reveal_focus(
+                        "output-record-focus",
+                        div().h_flex().gap_2().child(
+                            self.button(
+                                "mapping-record-output",
                                 if mapping.capture_slot == 2 {
-                                    "cancel-capture"
+                                    self.tr("capture.cancel_shortcut")
                                 } else {
-                                    "capture-output"
+                                    self.tr("mappings.record_output")
                                 },
-                                String::new(),
-                            ),
-                            busy && mapping.capture_slot != 2,
-                            cx,
-                        )
-                        .selected(mapping.capture_slot == 2),
+                                Command::Mapping(
+                                    if mapping.capture_slot == 2 {
+                                        "cancel-capture"
+                                    } else {
+                                        "capture-output"
+                                    },
+                                    String::new(),
+                                ),
+                                busy && mapping.capture_slot != 2,
+                                cx,
+                            )
+                            .selected(mapping.capture_slot == 2),
+                        ),
                     ),
                 )
                 .child(self.caption(self.tr("mappings.mouse_output_help"), cx));
         } else {
             output = output
                 .child(self.caption(self.tr("mappings.manual_output_help"), cx))
-                .child(self.tr("mappings.search_output"))
+                .child(self.text(self.tr("mappings.search_output")))
                 .child(
-                    Input::new(&self.output_filter)
-                        .id("mapping-output-filter")
-                        .aria_label(self.tr("mappings.search_output"))
-                        .disabled(busy),
+                    self.reveal_focus(
+                        "output-filter-focus",
+                        Input::new(&self.output_filter)
+                            .id("mapping-output-filter")
+                            .aria_label(self.tr("mappings.search_output"))
+                            .disabled(busy),
+                    ),
                 );
             let options = mapping.output_options.clone();
             let weak = cx.entity().downgrade();
             output = output.child(
-                div().child(
-                    Button::new("mapping-output-choice")
-                        .label(if mapping.selected_output.value.is_empty() {
-                            self.tr("mappings.select_output")
-                        } else {
-                            mapping.selected_output.label.clone()
-                        })
-                        .disabled(busy)
-                        .dropdown_menu(move |mut menu, _, _| {
-                            for option in &options {
-                                let weak = weak.clone();
-                                let value = option.value.clone();
-                                menu =
-                                    menu.item(PopupMenuItem::new(option.label.clone()).on_click(
-                                        move |_, window, cx| {
-                                            let _ = weak.update(cx, |this, cx| {
-                                                this.dispatch(
-                                                    Command::Mapping(
-                                                        "select-output",
-                                                        value.clone(),
-                                                    ),
-                                                    window,
-                                                    cx,
-                                                )
-                                            });
-                                        },
-                                    ));
-                            }
-                            menu
-                        }),
+                self.reveal_focus(
+                    "output-choice-focus",
+                    div().child(
+                        Button::new("mapping-output-choice")
+                            .label(if mapping.selected_output.value.is_empty() {
+                                self.tr("mappings.select_output")
+                            } else {
+                                mapping.selected_output.label.clone()
+                            })
+                            .accessibility_label(
+                                self.tr_object("a11y.output", &mapping.selected_output.label),
+                            )
+                            .disabled(busy)
+                            .dropdown_menu(move |mut menu, _, _| {
+                                for option in &options {
+                                    let weak = weak.clone();
+                                    let value = option.value.clone();
+                                    menu = menu.item(
+                                        PopupMenuItem::new(option.label.clone()).on_click(
+                                            move |_, window, cx| {
+                                                let _ = weak.update(cx, |this, cx| {
+                                                    this.dispatch(
+                                                        Command::Mapping(
+                                                            "select-output",
+                                                            value.clone(),
+                                                        ),
+                                                        window,
+                                                        cx,
+                                                    )
+                                                });
+                                            },
+                                        ),
+                                    );
+                                }
+                                menu
+                            }),
+                    ),
                 ),
             );
             if mapping.output_options.is_empty() {
@@ -225,12 +245,13 @@ impl AppView {
             );
         }
         output = output
-            .child(modifiers)
+            .child(self.reveal_focus("output-modifiers-focus", modifiers))
             .child(self.caption(self.tr("mappings.output_help"), cx));
         let options = mapping.scopes.clone();
         let weak = cx.entity().downgrade();
         let scopes = Button::new("mapping-scope-choice")
             .label(mapping.scope_label.clone())
+            .accessibility_label(self.tr_object("a11y.scope", &mapping.scope_label))
             .w_full()
             .disabled(busy)
             .dropdown_menu(move |mut menu, _, _| {
@@ -256,20 +277,29 @@ impl AppView {
             .min_w_0()
             .gap_6()
             .child(
-                field("common.description").child(
-                    Input::new(&self.mapping_name)
-                        .id("mapping-name")
-                        .aria_label(self.tr("common.description"))
-                        .disabled(busy),
+                self.reveal_focus(
+                    "mapping-name-focus",
+                    field("common.description").child(
+                        Input::new(&self.mapping_name)
+                            .id("mapping-name")
+                            .aria_label(self.tr("common.description"))
+                            .disabled(busy),
+                    ),
                 ),
             )
-            .child(field("common.effective_scope").child(scopes))
+            .child(self.reveal_focus(
+                "mapping-scope-focus",
+                field("common.effective_scope").child(scopes),
+            ))
             .child(
-                field("mappings.input")
-                    .child(input)
-                    .when(!mapping.input_error.is_empty(), |section| {
-                        section.child(self.error(&mapping.input_error, cx))
-                    }),
+                self.reveal_focus(
+                    "mapping-input-focus",
+                    field("mappings.input")
+                        .child(input)
+                        .when(!mapping.input_error.is_empty(), |section| {
+                            section.child(self.error(&mapping.input_error, cx))
+                        }),
+                ),
             );
         let mut body = div().v_flex().gap_4().child(
             div()

@@ -26,7 +26,7 @@ impl AppView {
                 })
                 .size_4(),
             )
-            .child(div().child(self.ui.adapter_label.clone()))
+            .child(self.text(self.ui.adapter_label.clone()))
     }
 
     pub(in crate::gui::view) fn receiver_actions(&self, cx: &Context<Self>) -> [Button; 2] {

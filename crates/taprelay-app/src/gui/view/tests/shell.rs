@@ -176,18 +176,25 @@ fn sidebar_toggles_and_navigates_in_both_locales(cx: &mut TestAppContext) {
             });
             window.render_frame(cx);
             assert!(!view.read(cx).sidebar_collapsed);
-            assert_eq!(window.find("collapse").label(), Some("Collapse sidebar"));
+            assert_eq!(
+                window.find("collapse").label(),
+                Some(view.read(cx).tr("nav.collapse").as_str())
+            );
             let expanded_width = window.find("navigation").bounds().size.width;
             for collapsed in [true, false] {
                 window.click("collapse", cx);
                 assert_eq!(view.read(cx).sidebar_collapsed, collapsed);
                 assert_eq!(
                     window.find("collapse").label(),
-                    Some(if collapsed {
-                        "Expand sidebar"
-                    } else {
-                        "Collapse sidebar"
-                    })
+                    Some(
+                        view.read(cx)
+                            .tr(if collapsed {
+                                "nav.expand"
+                            } else {
+                                "nav.collapse"
+                            })
+                            .as_str()
+                    )
                 );
                 let width = window.find("navigation").bounds().size.width;
                 if collapsed {

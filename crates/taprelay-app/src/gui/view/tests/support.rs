@@ -70,6 +70,7 @@ pub(super) fn open_with_transport(
         Shell::Headless {
             autostart: false,
             running_apps: Vec::new(),
+            notifications: Default::default(),
         },
         Default::default(),
         None,

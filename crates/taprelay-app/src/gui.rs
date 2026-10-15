@@ -205,6 +205,7 @@ enum Shell {
     Headless {
         autostart: bool,
         running_apps: Vec<String>,
+        notifications: std::cell::RefCell<Vec<(String, String)>>,
     },
 }
 
@@ -220,7 +221,9 @@ impl Shell {
         match self {
             Self::Native(desktop) => desktop.notify(title, body),
             #[cfg(test)]
-            Self::Headless { .. } => {}
+            Self::Headless { notifications, .. } => {
+                notifications.borrow_mut().push((title.into(), body.into()))
+            }
         }
     }
 
@@ -368,6 +371,14 @@ impl Controller {
     }
     fn say(&mut self, message: String) {
         self.pending_notification = Some(message);
+    }
+    fn passthrough_feedback(&mut self, notice: &crate::passthrough_overlay::Notice) {
+        let (prefix, device, suffix) = notice.text_parts(self.locale());
+        let message = format!("{prefix}{device}{suffix}");
+        if self.runtime.config.options.notifications {
+            self.desktop.notify("TapRelay", &message);
+        }
+        self.say(message);
     }
     fn command_error(&mut self, error: &anyhow::Error) {
         let message = match error.downcast_ref::<HandoffError>() {
@@ -671,6 +682,11 @@ impl Controller {
                 Notice::Test(_) => {}
                 Notice::Passthrough(notice) => passthrough_notice = Some(notice),
             }
+        }
+        if self.exit.is_none()
+            && let Some(notice) = &passthrough_notice
+        {
+            self.passthrough_feedback(notice);
         }
         #[cfg(windows)]
         {

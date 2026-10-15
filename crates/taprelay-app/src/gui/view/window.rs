@@ -1,11 +1,46 @@
+use super::components::LiveElement;
 use super::{AppView, Command};
 use crate::gui::{BindingCommand, WindowCommand, desktop};
+use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::{ActiveTheme, Theme, ThemeMode, WindowExt, notification::Notification};
+use gpui_kit::component::{
+    StyledExt,
+    button::{Button, ButtonVariants},
+};
 use gpui_kit::{prelude::*, *};
 use std::time::Instant;
 
 struct FeedbackNotification;
 struct ProgressNotification;
+
+fn notification(message: String, close_label: String) -> Notification {
+    Notification::new().content(move |_, _, cx| {
+        div()
+            .h_flex()
+            .items_start()
+            .gap_3()
+            .child(
+                div()
+                    .id("notification-message")
+                    .role(Role::Status)
+                    .aria_label(message.clone())
+                    .flex_1()
+                    .min_w_0()
+                    .text_sm()
+                    .child(message.clone())
+                    .live(accesskit::Live::Polite)
+                    .test_support(),
+            )
+            .child(
+                Button::new("notification-dismiss")
+                    .ghost()
+                    .icon(gpui_kit::assets::IconName::Close)
+                    .accessibility_label(close_label.clone())
+                    .on_click(cx.listener(|this, _, window, cx| this.dismiss(window, cx))),
+            )
+            .into_any_element()
+    })
+}
 
 impl AppView {
     pub(super) fn save_geometry(&mut self, window: &Window) {
@@ -41,11 +76,10 @@ impl AppView {
         }
         gpui_kit::component::set_locale(&self.ui.locale);
         if let Some(message) = self.controller.pending_notification.take() {
+            let close_label = self.tr("a11y.dismiss_notification");
             window.defer(cx, move |window, cx| {
                 window.push_notification(
-                    Notification::new()
-                        .id::<FeedbackNotification>()
-                        .message(message),
+                    notification(message, close_label).id::<FeedbackNotification>(),
                     cx,
                 );
             });
@@ -53,14 +87,14 @@ impl AppView {
         if self.last_progress_message != self.ui.progress_message {
             self.last_progress_message = self.ui.progress_message.clone();
             let message = self.last_progress_message.clone();
+            let close_label = self.tr("a11y.dismiss_notification");
             window.defer(cx, move |window, cx| {
                 if message.is_empty() {
                     window.remove_notification::<ProgressNotification>(cx);
                 } else {
                     window.push_notification(
-                        Notification::new()
+                        notification(message, close_label)
                             .id::<ProgressNotification>()
-                            .message(message)
                             .autohide(false),
                         cx,
                     );
@@ -169,7 +203,7 @@ impl AppView {
         if desktop::ui_input_is_injected() {
             return;
         }
-        if key == "escape" && down && self.ui.mapping.capture_slot != 2 {
+        if key == "escape" && down {
             self.dispatch(Command::Binding(BindingCommand::CancelCapture), window, cx);
         } else if let Some(code) = crate::capture_key::virtual_key(key) {
             self.controller

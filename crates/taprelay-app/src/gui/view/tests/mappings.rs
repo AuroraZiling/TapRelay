@@ -270,7 +270,9 @@ fn mapping_conflict_identifies_existing_function_without_saving(cx: &mut TestApp
 }
 
 #[gpui_kit::test]
-fn output_recording_accepts_tab_and_escape_without_moving_focus(cx: &mut TestAppContext) {
+fn output_recording_accepts_tab_and_escape_cancels_without_changing_output(
+    cx: &mut TestAppContext,
+) {
     let (handle, view, _folder) = open(cx);
     cx.update_window(handle, |_, window, cx| {
         view.update(cx, |view, cx| {
@@ -288,7 +290,7 @@ fn output_recording_accepts_tab_and_escape_without_moving_focus(cx: &mut TestApp
     for (key, output) in [
         ("tab", "key/43"),
         ("shift-tab", "key/43"),
-        ("escape", "key/41"),
+        ("escape", "key/43"),
     ] {
         cx.update_window(handle, |_, window, cx| {
             window.render_frame(cx);
@@ -334,7 +336,10 @@ fn records_input_selects_a_filtered_output_and_saves_through_controls(cx: &mut T
     wait_until(cx, handle, &view, |view| !view.controller.recording());
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
-        assert_eq!(window.find(("mapping-input", 0usize)).label(), Some("F8"));
+        assert_eq!(
+            window.find(("mapping-input", 0usize)).label(),
+            Some("Record shortcut for F8")
+        );
         window.click(("entry-mode", 1usize), cx);
         window.scroll(
             ("entry-mode", 1usize),
@@ -359,7 +364,10 @@ fn records_input_selects_a_filtered_output_and_saves_through_controls(cx: &mut T
     .unwrap();
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
-        assert_eq!(window.find("mapping-output-choice").label(), Some("F9"));
+        assert_eq!(
+            window.find("mapping-output-choice").label(),
+            Some("Output key: F9")
+        );
         window.click("mapping-save", cx);
     })
     .unwrap();

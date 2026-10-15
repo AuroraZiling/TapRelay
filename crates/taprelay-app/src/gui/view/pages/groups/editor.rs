@@ -54,14 +54,18 @@ impl AppView {
             .min_h_0()
             .gap_4()
             .child(
-                div().h_flex().gap_4().child(self.tr("groups.name")).child(
-                    div().flex_1().min_w_0().child(
-                        Input::new(&self.group_name)
-                            .id("group-name")
-                            .aria_label(self.tr("groups.name"))
-                            .disabled(busy),
+                div()
+                    .h_flex()
+                    .gap_4()
+                    .child(self.text(self.tr("groups.name")))
+                    .child(
+                        div().flex_1().min_w_0().child(
+                            Input::new(&self.group_name)
+                                .id("group-name")
+                                .aria_label(self.tr("groups.name"))
+                                .disabled(busy),
+                        ),
                     ),
-                ),
             )
             .child(tabs);
         if group.choosing_running {
@@ -117,9 +121,8 @@ impl AppView {
                 .min_w_0()
                 .gap_1()
                 .child(
-                    div()
-                        .text_ellipsis()
-                        .child(icons.name(&app.path).unwrap_or(&app.name).to_string()),
+                    self.text(icons.name(&app.path).unwrap_or(&app.name).to_string())
+                        .text_ellipsis(),
                 )
                 .child(self.caption(app.path.clone(), cx).text_ellipsis());
             if icons.missing(&app.path) {
@@ -139,11 +142,14 @@ impl AppView {
                         } else {
                             IconName::X
                         },
-                        self.tr(if group.choosing_running {
-                            "common.add"
-                        } else {
-                            "common.remove"
-                        }),
+                        self.tr_object(
+                            if group.choosing_running {
+                                "a11y.add_app"
+                            } else {
+                                "a11y.remove_app"
+                            },
+                            icons.name(&app.path).unwrap_or(&app.name),
+                        ),
                         Command::Group(
                             if group.choosing_running {
                                 "add"
@@ -154,7 +160,13 @@ impl AppView {
                         ),
                         busy,
                         cx,
-                    )),
+                    ))
+                    .map(|row| {
+                        self.reveal_focus(
+                            SharedString::from(format!("app-focus-{}", app.path)),
+                            row,
+                        )
+                    }),
             );
         }
         body.child(self.scroller("group-editor", rows))

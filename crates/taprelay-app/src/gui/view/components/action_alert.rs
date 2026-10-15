@@ -1,3 +1,4 @@
+use super::LiveElement;
 use std::rc::Rc;
 
 use gpui_kit::base::TestSupportExt;
@@ -158,10 +159,18 @@ impl RenderOnce for ActionAlert {
                 fg.mix_oklab(transparent_white(), 0.3),
             )
         };
+        let label = match &self.message {
+            Text::String(message) => Some(match &self.title {
+                Some(title) if !self.banner => format!("{title}. {message}"),
+                _ => message.to_string(),
+            }),
+            Text::TextView(_) => self.title.as_ref().map(ToString::to_string),
+        };
 
         h_flex()
             .id(self.id)
             .role(Role::Alert)
+            .when_some(label, |this, label| this.aria_label(label))
             .w_full()
             .text_color(fg)
             .bg(bg)
@@ -210,23 +219,17 @@ impl RenderOnce for ActionAlert {
             })
             .when_some(self.on_close, |this, on_close| {
                 this.child(
-                    div()
-                        .id("close")
-                        .test_support()
-                        .p_0p5()
-                        .rounded(cx.theme().radius)
-                        .hover(|this| this.bg(bg.opacity(0.8)))
-                        .active(|this| this.bg(bg.opacity(0.9)))
+                    Button::new("close")
+                        .ghost()
+                        .small()
+                        .accessibility_label("Close alert")
+                        .icon(IconName::Close)
                         .on_click(move |ev, window, cx| {
                             on_close(ev, window, cx);
-                        })
-                        .child(
-                            Icon::new(IconName::Close)
-                                .with_size(self.size.max(Size::Medium))
-                                .flex_shrink_0(),
-                        ),
+                        }),
                 )
             })
+            .live(gpui_kit::accesskit::Live::Assertive)
             .test_support()
             .into_any_element()
     }

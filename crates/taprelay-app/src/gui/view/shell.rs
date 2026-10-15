@@ -4,8 +4,9 @@ use gpui_kit::assets::IconName;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::base::motion::{Transition, transition};
 use gpui_kit::component::{
-    ActiveTheme, Collapsible, Icon, StyledExt, TitleBar,
-    sidebar::{SidebarItem, SidebarMenu, SidebarMenuItem, SidebarToggleButton},
+    ActiveTheme, Icon, Selectable, StyledExt, TitleBar,
+    button::{Button, ButtonVariants},
+    sidebar::SidebarToggleButton,
 };
 use gpui_kit::{prelude::*, *};
 use std::time::Duration;
@@ -33,7 +34,7 @@ impl AppView {
                     .flex_shrink_0()
                     .text_sm()
                     .child(img(self.app_icon.clone()).size_4())
-                    .child("TapRelay")
+                    .child(self.text("TapRelay"))
                     .test_support(),
             )
     }
@@ -52,26 +53,33 @@ impl AppView {
             cx,
         );
         let content_width = target_width - window.rem_size() * 1.25;
-        let nav = |page: usize, icon| {
-            SidebarMenuItem::new(self.tr(TITLES[page]))
-                .icon(Icon::new(icon).size_4())
-                .min_h_9()
-                .active(self.ui.page == page as i32)
+        let nav = |id: ElementId, page: usize, icon| {
+            let label = self.tr(TITLES[page]);
+            Button::new(id)
+                .ghost()
+                .icon(icon)
+                .accessibility_label(label.clone())
+                .tooltip(label.clone())
+                .h_9()
+                .w_full()
+                .when(!self.sidebar_collapsed, |button| {
+                    button.label(label).justify_start()
+                })
+                .selected(self.ui.page == page as i32)
+                .toggled(self.ui.page == page as i32)
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.dispatch(Command::App(Action::Navigate, page.to_string()), window, cx)
                 }))
         };
-        let menu = SidebarMenu::new()
-            .child(nav(0, IconName::LayoutDashboard))
-            .child(nav(1, IconName::Keyboard))
-            .child(nav(4, IconName::Folder))
-            .child(nav(2, IconName::Bluetooth))
-            .w(content_width)
-            .collapsed(self.sidebar_collapsed);
-        let settings = nav(3, IconName::Settings)
-            .collapsed(self.sidebar_collapsed)
-            .render(("nav", 3usize), window, cx)
-            .into_any_element();
+        let menu = div()
+            .v_flex()
+            .gap_1()
+            .child(nav("0-0".into(), 0, IconName::LayoutDashboard))
+            .child(nav("0-1".into(), 1, IconName::Keyboard))
+            .child(nav("0-2".into(), 4, IconName::Folder))
+            .child(nav("0-3".into(), 2, IconName::Bluetooth))
+            .w(content_width);
+        let settings = nav(("nav", 3usize).into(), 3, IconName::Settings);
         div()
             .id("navigation")
             .w(width)
@@ -94,11 +102,11 @@ impl AppView {
                     .child(
                         SidebarToggleButton::new()
                             .collapsed(self.sidebar_collapsed)
-                            .accessibility_label(if self.sidebar_collapsed {
-                                "Expand sidebar"
+                            .accessibility_label(self.tr(if self.sidebar_collapsed {
+                                "nav.expand"
                             } else {
-                                "Collapse sidebar"
-                            })
+                                "nav.collapse"
+                            }))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.sidebar_collapsed = !this.sidebar_collapsed;
                                 cx.notify();
@@ -112,7 +120,7 @@ impl AppView {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
-                    .child(menu.render(0usize, window, cx).into_any_element()),
+                    .child(menu),
             )
             .child(div().w(content_width).child(settings))
             .test_support()
@@ -144,14 +152,14 @@ impl AppView {
                 "common.edit"
             }));
         }
-        for crumb in crumbs {
+        for (index, crumb) in crumbs.into_iter().enumerate() {
             header = header
                 .child(
                     Icon::new(IconName::ChevronRight)
                         .size_4()
                         .text_color(cx.theme().muted_foreground),
                 )
-                .child(self.heading(crumb));
+                .child(self.heading(crumb).id(("breadcrumb", index)));
         }
         if self.ui.page == 2 {
             header = header.child(self.bluetooth_status(cx));

@@ -35,10 +35,19 @@ impl AppView {
                 busy,
                 cx,
             ));
-        dialog
-            .title(self.tr("common.save_changes"))
-            .child(self.tr("mappings.unsaved_help"))
-            .child(self.error(&self.ui.mapping.error, cx))
-            .footer(footer)
+        dialog.close_button(false).child(
+            self.dialog_content(
+                "mapping-leave-dialog",
+                self.tr("common.save_changes"),
+                div()
+                    .v_flex()
+                    .gap_3()
+                    .child(self.text(self.tr("mappings.unsaved_help")))
+                    .when(!self.ui.mapping.error.is_empty(), |body| {
+                        body.child(self.error(&self.ui.mapping.error, cx))
+                    }),
+                footer,
+            ),
+        )
     }
 }

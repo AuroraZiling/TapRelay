@@ -1,3 +1,4 @@
+use super::{LiveElement, LiveRegion};
 use crate::gui::view::AppView;
 use gpui_kit::component::{ActiveTheme, StyledExt};
 use gpui_kit::{prelude::*, *};
@@ -9,7 +10,7 @@ impl AppView {
         text: impl Into<SharedString>,
         on_position: impl Fn(Point<Pixels>) + 'static,
         cx: &App,
-    ) -> Stateful<Div> {
+    ) -> LiveRegion<Stateful<Div>> {
         let text = text.into();
         let signal = self.signal(cx);
         let dot = canvas(
@@ -37,6 +38,7 @@ impl AppView {
             .aria_label(text.clone())
             .child(dot)
             .child(div().min_w_0().child(text))
+            .live(accesskit::Live::Polite)
     }
 
     pub(in crate::gui::view) fn signal(&self, cx: &App) -> Hsla {

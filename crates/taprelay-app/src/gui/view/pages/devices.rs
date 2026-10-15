@@ -41,14 +41,18 @@ impl AppView {
                             .child(Icon::new(kind).size_5().flex_shrink_0())
                             .child(
                                 div()
+                                    .v_flex()
+                                    .gap_1()
                                     .flex_1()
                                     .min_w_0()
-                                    .text_ellipsis()
-                                    .child(row.name.clone()),
+                                    .child(self.text(row.name.clone()).text_ellipsis())
+                                    .child(self.caption(row.detail.clone(), cx)),
                             )
                             .child(
                                 div()
                                     .id(SharedString::from(format!("receiver-status-{}", row.id)))
+                                    .role(Role::Status)
+                                    .aria_label(format!("{}: {}", row.name, row.detail))
                                     .h_flex()
                                     .justify_center()
                                     .size_8()
@@ -89,11 +93,26 @@ impl AppView {
                                             !row.enabled || row.action.is_empty(),
                                             cx,
                                         )
+                                        .accessibility_label(format!(
+                                            "{}: {}",
+                                            if row.action.is_empty() {
+                                                self.tr("receiver.connect")
+                                            } else {
+                                                row.action_label.clone()
+                                            },
+                                            row.name
+                                        ))
                                         .w_full(),
                                     ),
                             ),
                     )
-                    .test_support(),
+                    .test_support()
+                    .map(|row_view| {
+                        self.reveal_focus(
+                            SharedString::from(format!("device-focus-{}", row.id)),
+                            row_view,
+                        )
+                    }),
             );
         }
         if self.ui.paired_devices.is_empty() && !self.ui.scanning {

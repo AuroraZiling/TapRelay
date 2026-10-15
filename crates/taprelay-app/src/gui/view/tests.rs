@@ -1,3 +1,4 @@
+mod accessibility;
 mod alerts;
 mod bindings;
 mod devices;

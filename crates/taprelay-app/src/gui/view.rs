@@ -33,6 +33,8 @@ pub(super) struct AppView {
     focus: FocusHandle,
     capture_focus: Option<FocusHandle>,
     sidebar_collapsed: bool,
+    content_scroll: ScrollHandle,
+    scroll_region: std::cell::Cell<&'static str>,
     app_icon: Arc<Image>,
     group_name: Entity<InputState>,
     mapping_name: Entity<InputState>,
@@ -164,6 +166,8 @@ impl AppView {
             focus: cx.focus_handle(),
             capture_focus: None,
             sidebar_collapsed: false,
+            content_scroll: ScrollHandle::new(),
+            scroll_region: std::cell::Cell::new(""),
             app_icon: Arc::new(Image::from_bytes(
                 ImageFormat::Png,
                 include_bytes!("../../resources/taprelay-128.png").to_vec(),
@@ -187,6 +191,10 @@ impl AppView {
 
     fn tr(&self, key: &str) -> String {
         self.controller.tr(key)
+    }
+
+    fn tr_object(&self, key: &str, object: &str) -> String {
+        rust_i18n::t!(key, locale = self.ui.locale.as_str(), object = object).into_owned()
     }
 
     fn dispatch(&mut self, command: Command, window: &mut Window, cx: &mut Context<Self>) {

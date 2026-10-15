@@ -1,4 +1,4 @@
-use super::support::{open, open_sized};
+use super::support::{open, open_sized, settle};
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{AppContext, TestAppContext, px};
 use std::time::Instant;
@@ -56,6 +56,50 @@ fn preserves_overview_proportions_in_both_themes_and_window_sizes(cx: &mut TestA
             }
         })
         .unwrap();
+    }
+}
+
+#[gpui_kit::test]
+fn overview_listener_control_tracks_runtime_and_rejects_testing_without_receiver(
+    cx: &mut TestAppContext,
+) {
+    let (handle, view, _folder) = open(cx);
+    for listening in [true, false] {
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.click("listen", cx);
+        })
+        .unwrap();
+        settle(cx, handle, &view);
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            assert_eq!(view.read(cx).controller.runtime.listening, listening);
+            assert_eq!(
+                window.find("listen").label(),
+                Some(
+                    view.read(cx)
+                        .tr(if listening {
+                            "listening.stop"
+                        } else {
+                            "listening.start"
+                        })
+                        .as_str()
+                )
+            );
+            window.click("test-receiver", cx);
+            assert!(matches!(
+                view.read(cx).controller.runtime.test,
+                crate::feedback::TestStatus::Idle
+            ));
+        })
+        .unwrap();
+        settle(cx, handle, &view);
+        cx.update(|cx| {
+            assert!(matches!(
+                view.read(cx).controller.runtime.test,
+                crate::feedback::TestStatus::Idle
+            ))
+        });
     }
 }
 

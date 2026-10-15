@@ -1,4 +1,4 @@
-use super::support::{open, settle};
+use super::support::{open, settle, wait_until};
 use crate::action::Action;
 use crate::gui::view::Command;
 use gpui_kit::test::TestWindowExt;
@@ -60,6 +60,13 @@ fn capture_escape_keeps_existing_shortcuts_and_restores_focus(cx: &mut TestAppCo
                 .clone();
             let id = gpui_kit::SharedString::from(format!("binding-add-{}", row.id));
             let before = view.read(cx).controller.runtime.config.functions.clone();
+            for _ in 0..32 {
+                if window.find(id.clone()).focused() == Some(true) {
+                    break;
+                }
+                window.press("tab", cx);
+            }
+            assert_eq!(window.find(id.clone()).focused(), Some(true));
             window.click(id.clone(), cx);
             (id, before)
         })
@@ -74,9 +81,52 @@ fn capture_escape_keeps_existing_shortcuts_and_restores_focus(cx: &mut TestAppCo
     })
     .unwrap();
     settle(cx, handle, &view);
-    cx.update(|cx| {
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
         assert!(!view.read(cx).controller.recording());
         assert_eq!(view.read(cx).controller.runtime.config.functions, before);
         assert!(view.read(cx).capture_focus.is_none());
-    });
+        assert_eq!(window.find(id).focused(), Some(true));
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn recording_a_shortcut_updates_the_row_and_saved_binding(cx: &mut TestAppContext) {
+    let (handle, view, folder) = open(cx);
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("0-1", cx);
+    })
+    .unwrap();
+    settle(cx, handle, &view);
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("binding-add-media.play-pause", cx);
+    })
+    .unwrap();
+    settle(cx, handle, &view);
+    cx.update_window(handle, |_, window, cx| {
+        assert!(view.read(cx).controller.recording());
+        window.press("f8", cx);
+    })
+    .unwrap();
+    wait_until(cx, handle, &view, |view| !view.controller.recording());
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("binding-media.play-pause-0").label(),
+            Some("F8")
+        );
+        view.update(cx, |view, _| view.controller.flush(true));
+    })
+    .unwrap();
+    let saved = crate::config::Config::load(&folder.path().join("config.json")).unwrap();
+    assert_eq!(
+        saved.functions[&taprelay_core::function::FunctionId::MediaPlayPause].shortcuts,
+        [taprelay_core::function::Shortcut::keyboard(
+            Default::default(),
+            0x77
+        )]
+    );
 }

@@ -10,3 +10,4 @@ mod settings;
 mod shell;
 mod smoke;
 mod support;
+mod wizard;

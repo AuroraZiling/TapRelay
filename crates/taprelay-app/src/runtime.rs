@@ -98,6 +98,11 @@ pub struct Runtime {
 
 impl Runtime {
     #[cfg(test)]
+    pub(crate) fn set_headless_transport(&mut self, transport: Box<dyn Transport>) {
+        self.transport = Some(transport);
+    }
+
+    #[cfg(test)]
     pub(crate) fn headless_tick(&mut self) {
         struct Input;
         impl crate::platform::InputSource for Input {

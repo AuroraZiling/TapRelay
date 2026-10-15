@@ -1,10 +1,9 @@
-use super::support::{open, settle};
+use super::support::{open, settle, wait_until};
 use crate::action::Action;
 use crate::config::Config;
 use crate::gui::view::Command;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{AppContext, TestAppContext, px};
-use std::time::{Duration, Instant};
 
 #[gpui_kit::test]
 fn mapping_editor_has_equal_columns_and_keeps_save_outside_scrolling(cx: &mut TestAppContext) {
@@ -292,13 +291,8 @@ fn output_recording_accepts_tab_and_escape_without_moving_focus(cx: &mut TestApp
         ("escape", "key/41"),
     ] {
         cx.update_window(handle, |_, window, cx| {
-            view.update(cx, |view, cx| {
-                view.dispatch(
-                    Command::Mapping("capture-output", String::new()),
-                    window,
-                    cx,
-                )
-            });
+            window.render_frame(cx);
+            window.click("mapping-record-output", cx);
         })
         .unwrap();
         settle(cx, handle, &view);
@@ -308,27 +302,89 @@ fn output_recording_accepts_tab_and_escape_without_moving_focus(cx: &mut TestApp
             assert!(view.read(cx).focus.is_focused(window));
         })
         .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(3);
-        loop {
-            let recording = cx
-                .update_window(handle, |_, window, cx| {
-                    view.update(cx, |view, cx| {
-                        view.controller.runtime.tick();
-                        view.controller.sync(&mut view.ui);
-                        view.effects(window, cx);
-                        view.controller.recording()
-                    })
-                })
-                .unwrap();
-            if !recording {
-                break;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "capture did not finish for {key}"
-            );
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        wait_until(cx, handle, &view, |view| !view.controller.recording());
         cx.update(|cx| assert_eq!(view.read(cx).ui.mapping.selected_output.value, output));
     }
+}
+
+#[gpui_kit::test]
+fn records_input_selects_a_filtered_output_and_saves_through_controls(cx: &mut TestAppContext) {
+    let (handle, view, folder) = open(cx);
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("0-1", cx);
+    })
+    .unwrap();
+    settle(cx, handle, &view);
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("custom-mappings", cx);
+        window.click("mapping-create", cx);
+        window.click("mapping-name", cx);
+        window.input("Recorded mapping 中文", cx);
+        window.click("mapping-add-input", cx);
+    })
+    .unwrap();
+    settle(cx, handle, &view);
+    cx.update_window(handle, |_, window, cx| {
+        assert!(view.read(cx).controller.recording());
+        window.press("f8", cx);
+    })
+    .unwrap();
+    wait_until(cx, handle, &view, |view| !view.controller.recording());
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(window.find(("mapping-input", 0usize)).label(), Some("F8"));
+        window.click(("entry-mode", 1usize), cx);
+        window.scroll(
+            ("entry-mode", 1usize),
+            gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-250.))),
+            cx,
+        );
+        window.click("mapping-output-filter", cx);
+        window.input("F9", cx);
+        assert_eq!(window.find("mapping-output-filter").value(), Some("F9"));
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        assert_eq!(view.read(cx).ui.mapping.output_options.len(), 1);
+        window.click("mapping-output-choice", cx);
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(window.within("popup-menu").find(0usize).label(), Some("F9"));
+        window.within("popup-menu").click(0usize, cx);
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(window.find("mapping-output-choice").label(), Some("F9"));
+        window.click("mapping-save", cx);
+    })
+    .unwrap();
+    settle(cx, handle, &view);
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("mapping-create").visible());
+        assert!(!view.read(cx).ui.mapping.editor);
+    })
+    .unwrap();
+    let saved = Config::load(&folder.path().join("config.json")).unwrap();
+    assert_eq!(saved.custom_mappings.len(), 1);
+    assert_eq!(saved.custom_mappings[0].name, "Recorded mapping 中文");
+    assert_eq!(
+        saved.custom_mappings[0].shortcuts,
+        [taprelay_core::function::Shortcut::keyboard(
+            Default::default(),
+            0x77
+        )]
+    );
+    assert_eq!(
+        saved.custom_mappings[0].output,
+        taprelay_core::mapping::MappingOutput::Keyboard {
+            usage: 0x42,
+            modifiers: 0
+        }
+    );
 }

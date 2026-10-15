@@ -202,7 +202,10 @@ enum ExitIntent {
 enum Shell {
     Native(Desktop),
     #[cfg(test)]
-    Headless,
+    Headless {
+        autostart: bool,
+        running_apps: Vec<String>,
+    },
 }
 
 impl Shell {
@@ -210,14 +213,36 @@ impl Shell {
         match self {
             Self::Native(desktop) => desktop.update(state, tip, listening, labels),
             #[cfg(test)]
-            Self::Headless => {}
+            Self::Headless { .. } => {}
         }
     }
     fn notify(&self, title: &str, body: &str) {
         match self {
             Self::Native(desktop) => desktop.notify(title, body),
             #[cfg(test)]
-            Self::Headless => {}
+            Self::Headless { .. } => {}
+        }
+    }
+
+    fn running_apps(&self) -> Result<Vec<String>> {
+        match self {
+            Self::Native(_) => Ok(crate::platform::foreground_apps::running()?),
+            #[cfg(test)]
+            Self::Headless { running_apps, .. } => Ok(running_apps.clone()),
+        }
+    }
+
+    fn set_autostart(&mut self, enabled: bool) -> Result<bool> {
+        match self {
+            Self::Native(_) => {
+                desktop::set_autostart(enabled)?;
+                Ok(desktop::autostart_enabled())
+            }
+            #[cfg(test)]
+            Self::Headless { autostart, .. } => {
+                *autostart = enabled;
+                Ok(*autostart)
+            }
         }
     }
 }
@@ -613,9 +638,9 @@ impl Controller {
                 self.saves.changed();
             }
             Action::SetAutostart => {
-                desktop::set_autostart(action::toggle(value)?)?;
                 // Read back what the OS accepted instead of trusting the request.
-                self.runtime.config.options.autostart = desktop::autostart_enabled();
+                self.runtime.config.options.autostart =
+                    self.desktop.set_autostart(action::toggle(value)?)?;
                 self.saves.changed();
             }
             Action::Elevate => {

@@ -1,7 +1,10 @@
 use super::{LiveElement, LiveRegion};
 use crate::gui::view::AppView;
 use gpui_kit::base::TestSupportExt;
-use gpui_kit::component::{ActiveTheme, StyledExt, scroll::ScrollableElement};
+use gpui_kit::component::{
+    ActiveTheme, StyledExt,
+    scroll::{ScrollableElement, Scrollbar, ScrollbarMode},
+};
 use gpui_kit::{prelude::*, *};
 use std::panic::Location;
 
@@ -52,16 +55,41 @@ impl AppView {
         if self.scroll_region.replace(id) != id {
             self.content_scroll.set_offset(Point::default());
         }
-        div()
+        let scroller = div()
             .id(id)
             .flex_1()
             .min_h_0()
             .min_w_0()
             .overflow_y_scroll()
             .track_scroll(&self.content_scroll)
-            .child(div().v_flex().gap_4().child(content))
-            .vertical_scrollbar(&self.content_scroll)
-            .test_support()
-            .into_any_element()
+            .child(
+                div()
+                    .v_flex()
+                    .gap_4()
+                    .when(id == "bindings", |content| content.pr_3())
+                    .child(content),
+            );
+        if id == "bindings" {
+            div()
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .min_w_0()
+                .child(scroller.size_full().test_support())
+                .child(
+                    div().absolute().inset_0().child(
+                        Scrollbar::vertical(&self.content_scroll)
+                            .id("bindings-scrollbar")
+                            .mode(ScrollbarMode::Always)
+                            .viewport_from_layout(),
+                    ),
+                )
+                .into_any_element()
+        } else {
+            scroller
+                .vertical_scrollbar(&self.content_scroll)
+                .test_support()
+                .into_any_element()
+        }
     }
 }

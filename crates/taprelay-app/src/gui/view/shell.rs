@@ -167,13 +167,16 @@ impl AppView {
         header = header.child(div().flex_1());
         match self.ui.page {
             1 if !self.ui.mapping.open => {
-                header = header.child(self.button(
-                    "custom-mappings",
-                    self.tr("mappings.title"),
-                    Command::Mapping("open", String::new()),
-                    self.ui.groups.busy,
-                    cx,
-                ));
+                header = header.child(
+                    self.button(
+                        "custom-mappings",
+                        self.tr("mappings.title"),
+                        Command::Mapping("open", String::new()),
+                        self.ui.groups.busy,
+                        cx,
+                    )
+                    .primary(),
+                );
             }
             1 => {
                 header = header.child(self.button(
@@ -188,13 +191,16 @@ impl AppView {
                     cx,
                 ));
                 if !self.ui.mapping.editor {
-                    header = header.child(self.button(
-                        "mapping-create",
-                        self.tr("mappings.create"),
-                        Command::Mapping("create", String::new()),
-                        self.ui.mapping.busy,
-                        cx,
-                    ));
+                    header = header.child(
+                        self.button(
+                            "mapping-create",
+                            self.tr("mappings.create"),
+                            Command::Mapping("create", String::new()),
+                            self.ui.mapping.busy,
+                            cx,
+                        )
+                        .primary(),
+                    );
                 }
             }
             2 => header = header.children(self.receiver_actions(cx)),
@@ -207,6 +213,7 @@ impl AppView {
                         self.ui.groups.saving,
                         cx,
                     )
+                    .secondary()
                 } else {
                     self.button(
                         "group-create",
@@ -215,6 +222,7 @@ impl AppView {
                         self.ui.groups.busy,
                         cx,
                     )
+                    .primary()
                 });
             }
             _ => {}

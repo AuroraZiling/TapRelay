@@ -41,12 +41,9 @@ impl AppView {
                             .child(Icon::new(kind).size_5().flex_shrink_0())
                             .child(
                                 div()
-                                    .v_flex()
-                                    .gap_1()
                                     .flex_1()
                                     .min_w_0()
-                                    .child(self.text(row.name.clone()).text_ellipsis())
-                                    .child(self.caption(row.detail.clone(), cx)),
+                                    .child(self.text(row.name.clone()).text_ellipsis()),
                             )
                             .child(
                                 div()

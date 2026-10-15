@@ -1,5 +1,5 @@
 use super::ActionAlert;
-use crate::action::Action;
+use crate::gui::action::Action;
 use crate::gui::view::AppView;
 use gpui_kit::Context;
 

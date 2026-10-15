@@ -1,6 +1,6 @@
 use crate::gui::view::components::ShortcutButton;
 use crate::gui::view::{AppView, Command};
-use crate::gui::{BindingCommand, CaptureTarget, FunctionId};
+use crate::runtime::commands::{BindingCommand, CaptureTarget};
 use gpui_kit::assets::IconName;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::{
@@ -10,6 +10,7 @@ use gpui_kit::component::{
     tag::Tag,
 };
 use gpui_kit::{prelude::*, *};
+use taprelay_core::function::FunctionId;
 
 impl AppView {
     pub(in crate::gui::view) fn bindings(&self, window: &Window, cx: &Context<Self>) -> AnyElement {
@@ -266,7 +267,7 @@ impl AppView {
     fn scope_picker(
         &self,
         id: FunctionId,
-        row: &crate::FunctionBindingRow,
+        row: &crate::gui::presentation::FunctionBindingRow,
         busy: bool,
         visible_limit: usize,
         cx: &Context<Self>,

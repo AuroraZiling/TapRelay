@@ -67,7 +67,8 @@ fn creates_selects_removes_and_deletes_an_application_group_through_controls(
     cx.update_window(handle, |_, window, cx| {
         cx.set_reduce_motion(true);
         view.update(cx, |view, _| {
-            let crate::gui::Shell::Headless { running_apps, .. } = &mut view.controller.desktop
+            let crate::gui::controller::Shell::Headless { running_apps, .. } =
+                &mut view.controller.desktop
             else {
                 unreachable!()
             };

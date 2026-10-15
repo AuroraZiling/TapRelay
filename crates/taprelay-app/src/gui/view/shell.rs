@@ -1,5 +1,5 @@
 use super::{AppView, Command};
-use crate::action::Action;
+use crate::gui::action::Action;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::base::motion::{Transition, transition};

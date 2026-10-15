@@ -1,6 +1,6 @@
 use super::support::{open, settle, wait_until};
-use crate::action::Action;
 use crate::config::Config;
+use crate::gui::action::Action;
 use crate::gui::view::Command;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{AppContext, TestAppContext, px};

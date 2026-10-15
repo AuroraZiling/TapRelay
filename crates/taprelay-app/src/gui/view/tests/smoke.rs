@@ -1,5 +1,5 @@
 use super::support::open;
-use crate::action::Action;
+use crate::gui::action::Action;
 use crate::gui::view::Command;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{AppContext, ElementId, TestAppContext};

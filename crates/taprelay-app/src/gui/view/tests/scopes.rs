@@ -36,7 +36,7 @@ fn open_scopes(
                 .save_foreground_app_rules(&mut view.ui, rules)
                 .unwrap();
             view.dispatch(
-                Command::App(crate::action::Action::Navigate, "1".into()),
+                Command::App(crate::gui::action::Action::Navigate, "1".into()),
                 window,
                 cx,
             );

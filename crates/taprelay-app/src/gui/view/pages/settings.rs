@@ -241,6 +241,7 @@ impl AppView {
                     .v_flex()
                     .gap_1()
                     .flex_1()
+                    .min_w_0()
                     .child(self.tr(label))
                     .when(!hint.is_empty(), |row| {
                         row.child(self.caption(self.tr(hint), cx))

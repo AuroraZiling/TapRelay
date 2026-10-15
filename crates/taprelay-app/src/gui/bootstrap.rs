@@ -82,7 +82,7 @@ pub fn run() -> Result<()> {
         .with_assets(gpui_kit::assets::AllAssets)
         .run(move |cx| {
             gpui_kit::init(cx);
-            let size = size(px(geometry.width.max(900.)), px(geometry.height.max(500.)));
+            let size = size(px(geometry.width.max(1000.)), px(geometry.height.max(600.)));
             let mut bounds = Bounds::centered(None, size, cx);
             let mut display_id = None;
             #[cfg(windows)]

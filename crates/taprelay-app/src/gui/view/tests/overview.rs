@@ -5,8 +5,14 @@ use std::time::Instant;
 
 #[gpui_kit::test]
 fn preserves_overview_proportions_in_both_themes_and_window_sizes(cx: &mut TestAppContext) {
-    for (width, height) in [(900., 500.), (1100., 800.)] {
+    for (width, height, scale) in [
+        (900., 500., 1.),
+        (900., 500., 1.25),
+        (1100., 800., 1.5),
+        (1100., 800., 2.),
+    ] {
         let (handle, view, _folder) = open_sized(cx, width, height);
+        cx.simulate_window_scale_factor_change(handle, scale);
         cx.update_window(handle, |_, window, cx| {
             for dark in [false, true] {
                 for (locale, language) in [("en", "english"), ("zh-CN", "chinese")] {
@@ -50,6 +56,11 @@ fn preserves_overview_proportions_in_both_themes_and_window_sizes(cx: &mut TestA
                         px(height - 12.)
                     );
                     assert_eq!(window.find("listen").bounds().size.height, px(32.));
+                    for action in ["listen", "test-receiver"] {
+                        let bounds = window.find(action).bounds();
+                        assert!((bounds.bottom() - (status.bottom() - px(16.))).abs() <= px(1. / scale),
+                            "{locale}, dark={dark}, scale={scale}: {action} must align to the card bottom: {bounds:?}, {status:?}");
+                    }
                 }
             }
         })
@@ -123,6 +134,7 @@ fn overview_group_box_scrolls_long_shortcuts_without_moving_actions(cx: &mut Tes
         let card = window.find("shortcuts-card").bounds();
         let action = window.find("manage-bindings").bounds();
         assert!(window.find(first).visible());
+        assert!(window.find(first).bounds().size.height > px(25.));
         assert!(!window.find(last).visible());
         window.scroll(
             first,

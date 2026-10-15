@@ -6,6 +6,10 @@ use gpui_kit::{prelude::*, *};
 use std::panic::Location;
 
 impl AppView {
+    pub(in crate::gui::view) fn card_style(&self, cx: &App) -> StyleRefinement {
+        StyleRefinement::default().rounded(cx.theme().radius_lg)
+    }
+
     #[track_caller]
     pub(in crate::gui::view) fn text(&self, text: impl Into<SharedString>) -> Stateful<Div> {
         let text = text.into();

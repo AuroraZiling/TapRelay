@@ -9,7 +9,10 @@ use gpui_kit::{prelude::*, *};
 
 impl AppView {
     pub(in crate::gui::view) fn environment(&self, cx: &Context<Self>) -> AnyElement {
-        let mut panel = GroupBox::new().id("environment-checks").fill();
+        let mut panel = GroupBox::new()
+            .id("environment-checks")
+            .fill()
+            .content_style(self.card_style(cx));
         for (index, row) in self.ui.checks.iter().enumerate() {
             let (icon, state, color) = match row.state {
                 1 => (

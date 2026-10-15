@@ -87,7 +87,7 @@ impl AppView {
                 GroupBox::new()
                     .id(SharedString::from(format!("mapping-{}", row.id)))
                     .fill()
-                    .content_style(StyleRefinement::default().h_flex().min_h_16())
+                    .content_style(self.card_style(cx).h_flex().min_h_16())
                     .child(
                         div().w_9().flex_shrink_0().child(
                             Switch::new(SharedString::from(format!("mapping-toggle-{id}")))

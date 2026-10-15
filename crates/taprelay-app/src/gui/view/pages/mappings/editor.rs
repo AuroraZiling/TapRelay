@@ -123,7 +123,7 @@ impl AppView {
                 GroupBox::new()
                     .id("mapping-output-preview")
                     .fill()
-                    .content_style(StyleRefinement::default().min_h_16())
+                    .content_style(self.card_style(cx).min_h_16())
                     .child(
                         self.text(if mapping.capture_slot == 2 {
                             mapping.capture_text.clone()

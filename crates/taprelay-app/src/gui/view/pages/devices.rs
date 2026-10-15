@@ -37,7 +37,7 @@ impl AppView {
                         GroupBox::new()
                             .id(SharedString::from(format!("receiver-{}", row.id)))
                             .fill()
-                            .content_style(StyleRefinement::default().h_flex().gap_3())
+                            .content_style(self.card_style(cx).h_flex().gap_3())
                             .child(Icon::new(kind).size_5().flex_shrink_0())
                             .child(
                                 div()

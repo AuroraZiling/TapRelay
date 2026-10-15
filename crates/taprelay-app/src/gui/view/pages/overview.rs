@@ -4,7 +4,7 @@ use crate::gui::view::{AppView, Command};
 use gpui_kit::assets::IconName;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::{
-    StyledExt,
+    Sizable, StyledExt,
     button::ButtonVariants,
     group_box::{GroupBox, GroupBoxVariants},
     tag::Tag,
@@ -62,7 +62,12 @@ impl AppView {
                                 .build(window, cx)
                         }
                     })
-                    .child(Tag::secondary().outline().child(binding.text.clone()))
+                    .child(
+                        Tag::secondary()
+                            .outline()
+                            .large()
+                            .child(binding.text.clone()),
+                    )
                     .test_support(),
             );
         }
@@ -81,7 +86,7 @@ impl AppView {
                             .min_h_0()
                             .grid()
                             .grid_rows(1)
-                            .content_style(StyleRefinement::default().flex_1().min_h_0())
+                            .content_style(self.card_style(cx).flex_1().min_h_0())
                             .child(
                                 div()
                                     .h_flex()

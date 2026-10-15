@@ -9,6 +9,7 @@ use crate::{
     platform::desktop::{self, Desktop, DesktopEvent},
     runtime::{CaptureError, CaptureKind, CapturePhase},
     runtime_worker::{HandoffError, Notice, RuntimeHandle},
+    startup_checks::State as StartupState,
 };
 use anyhow::{Context, Result, bail};
 
@@ -24,6 +25,8 @@ use taprelay_core::{
 };
 mod custom_mappings;
 mod foreground_app_groups;
+#[cfg(test)]
+mod startup_tests;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PrivilegeMode {
@@ -713,7 +716,12 @@ impl Controller {
         if passed || state.last_error.is_some() {
             self.recovering = false;
         }
-        if !self.passed && passed && self.fatal.is_none() {
+        if !self.passed
+            && passed
+            && self.fatal.is_none()
+            && !self.runtime.stopped()
+            && state.last_error.is_none()
+        {
             self.passed = true;
             ui.mode = if self.runtime.config.wizard.dismissed {
                 2
@@ -725,10 +733,6 @@ impl Controller {
                 && let Err(e) = self.runtime.set_listening(true)
             {
                 self.error(&e.to_string());
-            }
-            if self.runtime.config.options.start_hidden && self.runtime.config.wizard.dismissed {
-                ui.window_command = Some(WindowCommand::Hide);
-                self.hidden = true;
             }
         }
         if let Some(e) = &self.runtime.state.last_error
@@ -818,21 +822,52 @@ impl Controller {
             return Ok(());
         }
         self.sync(ui);
-        if !crate::startup_checks::should_present(
-            self.passed,
-            !ui.problem.clone().is_empty(),
-            self.started.elapsed(),
-        ) {
-            return Ok(());
+        match self.startup_state() {
+            StartupState::Checking => Ok(()),
+            StartupState::Ready
+                if self.runtime.config.options.start_hidden
+                    && self.runtime.config.wizard.dismissed =>
+            {
+                self.startup_pending = false;
+                Ok(())
+            }
+            StartupState::Ready | StartupState::Failed => self.show_window(ui),
         }
-        if self.passed
-            && self.runtime.config.options.start_hidden
-            && self.runtime.config.wizard.dismissed
-        {
-            self.startup_pending = false;
-            return Ok(());
+    }
+
+    fn startup_state(&self) -> StartupState {
+        if self.failure().is_some() {
+            StartupState::Failed
+        } else if self.passed {
+            StartupState::Ready
+        } else {
+            StartupState::Checking
         }
-        self.show_window(ui)
+    }
+
+    fn failure(&self) -> Option<String> {
+        let state = &self.runtime.state;
+        self.fatal
+            .clone()
+            .or_else(|| {
+                self.runtime
+                    .stopped()
+                    .then(|| self.tr(keys::RUNTIME_STOPPED))
+            })
+            .or_else(|| state.last_error.clone())
+            .or_else(|| {
+                (self.passed
+                    && !self.recovering
+                    && !state.profile_switching
+                    && (!state.adapter
+                        || !state.peripheral
+                        || (!state.service_paused && (!state.service || !state.broadcasting))))
+                    .then(|| self.tr(keys::RECEIVER_UNAVAILABLE))
+            })
+            .or_else(|| {
+                (!self.passed && self.started.elapsed() > Duration::from_secs(30))
+                    .then(|| self.tr(keys::STARTUP_TIMEOUT))
+            })
     }
 
     fn sync(&mut self, ui: &mut Presentation) {
@@ -899,7 +934,6 @@ impl Controller {
         ui.receiver_next_allowed = taprelay_core::devices::receiver_next_allowed(s);
         ui.device_selected = s.selected.is_some();
         ui.discovery_status = self.tr(crate::receiver_view::page_status_key(s));
-        let timeout = !self.passed && self.started.elapsed() > Duration::from_secs(30);
         let scope = if self.fatal.is_some() {
             crate::feedback::ErrorScope::Startup
         } else if self.runtime.stopped() {
@@ -907,24 +941,7 @@ impl Controller {
         } else {
             crate::feedback::ErrorScope::Connection
         };
-        let failure = self
-            .fatal
-            .clone()
-            .or_else(|| {
-                self.runtime
-                    .stopped()
-                    .then(|| self.tr(keys::RUNTIME_STOPPED))
-            })
-            .or_else(|| s.last_error.clone())
-            .or_else(|| {
-                (self.passed
-                    && !self.recovering
-                    && !s.profile_switching
-                    && (flags[..2].iter().any(|v| !*v)
-                        || (!s.service_paused && flags[2..].iter().any(|v| !*v))))
-                .then(|| self.tr(keys::RECEIVER_UNAVAILABLE).to_owned())
-            })
-            .or_else(|| timeout.then(|| self.tr(keys::STARTUP_TIMEOUT)));
+        let failure = self.failure();
         if self.fatal.is_some() {
             ui.mode = 3;
         }

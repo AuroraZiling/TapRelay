@@ -184,7 +184,6 @@ impl Runtime {
         match self.start_bluetooth_with(platform::transport) {
             Err(error) if self.startup_restore.is_some() => {
                 tracing::warn!(%error, retry_seconds = 5, "Bluetooth startup will retry");
-                self.state.last_error = Some(error.to_string());
                 Ok(())
             }
             result => result,
@@ -210,14 +209,18 @@ impl Runtime {
         {
             self.transport.take();
         }
-        if let Some(transport) = &self.transport {
-            self.required_generation = transport.restart()?;
-            return Ok(());
+        let result = if let Some(transport) = &self.transport {
+            transport
+                .restart()
+                .map(|generation| self.required_generation = generation)
+        } else {
+            self.required_generation = 0;
+            create(self.startup_restore.clone()).map(|transport| self.transport = Some(transport))
+        };
+        if let Err(error) = &result {
+            self.state.last_error = Some(error.to_string());
         }
-        self.required_generation = 0;
-        let remembered = self.startup_restore.clone();
-        self.transport = Some(create(remembered)?);
-        Ok(())
+        result
     }
 
     fn retry_startup_with(
@@ -1252,6 +1255,27 @@ mod tests {
             }),
             ..Config::default()
         })
+    }
+
+    #[test]
+    fn startup_creation_failure_is_visible_without_a_remembered_device_and_retry_clears_it() {
+        let mut runtime = Runtime::new(Config::default());
+        assert!(
+            runtime
+                .start_bluetooth_with(|remembered| {
+                    assert!(remembered.is_none());
+                    anyhow::bail!("Bluetooth unavailable")
+                })
+                .is_err()
+        );
+        assert_eq!(
+            runtime.state.last_error.as_deref(),
+            Some("Bluetooth unavailable")
+        );
+        runtime
+            .start_bluetooth_with(|_| Ok(Box::new(FakeTransport)))
+            .unwrap();
+        assert_eq!(runtime.state.last_error, None);
     }
 
     #[test]

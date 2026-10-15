@@ -1,3 +1,4 @@
+use crate::gui::view::components::ShortcutButton;
 use crate::gui::view::{AppView, Command};
 use crate::gui::{BindingCommand, CaptureTarget, FunctionId};
 use gpui_kit::assets::IconName;
@@ -67,29 +68,22 @@ impl AppView {
                 } else {
                     shortcut.text.clone()
                 };
-                let mut chip = div()
-                    .h_flex()
-                    .max_w_full()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .bg(cx.theme().group_box)
-                    .child(
-                        self.button(
-                            SharedString::from(format!("binding-{}-{}", row.id, shortcut.slot)),
-                            label,
-                            Command::Binding(BindingCommand::BeginCapture(target)),
-                            !row.enabled || busy,
-                            cx,
-                        )
-                        .accessibility_label(self.tr_object(
-                            "a11y.record_shortcut",
-                            &format!("{}: {}", row.label, shortcut.text),
-                        ))
-                        .selected(recording),
-                    );
+                let mut chip = ShortcutButton::new(
+                    self.button(
+                        SharedString::from(format!("binding-{}-{}", row.id, shortcut.slot)),
+                        label,
+                        Command::Binding(BindingCommand::BeginCapture(target)),
+                        !row.enabled || busy,
+                        cx,
+                    )
+                    .accessibility_label(self.tr_object(
+                        "a11y.record_shortcut",
+                        &format!("{}: {}", row.label, shortcut.text),
+                    ))
+                    .selected(recording),
+                );
                 if row.enabled {
-                    chip = chip.child(self.icon_button(
+                    chip = chip.clear_button(self.icon_button(
                         SharedString::from(if recording {
                             format!("capture-cancel-{}", row.id)
                         } else {
@@ -118,7 +112,7 @@ impl AppView {
             if row.enabled && row.shortcuts.len() < 2 {
                 let recording =
                     capturing && self.ui.binding.capture.slot == row.shortcuts.len() as i32;
-                shortcuts = shortcuts.child(
+                let mut chip = ShortcutButton::new(
                     self.button(
                         SharedString::from(format!("binding-add-{}", row.id)),
                         if recording {
@@ -138,7 +132,7 @@ impl AppView {
                     .selected(recording),
                 );
                 if recording {
-                    shortcuts = shortcuts.child(self.icon_button(
+                    chip = chip.clear_button(self.icon_button(
                         SharedString::from(format!("capture-cancel-{}", row.id)),
                         IconName::X,
                         self.tr("capture.cancel_shortcut"),
@@ -147,6 +141,7 @@ impl AppView {
                         cx,
                     ));
                 }
+                shortcuts = shortcuts.child(chip);
             } else if !row.enabled && row.shortcuts.is_empty() {
                 shortcuts =
                     shortcuts.child(self.caption(self.tr("shortcuts.unset"), cx).opacity(0.5));

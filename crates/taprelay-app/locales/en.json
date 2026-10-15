@@ -66,6 +66,7 @@
   "common.save_changes": "Save your changes?",
   "common.save_failed": "Changes could not be saved. Your draft is still here; please try again.",
   "common.saving": "Saving…",
+  "common.shortcut": "Shortcut",
   "common.skip": "Skip",
   "common.undo": "Undo",
   "diagnostics.inputs": "Inputs detected",

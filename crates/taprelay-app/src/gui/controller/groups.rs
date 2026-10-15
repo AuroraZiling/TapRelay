@@ -160,15 +160,8 @@ impl Controller {
                 ui.groups.choosing_running = true;
             }
             "show-selected" => ui.groups.choosing_running = false,
-            "browse" | "add" => {
-                let path = if command == "browse" {
-                    let Some(path) = crate::platform::foreground_apps::browse()? else {
-                        return Ok(());
-                    };
-                    path
-                } else {
-                    value.to_string()
-                };
+            "picked" | "add" => {
+                let path = value.to_string();
                 anyhow::ensure!(
                     taprelay_core::foreground_app::valid_executable(&path),
                     self.tr(keys::GROUPS_INVALID)
@@ -177,8 +170,9 @@ impl Controller {
                 self.group_draft.as_mut().context(error)?.add(path.clone());
                 self.sync_group_draft(ui);
                 // Keep choosing open to support adding several running applications.
-                if command == "browse" {
+                if command == "picked" {
                     ui.groups.choosing_running = false;
+                    ui.groups.form_error.clear();
                 }
                 let remaining = ui
                     .groups

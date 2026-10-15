@@ -233,6 +233,10 @@ impl AppView {
             Command::Binding(command) => self
                 .controller
                 .binding_action(&mut self.ui, command.clone()),
+            Command::Group("browse", _) => {
+                self.browse_group_app(window, cx);
+                Ok(())
+            }
             Command::Group(command, value) => {
                 self.controller.group_command(&mut self.ui, command, value)
             }

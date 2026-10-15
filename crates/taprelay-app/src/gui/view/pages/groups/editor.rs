@@ -10,6 +10,51 @@ use gpui_kit::component::{
 use gpui_kit::{prelude::*, *};
 
 impl AppView {
+    pub(in crate::gui::view) fn browse_group_app(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.ui.groups.editor_open || self.ui.groups.busy || self.controller.recording() {
+            return;
+        }
+        let editor = self.ui.groups.focus_request;
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(self.tr("groups.browse").into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = paths
+                .await
+                .map_err(anyhow::Error::from)
+                .and_then(|paths| paths);
+            let _ = this.update_in(cx, |this, window, cx| {
+                if !this.ui.groups.editor_open || this.ui.groups.focus_request != editor {
+                    return;
+                }
+                match result {
+                    Ok(Some(paths)) => {
+                        if let Some(path) = paths.into_iter().next() {
+                            this.dispatch(
+                                Command::Group("picked", path.to_string_lossy().into_owned()),
+                                window,
+                                cx,
+                            );
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        this.ui.groups.form_error = error.to_string();
+                        cx.notify();
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
     pub(super) fn group_editor(&self, cx: &Context<Self>) -> AnyElement {
         use gpui_kit::component::tab::{Tab, TabBar};
         let group = &self.ui.groups;

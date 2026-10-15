@@ -1,4 +1,4 @@
-use super::support::open;
+use super::support::{open, open_sized, settle};
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{AppContext, TestAppContext};
 use std::time::Instant;
@@ -57,4 +57,85 @@ fn settings_switch_between_catppuccin_themes_and_follow_system(cx: &mut TestAppC
         }
     })
     .unwrap();
+}
+
+#[gpui_kit::test]
+fn settings_controls_update_their_own_preferences_and_persist(cx: &mut TestAppContext) {
+    let (handle, view, folder) = open_sized(cx, 900., 2200.);
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(("nav", 3usize), cx);
+    })
+    .unwrap();
+    settle(cx, handle, &view);
+    let mut expected = cx.update(|cx| {
+        serde_json::to_value(&view.read(cx).controller.runtime.config.options).unwrap()
+    });
+    for (id, field) in [
+        ("overlay", "passthrough_overlay"),
+        ("reverse-scroll", "passthrough_reverse_scroll"),
+        ("autostart", "autostart"),
+        ("start-hidden", "start_hidden"),
+        ("auto-listen", "auto_listen"),
+        ("close-to-tray", "close_to_tray"),
+        ("always-admin", "always_admin"),
+        ("wait-warning", "connection_wait_warning"),
+        ("notifications", "notifications"),
+    ] {
+        let before = expected[field].as_bool().unwrap();
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            assert_eq!(window.find(id).checked(), Some(before));
+            assert!(
+                window.find(id).visible(),
+                "{id} is outside the settings page"
+            );
+            assert!(window.find(id).bounds().right() <= window.viewport_size().width);
+            window.click(id, cx);
+        })
+        .unwrap();
+        settle(cx, handle, &view);
+        expected[field] = (!before).into();
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            assert_eq!(window.find(id).checked(), Some(!before));
+            assert_eq!(
+                serde_json::to_value(&view.read(cx).controller.runtime.config.options).unwrap(),
+                expected,
+                "{id} changed another preference"
+            );
+            view.update(cx, |view, _| view.controller.flush(true));
+        })
+        .unwrap();
+        let saved = crate::config::Config::load(&folder.path().join("config.json")).unwrap();
+        assert_eq!(serde_json::to_value(saved.options).unwrap(), expected);
+    }
+    for rate in [60usize, 125, 250, 500, 1000, 0] {
+        cx.update_window(handle, |_, window, cx| {
+            window.click(("report-rate", rate), cx)
+        })
+        .unwrap();
+        settle(cx, handle, &view);
+        cx.update(|cx| {
+            assert_eq!(view.read(cx).ui.passthrough_mouse_report_rate, rate as i32);
+            view.update(cx, |view, _| view.controller.flush(true));
+        });
+        let saved = crate::config::Config::load(&folder.path().join("config.json")).unwrap();
+        assert_eq!(saved.options.passthrough_mouse_report_rate, rate as u16);
+    }
+    cx.update_window(handle, |_, window, cx| {
+        window.click(("language", 2usize), cx);
+        assert_eq!(view.read(cx).ui.locale, "zh-CN");
+        assert!(window.find("overlay").visible());
+        assert!(window.find("overlay").bounds().right() <= window.viewport_size().width);
+        assert_eq!(
+            window.find("overlay").label(),
+            Some(view.read(cx).tr("settings.passthrough_overlay").as_str())
+        );
+        view.update(cx, |view, _| view.controller.flush(true));
+    })
+    .unwrap();
+    let saved = crate::config::Config::load(&folder.path().join("config.json")).unwrap();
+    assert_eq!(saved.options.language.locale(), "zh-CN");
+    assert_eq!(saved.options.passthrough_mouse_report_rate, 0);
 }

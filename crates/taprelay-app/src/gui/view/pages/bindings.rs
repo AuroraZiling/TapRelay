@@ -7,6 +7,7 @@ use gpui_kit::component::{
     ActiveTheme, Disableable, Icon, Selectable, StyledExt,
     group_box::{GroupBox, GroupBoxVariants},
     switch::Switch,
+    tag::Tag,
 };
 use gpui_kit::{prelude::*, *};
 
@@ -160,6 +161,7 @@ impl AppView {
             let mut gestures = div()
                 .id(SharedString::from(format!("binding-function-{}", row.id)))
                 .v_flex()
+                .gap_1()
                 .w(rems(15.))
                 .flex_shrink_0()
                 .when(!row.enabled, |column| column.opacity(0.5));
@@ -168,22 +170,34 @@ impl AppView {
                     div()
                         .id(("gesture", index))
                         .h_flex()
-                        .h_6()
+                        .min_h_6()
+                        .flex_shrink_0()
                         .gap_2()
-                        .child(self.caption(gesture.gesture.clone(), cx).w_10())
+                        .child(
+                            self.caption(gesture.gesture.clone(), cx)
+                                .w_10()
+                                .flex_shrink_0(),
+                        )
                         .child(
                             Icon::new(IconName::ArrowRight)
                                 .size_4()
+                                .flex_shrink_0()
                                 .text_color(cx.theme().muted_foreground),
                         )
                         .child(
                             div()
-                                .px_2()
-                                .py(rems(0.125))
-                                .rounded_md()
-                                .bg(cx.theme().secondary)
-                                .child(self.text(gesture.action.clone())),
-                        ),
+                                .id(("gesture-badge", index))
+                                .min_w_0()
+                                .max_w_full()
+                                .child(
+                                    Tag::new()
+                                        .min_w_0()
+                                        .max_w_full()
+                                        .child(self.text(gesture.action.clone()).min_w_0()),
+                                )
+                                .test_support(),
+                        )
+                        .test_support(),
                 );
             }
             rows = rows.child(

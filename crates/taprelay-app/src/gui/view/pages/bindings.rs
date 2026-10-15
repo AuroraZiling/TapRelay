@@ -16,12 +16,7 @@ impl AppView {
     pub(in crate::gui::view) fn bindings(&self, window: &Window, cx: &Context<Self>) -> AnyElement {
         let wide = window.viewport_size().width >= px(1100.);
         let scope_width = rems(if wide { 16. } else { 10. });
-        let mut page = div()
-            .v_flex()
-            .flex_1()
-            .min_h_0()
-            .gap_6()
-            .child(self.caption(self.tr("bindings.help"), cx));
+        let mut page = div().v_flex().flex_1().min_h_0().gap_6();
         if !self.ui.groups.error.is_empty() {
             page = page.child(self.error(&self.ui.groups.error, cx));
         }

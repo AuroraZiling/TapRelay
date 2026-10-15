@@ -2,7 +2,7 @@ use super::support::open;
 use crate::gui::action::Action;
 use crate::gui::view::Command;
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{AppContext, ElementId, TestAppContext};
+use gpui_kit::{AppContext, ElementId, TestAppContext, px};
 
 #[gpui_kit::test]
 fn renders_every_page_in_both_languages_in_a_compact_window(cx: &mut TestAppContext) {
@@ -23,6 +23,22 @@ fn renders_every_page_in_both_languages_in_a_compact_window(cx: &mut TestAppCont
                 window.render_frame(cx);
                 assert_eq!(view.read(cx).ui.page, page);
                 assert!(window.find("page-header").visible());
+                if matches!(page, 1 | 2 | 4) {
+                    let header = window.find("page-header").bounds();
+                    let title = window.find("page-heading-row").bounds();
+                    let description = window
+                        .within("page-header")
+                        .find("page-description")
+                        .bounds();
+                    assert_eq!(description.top(), title.bottom() + px(4.));
+                    assert!(
+                        description.left() >= header.left()
+                            && description.right() <= header.right()
+                            && description.top() >= header.top()
+                            && description.bottom() <= header.bottom(),
+                        "page {page} in {language}: description {description:?} exceeds header {header:?}"
+                    );
+                }
                 assert!(
                     window.find(landmark).visible(),
                     "missing page {page} in {language}"

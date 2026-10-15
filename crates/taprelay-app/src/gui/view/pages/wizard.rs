@@ -46,7 +46,22 @@ impl AppView {
                             .bg(cx.theme().primary),
                     ),
             )
-            .child(header);
+            .child(
+                div()
+                    .v_flex()
+                    .gap_1()
+                    .child(header)
+                    .when(step < 2, |header| {
+                        header.child(self.caption(
+                            if step == 0 {
+                                self.tr("bindings.help")
+                            } else {
+                                self.ui.discovery_status.clone()
+                            },
+                            cx,
+                        ))
+                    }),
+            );
         if step == 2 && !self.ui.elevated {
             body = body.child(self.admin_alert(cx));
         }

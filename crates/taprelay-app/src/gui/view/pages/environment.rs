@@ -42,12 +42,17 @@ impl AppView {
             .v_flex()
             .gap(rems(1.375))
             .pr_3()
-            .child(self.heading(self.tr(if self.ui.mode == 3 {
-                "startup.error"
-            } else {
-                "startup.preparing"
-            })))
-            .child(self.caption(self.tr("startup.description"), cx))
+            .child(
+                div()
+                    .v_flex()
+                    .gap_1()
+                    .child(self.heading(self.tr(if self.ui.mode == 3 {
+                        "startup.error"
+                    } else {
+                        "startup.preparing"
+                    })))
+                    .child(self.caption(self.tr("startup.description"), cx)),
+            )
             .child(panel);
         if !self.ui.problem.is_empty() {
             body = body

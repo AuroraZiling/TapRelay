@@ -17,21 +17,7 @@ impl AppView {
         if mapping.editor {
             return self.mapping_editor(cx);
         }
-        let mut body = div().v_flex().flex_1().min_h_0().gap_6().child(
-            div()
-                .h_flex()
-                .gap_3()
-                .child(self.caption(self.tr("mappings.help"), cx).flex_1())
-                .when(mapping.can_undo, |row| {
-                    row.child(self.button(
-                        "mapping-undo",
-                        self.tr("common.undo"),
-                        Command::Mapping("undo", String::new()),
-                        mapping.busy,
-                        cx,
-                    ))
-                }),
-        );
+        let mut body = div().v_flex().flex_1().min_h_0().gap_6();
         if !mapping.error.is_empty() {
             body = body.child(self.error(&mapping.error, cx));
         }

@@ -28,7 +28,7 @@ impl AppView {
                             .flex_1()
                             .min_w_0()
                             .gap(rems(0.3125))
-                            .child(div().text_ellipsis().child(row.name.clone()))
+                            .child(self.text(row.name.clone()).text_ellipsis())
                             .child(
                                 self.caption(
                                     if row.summary.is_empty() {
@@ -45,7 +45,7 @@ impl AppView {
                     .child(self.icon_button(
                         SharedString::from(format!("group-edit-{}", row.id)),
                         IconName::Pencil,
-                        self.tr("common.edit"),
+                        self.tr_object("a11y.edit", &row.name),
                         Command::Group("edit", row.id.clone()),
                         group.busy,
                         cx,
@@ -53,11 +53,17 @@ impl AppView {
                     .child(self.icon_button(
                         SharedString::from(format!("group-delete-{}", row.id)),
                         IconName::Trash,
-                        self.tr("common.delete"),
+                        self.tr_object("a11y.delete", &row.name),
                         Command::Group("request-delete", row.id.clone()),
                         group.busy,
                         cx,
-                    )),
+                    ))
+                    .map(|row_view| {
+                        self.reveal_focus(
+                            SharedString::from(format!("group-focus-{}", row.id)),
+                            row_view,
+                        )
+                    }),
             );
         }
         div()

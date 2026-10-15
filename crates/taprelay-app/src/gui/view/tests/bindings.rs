@@ -116,7 +116,7 @@ fn recording_a_shortcut_updates_the_row_and_saved_binding(cx: &mut TestAppContex
         window.render_frame(cx);
         assert_eq!(
             window.find("binding-media.play-pause-0").label(),
-            Some("F8")
+            Some("Record shortcut for Play / Pause: F8")
         );
         view.update(cx, |view, _| view.controller.flush(true));
     })

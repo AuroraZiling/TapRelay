@@ -10,7 +10,7 @@ use gpui_kit::{prelude::*, *};
 impl AppView {
     pub(in crate::gui::view) fn environment(&self, cx: &Context<Self>) -> AnyElement {
         let mut panel = GroupBox::new().id("environment-checks").fill();
-        for row in &self.ui.checks {
+        for (index, row) in self.ui.checks.iter().enumerate() {
             let (icon, state, color) = match row.state {
                 1 => (
                     IconName::Loader,
@@ -27,10 +27,11 @@ impl AppView {
             };
             panel = panel.child(
                 div()
+                    .id(("environment-check", index))
                     .h_flex()
                     .gap_3()
                     .child(Icon::new(icon).size_4().text_color(color))
-                    .child(div().flex_1().child(row.title.clone()))
+                    .child(self.text(row.title.clone()).flex_1())
                     .child(self.caption(self.tr(state), cx)),
             );
         }

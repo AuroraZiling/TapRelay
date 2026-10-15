@@ -15,8 +15,8 @@ pub struct Notice {
     pub device: String,
 }
 
-#[cfg(any(windows, test))]
 impl Notice {
+    #[cfg(any(windows, test))]
     pub fn duration(&self) -> Duration {
         Duration::from_secs(if self.status == Status::Disconnected {
             5

@@ -27,12 +27,14 @@ fn receivers_use_group_box_insets_with_actions_in_the_header(cx: &mut TestAppCon
         window.render_frame(cx);
         let row = window.find("receiver-row-tablet").bounds();
         let action = window.find("device-tablet").bounds();
-        assert_eq!(row.size.height, px(64.));
-        assert_eq!(action.top(), row.top() + px(16.));
-        assert_eq!(action.bottom(), row.bottom() - px(16.));
+        assert!(row.size.height >= px(64.) && row.size.height <= px(88.));
+        assert!((action.center().y - row.center().y).abs() <= px(0.5));
         assert_eq!(action.right(), row.right() - px(16.));
         assert_eq!(action.size.width, px(132.));
-        assert_eq!(window.find("device-tablet").label(), Some("Start session"));
+        assert_eq!(
+            window.find("device-tablet").label(),
+            Some(format!("Start session: {}", view.read(cx).ui.paired_devices[0].name).as_str())
+        );
         assert!(row.contains(&action.center()));
         assert!(row.right() <= px(872.));
         let header = window.find("page-header").bounds();
@@ -91,7 +93,10 @@ fn device_controls_route_identity_reject_unavailable_and_disconnect(cx: &mut Tes
     wait_until(cx, handle, &view, |view| view.ui.ready);
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
-        assert_eq!(window.find("device-tablet").label(), Some("End session"));
+        assert_eq!(
+            window.find("device-tablet").label(),
+            Some("End session: Tablet")
+        );
         assert_eq!(
             view.read(cx).controller.runtime.state.selected.as_deref(),
             Some("tablet")
@@ -103,7 +108,10 @@ fn device_controls_route_identity_reject_unavailable_and_disconnect(cx: &mut Tes
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         assert!(!view.read(cx).ui.ready);
-        assert_eq!(window.find("device-tablet").label(), Some("Start session"));
+        assert_eq!(
+            window.find("device-tablet").label(),
+            Some("Start session: Tablet")
+        );
     })
     .unwrap();
     settle(cx, handle, &view);

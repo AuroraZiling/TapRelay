@@ -39,9 +39,7 @@ fn preserves_overview_proportions_in_both_themes_and_window_sizes(cx: &mut TestA
                     assert_eq!(shortcuts.bottom(), px(height - 28.));
                     assert!(shortcuts.size.height > px(100.));
                     let manage = window.find("manage-bindings").bounds();
-                    let scroll = window
-                        .find((gpui_kit::ElementId::from("overview-shortcuts"), "content"))
-                        .bounds();
+                    let scroll = window.find("overview-shortcuts").bounds();
                     assert!(manage.is_contained_within(&shortcuts));
                     assert_eq!(scroll.left(), shortcuts.left() + px(16.));
                     assert_eq!(scroll.right(), shortcuts.right() - px(16.));

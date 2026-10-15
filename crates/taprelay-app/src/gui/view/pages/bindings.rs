@@ -82,6 +82,10 @@ impl AppView {
                             !row.enabled || busy,
                             cx,
                         )
+                        .accessibility_label(self.tr_object(
+                            "a11y.record_shortcut",
+                            &format!("{}: {}", row.label, shortcut.text),
+                        ))
                         .selected(recording),
                     );
                 if row.enabled {
@@ -92,11 +96,14 @@ impl AppView {
                             format!("remove-{}-{}", row.id, shortcut.slot)
                         }),
                         IconName::X,
-                        self.tr(if recording {
-                            "capture.cancel_shortcut"
+                        if recording {
+                            self.tr("capture.cancel_shortcut")
                         } else {
-                            "common.remove"
-                        }),
+                            self.tr_object(
+                                "a11y.remove_shortcut",
+                                &format!("{}: {}", row.label, shortcut.text),
+                            )
+                        },
                         Command::Binding(if recording {
                             BindingCommand::CancelCapture
                         } else {
@@ -127,7 +134,7 @@ impl AppView {
                         cx,
                     )
                     .icon(IconName::Plus)
-                    .accessibility_label(self.tr("shortcuts.add"))
+                    .accessibility_label(self.tr_object("a11y.add_shortcut", &row.label))
                     .selected(recording),
                 );
                 if recording {
@@ -161,9 +168,10 @@ impl AppView {
                 .w(rems(15.))
                 .flex_shrink_0()
                 .when(!row.enabled, |column| column.opacity(0.5));
-            for gesture in &row.gestures {
+            for (index, gesture) in row.gestures.iter().enumerate() {
                 gestures = gestures.child(
                     div()
+                        .id(("gesture", index))
                         .h_flex()
                         .h_6()
                         .gap_2()
@@ -179,7 +187,7 @@ impl AppView {
                                 .py(rems(0.125))
                                 .rounded_md()
                                 .bg(cx.theme().secondary)
-                                .child(gesture.action.clone()),
+                                .child(self.text(gesture.action.clone())),
                         ),
                 );
             }
@@ -227,7 +235,13 @@ impl AppView {
                                     .test_support(),
                             ),
                     )
-                    .test_support(),
+                    .test_support()
+                    .map(|row_view| {
+                        self.reveal_focus(
+                            SharedString::from(format!("binding-focus-{}", row.id)),
+                            row_view,
+                        )
+                    }),
             );
         }
         page.child(self.scroller("bindings", rows))
@@ -263,6 +277,9 @@ impl AppView {
         let weak = cx.entity().downgrade();
         Button::new(SharedString::from(format!("scope-{}", row.id)))
             .label(row.scope_label.clone())
+            .accessibility_label(
+                self.tr_object("a11y.scope", &format!("{}: {}", row.label, row.scope_label)),
+            )
             .tooltip(row.scope_label.clone())
             .w_full()
             .disabled(busy)

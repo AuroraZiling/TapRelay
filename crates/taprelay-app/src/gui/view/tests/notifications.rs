@@ -23,6 +23,14 @@ async fn feedback_notifications_deduplicate_dismiss_and_auto_hide(cx: &mut TestA
     let first = cx
         .update_window(handle, |_, window, cx| {
             assert_eq!(window.notifications(cx).len(), 1);
+            assert_eq!(
+                window.find("notification-message").label(),
+                Some("Test sent")
+            );
+            assert_eq!(
+                window.find("notification-message").role(),
+                Some(gpui_kit::Role::Status)
+            );
             let first = window.notifications(cx)[0].clone();
             view.update(cx, |view, cx| view.effects(window, cx));
             first
@@ -46,8 +54,20 @@ async fn feedback_notifications_deduplicate_dismiss_and_auto_hide(cx: &mut TestA
     std::thread::sleep(Duration::from_millis(410));
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
-        window.hover("notification", cx);
-        window.within("notification").click("close", cx);
+        assert!(window.find("notification-dismiss").visible());
+        assert_eq!(
+            window.find("notification-dismiss").label(),
+            Some("Dismiss notification")
+        );
+        view.read(cx).focus.clone().focus(window, cx);
+        for _ in 0..20 {
+            if window.find("notification-dismiss").focused() == Some(true) {
+                break;
+            }
+            window.press("tab", cx);
+        }
+        assert_eq!(window.find("notification-dismiss").focused(), Some(true));
+        window.press("enter", cx);
     })
     .unwrap();
     cx.wait_for(handle, Duration::from_secs(1), |window, cx| {
@@ -72,6 +92,53 @@ async fn feedback_notifications_deduplicate_dismiss_and_auto_hide(cx: &mut TestA
         window.notifications(cx).is_empty()
     })
     .await;
+}
+
+#[gpui_kit::test]
+fn passthrough_feedback_preserves_device_and_respects_system_notification_setting(
+    cx: &mut TestAppContext,
+) {
+    let (handle, view, _folder) = open(cx);
+    cx.update_window(handle, |_, _, cx| {
+        view.update(cx, |view, _| {
+            view._pump = gpui_kit::Task::ready(());
+            view.controller.hidden = true;
+            for (language, expected) in [
+                ("english", "Disconnected from Tablet"),
+                ("chinese", "已断开与 Tablet 的连接"),
+            ] {
+                view.controller.runtime.config.options.language =
+                    crate::config::Language::from_name(language).unwrap();
+                for enabled in [true, false] {
+                    view.controller.runtime.config.options.notifications = enabled;
+                    view.controller
+                        .passthrough_feedback(&crate::passthrough_overlay::Notice {
+                            status: crate::passthrough_overlay::Status::Disconnected,
+                            device: "Tablet".into(),
+                        });
+                    assert_eq!(
+                        view.controller.pending_notification.as_deref(),
+                        Some(expected)
+                    );
+                    let crate::gui::Shell::Headless { notifications, .. } =
+                        &view.controller.desktop
+                    else {
+                        unreachable!()
+                    };
+                    assert_eq!(
+                        *notifications.borrow(),
+                        if enabled {
+                            vec![("TapRelay".into(), expected.into())]
+                        } else {
+                            Vec::new()
+                        }
+                    );
+                    notifications.borrow_mut().clear();
+                }
+            }
+        });
+    })
+    .unwrap();
 }
 
 #[gpui_kit::test]

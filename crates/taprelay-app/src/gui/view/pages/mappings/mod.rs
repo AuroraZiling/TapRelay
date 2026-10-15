@@ -108,7 +108,7 @@ impl AppView {
                             .flex_basis(px(0.))
                             .min_w_0()
                             .text_ellipsis()
-                            .child(row.name.clone()),
+                            .child(self.text(row.name.clone())),
                     )
                     .child(
                         self.caption(format!("{} → {}", row.input, row.output), cx)
@@ -122,6 +122,8 @@ impl AppView {
                                 "mapping-scope-label-{}",
                                 row.id
                             )))
+                            .role(Role::Label)
+                            .aria_label(row.scope.clone())
                             .w(rems(7.75))
                             .flex_shrink_0()
                             .text_ellipsis()
@@ -143,7 +145,7 @@ impl AppView {
                             .child(self.icon_button(
                                 SharedString::from(format!("mapping-edit-{}", row.id)),
                                 IconName::Pencil,
-                                self.tr("common.edit"),
+                                self.tr_object("a11y.edit", &row.name),
                                 Command::Mapping("edit", row.id.clone()),
                                 mapping.busy,
                                 cx,
@@ -151,12 +153,18 @@ impl AppView {
                             .child(self.icon_button(
                                 SharedString::from(format!("mapping-delete-{}", row.id)),
                                 IconName::Trash,
-                                self.tr("common.delete"),
+                                self.tr_object("a11y.delete", &row.name),
                                 Command::Mapping("delete", row.id.clone()),
                                 mapping.busy,
                                 cx,
                             )),
-                    ),
+                    )
+                    .map(|row_view| {
+                        self.reveal_focus(
+                            SharedString::from(format!("mapping-focus-{}", row.id)),
+                            row_view,
+                        )
+                    }),
             );
         }
         body.child(self.scroller("mappings", rows))

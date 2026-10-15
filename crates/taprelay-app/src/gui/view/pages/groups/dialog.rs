@@ -26,14 +26,24 @@ impl AppView {
                 busy,
                 cx,
             ));
-        dialog
-            .title(format!(
-                "{} — {}",
-                self.tr("groups.delete"),
-                self.ui.groups.selected_name
-            ))
-            .child(self.ui.groups.deletion_warning.clone())
-            .child(self.error(&self.ui.groups.form_error, cx))
-            .footer(footer)
+        let title = format!(
+            "{} — {}",
+            self.tr("groups.delete"),
+            self.ui.groups.selected_name
+        );
+        dialog.close_button(false).child(
+            self.dialog_content(
+                "group-delete-dialog",
+                title,
+                div()
+                    .v_flex()
+                    .gap_3()
+                    .child(self.text(self.ui.groups.deletion_warning.clone()))
+                    .when(!self.ui.groups.form_error.is_empty(), |body| {
+                        body.child(self.error(&self.ui.groups.form_error, cx))
+                    }),
+                footer,
+            ),
+        )
     }
 }

@@ -51,6 +51,8 @@ impl AppView {
                         "summary-{}-{}",
                         binding.function_name, binding.text
                     )))
+                    .role(Role::Label)
+                    .aria_label(format!("{}: {}", binding.function_name, binding.text))
                     .px_2()
                     .py(rems(0.375))
                     .rounded_md()

@@ -1,8 +1,38 @@
 use super::{AppView, Command};
+use gpui_kit::base::TestSupportExt;
+use gpui_kit::component::StyledExt;
 use gpui_kit::component::WindowExt;
 use gpui_kit::{prelude::*, *};
 
 impl AppView {
+    pub(super) fn dialog_content(
+        &self,
+        id: &'static str,
+        title: String,
+        body: impl IntoElement,
+        footer: impl IntoElement,
+    ) -> AnyElement {
+        // GPUI Kit 0.7.3 does not connect Dialog::title to the dialog's accessible name.
+        div()
+            .id(id)
+            .role(Role::Dialog)
+            .aria_label(title.clone())
+            .v_flex()
+            .gap_4()
+            .min_w_0()
+            .child(
+                self.text(title)
+                    .role(Role::Heading)
+                    .aria_level(2)
+                    .text_lg()
+                    .font_semibold(),
+            )
+            .child(body)
+            .child(footer)
+            .test_support()
+            .into_any_element()
+    }
+
     pub(super) fn update_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let next = if self.ui.mapping.leave_open {
             1
@@ -46,7 +76,7 @@ impl AppView {
                 let weak = cx.entity().downgrade();
                 dialog
                     .overlay_closable(false)
-                    .close_button(!busy)
+                    .close_button(false)
                     .on_cancel(move |_, _, cx| {
                         if busy {
                             return false;

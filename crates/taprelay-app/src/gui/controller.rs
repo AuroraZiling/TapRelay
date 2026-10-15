@@ -63,7 +63,7 @@ pub(super) struct Controller {
     pub(super) path: PathBuf,
     logs: Option<tracing_appender::non_blocking::ErrorCounter>,
     pub(super) desktop: Shell,
-    saves: SaveQueue,
+    pub(super) saves: SaveQueue,
     status: administrator::Status,
     pub(super) fatal: Option<String>,
     pub(super) passed: bool,

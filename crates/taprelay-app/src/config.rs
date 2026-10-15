@@ -45,6 +45,8 @@ pub struct Wizard {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Options {
+    #[serde(default)]
+    pub sidebar_collapsed: bool,
     #[serde(default = "default_passthrough_overlay")]
     pub passthrough_overlay: bool,
     #[serde(default = "default_mouse_percent")]
@@ -67,6 +69,7 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         Self {
+            sidebar_collapsed: false,
             passthrough_overlay: true,
             passthrough_mouse_percent: default_mouse_percent(),
             passthrough_mouse_report_rate: 0,

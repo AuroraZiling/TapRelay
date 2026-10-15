@@ -1,4 +1,4 @@
-use super::support::{open, settle};
+use super::support::{open, open_with_config, settle};
 use crate::gui::action::Action;
 use crate::gui::view::Command;
 use gpui_kit::test::TestWindowExt;
@@ -120,6 +120,38 @@ fn window_close_preserves_unsaved_mapping_confirmation_and_close_to_tray(cx: &mu
         assert!(view.read(cx).controller.mapping_draft.is_none());
     })
     .unwrap();
+}
+
+#[gpui_kit::test]
+fn sidebar_state_is_saved_and_restored_when_the_view_is_recreated(cx: &mut TestAppContext) {
+    let (mut handle, mut view, mut folder) = open(cx);
+    for collapsed in [true, false] {
+        cx.update_window(handle, |_, window, cx| {
+            cx.set_reduce_motion(true);
+            window.render_frame(cx);
+            window.click("collapse", cx);
+            assert_eq!(view.read(cx).sidebar_collapsed, collapsed);
+            view.update(cx, |view, _| view.controller.flush(true));
+        })
+        .unwrap();
+        let saved = crate::config::Config::load(&folder.path().join("config.json")).unwrap();
+        assert_eq!(saved.options.sidebar_collapsed, collapsed);
+        cx.update_window(handle, |_, window, cx| {
+            view.update(cx, |view, _| view._pump = gpui_kit::Task::ready(()));
+            window.remove_window();
+        })
+        .unwrap();
+        (handle, view, folder) = open_with_config(cx, 900., 500., saved, None);
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            assert_eq!(view.read(cx).sidebar_collapsed, collapsed);
+            assert_eq!(
+                window.find("navigation").bounds().size.width,
+                px(if collapsed { 44. } else { 176. })
+            );
+        })
+        .unwrap();
+    }
 }
 
 #[gpui_kit::test]

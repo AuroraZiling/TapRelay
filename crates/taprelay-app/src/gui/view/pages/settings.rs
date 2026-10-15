@@ -1,13 +1,64 @@
 use crate::action::Action;
-use crate::gui::view::{AppView, Command};
+use crate::gui::{
+    presentation::ChoiceOption,
+    view::{AppView, Command},
+};
+use gpui_kit::assets::IconName;
+use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::{
-    Selectable, StyledExt,
+    Icon, Selectable, StyledExt,
+    combobox::Combobox,
     group_box::{GroupBox, GroupBoxVariants},
+    searchable_list::SearchableListItem,
     switch::Switch,
+    tag::Tag,
 };
 use gpui_kit::{prelude::*, *};
 
+impl SearchableListItem for ChoiceOption {
+    type Value = String;
+
+    fn title(&self) -> SharedString {
+        self.label.clone().into()
+    }
+
+    fn value(&self) -> &String {
+        &self.value
+    }
+}
+
 impl AppView {
+    pub(in crate::gui::view) fn sync_report_rate(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let auto_label = self.tr("common.auto");
+        let labels_changed = self.report_rate_auto_label != auto_label;
+        let value = self.ui.passthrough_mouse_report_rate.to_string();
+        if !labels_changed && self.report_rate.read(cx).selected_value().as_ref() == Some(&value) {
+            return;
+        }
+        self.report_rate.update(cx, |state, cx| {
+            if labels_changed {
+                let items = [0, 60, 125, 250, 500, 1000]
+                    .into_iter()
+                    .map(|rate| ChoiceOption {
+                        label: if rate == 0 {
+                            auto_label.clone()
+                        } else {
+                            format!("{rate} Hz")
+                        },
+                        value: rate.to_string(),
+                    })
+                    .collect();
+                state.set_items(items, window, cx);
+            }
+            state.set_selected_values(&[value], window, cx);
+        });
+        self.report_rate_auto_label = auto_label;
+    }
+
     pub(in crate::gui::view) fn settings(&self, cx: &Context<Self>) -> AnyElement {
         let mut appearance = self.section("settings.appearance");
         let mut themes = div().h_flex().gap_2();
@@ -39,26 +90,26 @@ impl AppView {
             );
         }
         appearance = appearance
-            .child(self.reveal_focus("theme-options", themes.flex_wrap()))
-            .child(self.reveal_focus("language-options", languages.flex_wrap()));
-        let mut rates = div().h_flex().gap_2().flex_wrap();
-        for rate in [0, 60, 125, 250, 500, 1000] {
-            rates = rates.child(
-                self.button(
-                    ("report-rate", rate as usize),
-                    if rate == 0 {
-                        self.tr("common.auto")
-                    } else {
-                        format!("{rate} Hz")
-                    },
-                    Command::App(Action::SetPassthroughMouseReportRate, rate.to_string()),
-                    false,
-                    cx,
-                )
-                .selected(self.ui.passthrough_mouse_report_rate == rate)
-                .toggled(self.ui.passthrough_mouse_report_rate == rate),
+            .child(
+                self.reveal_focus(
+                    "theme-options",
+                    div()
+                        .v_flex()
+                        .gap_2()
+                        .child(self.setting_text("settings.theme", "settings.theme.hint", cx))
+                        .child(themes.flex_wrap()),
+                ),
+            )
+            .child(
+                self.reveal_focus(
+                    "language-options",
+                    div()
+                        .v_flex()
+                        .gap_2()
+                        .child(self.setting_text("settings.language", "settings.language.hint", cx))
+                        .child(languages.flex_wrap()),
+                ),
             );
-        }
         let passthrough = self
             .section("settings.passthrough")
             .child(self.setting(
@@ -69,9 +120,33 @@ impl AppView {
                 Action::SetPassthroughOverlay,
                 cx,
             ))
-            .child(self.text(self.tr("settings.passthrough.mouse.report.rate")))
-            .child(self.reveal_focus("rate-options", rates))
-            .child(self.caption(self.tr("settings.passthrough.mouse.report.rate.hint"), cx))
+            .child(
+                self.reveal_focus(
+                    "rate-options",
+                    div()
+                        .h_flex()
+                        .gap_4()
+                        .child(
+                            self.setting_text(
+                                "settings.passthrough.mouse.report.rate",
+                                "settings.passthrough.mouse.report.rate.hint",
+                                cx,
+                            )
+                            .flex_1()
+                            .min_w_0(),
+                        )
+                        .child(
+                            div()
+                                .id("report-rate")
+                                .role(Role::Group)
+                                .aria_label(self.tr("settings.passthrough.mouse.report.rate"))
+                                .w_32()
+                                .flex_shrink_0()
+                                .child(Combobox::new(&self.report_rate).w_full())
+                                .test_support(),
+                        ),
+                ),
+            )
             .child(self.setting(
                 "reverse-scroll",
                 "settings.passthrough.reverse.scroll",
@@ -85,7 +160,7 @@ impl AppView {
             .child(self.setting(
                 "autostart",
                 "settings.autostart",
-                "",
+                "settings.autostart.hint",
                 self.ui.auto_start,
                 Action::SetAutostart,
                 cx,
@@ -93,7 +168,7 @@ impl AppView {
             .child(self.setting(
                 "start-hidden",
                 "settings.hidden",
-                "",
+                "settings.hidden.hint",
                 self.ui.start_hidden,
                 Action::SetStartHidden,
                 cx,
@@ -101,7 +176,7 @@ impl AppView {
             .child(self.setting(
                 "auto-listen",
                 "settings.auto.listen",
-                "",
+                "settings.auto.listen.hint",
                 self.ui.auto_listen,
                 Action::SetAutoListen,
                 cx,
@@ -114,16 +189,44 @@ impl AppView {
                 Action::SetCloseToTray,
                 cx,
             ));
+        let (permission_tag, permission_icon, permission_label) = if self.ui.elevated {
+            (
+                Tag::success(),
+                IconName::ShieldCheck,
+                "permissions.badge.administrator",
+            )
+        } else {
+            (Tag::info(), IconName::UserRound, "permissions.badge.user")
+        };
         let permissions = self
             .section("settings.app.permissions")
-            .child(self.caption(
-                self.tr(if self.ui.elevated {
-                    "permissions.badge.administrator"
-                } else {
-                    "permissions.badge.user"
-                }),
-                cx,
-            ))
+            .child(
+                self.reveal_focus(
+                    "admin-action",
+                    div()
+                        .h_flex()
+                        .justify_between()
+                        .gap_3()
+                        .flex_wrap()
+                        .child(
+                            permission_tag
+                                .gap_1()
+                                .flex_shrink_0()
+                                .child(Icon::new(permission_icon).size_3p5())
+                                .child(self.text(self.tr(permission_label))),
+                        )
+                        .child(
+                            self.app_button(
+                                "settings-elevate",
+                                "permissions.restart",
+                                Action::Elevate,
+                                self.ui.elevated,
+                                cx,
+                            )
+                            .flex_shrink_0(),
+                        ),
+                ),
+            )
             .child(self.setting(
                 "always-admin",
                 "settings.always.admin",
@@ -131,16 +234,6 @@ impl AppView {
                 self.ui.always_admin,
                 Action::SetAlwaysAdmin,
                 cx,
-            ))
-            .child(self.reveal_focus(
-                "admin-action",
-                div().child(self.app_button(
-                    "settings-elevate",
-                    "permissions.restart",
-                    Action::Elevate,
-                    self.ui.elevated,
-                    cx,
-                )),
             ));
         let notifications = self
             .section("settings.notifications")
@@ -262,17 +355,7 @@ impl AppView {
             div()
                 .h_flex()
                 .gap_4()
-                .child(
-                    div()
-                        .v_flex()
-                        .gap_1()
-                        .flex_1()
-                        .min_w_0()
-                        .child(self.text(self.tr(label)))
-                        .when(!hint.is_empty(), |row| {
-                            row.child(self.caption(self.tr(hint), cx))
-                        }),
-                )
+                .child(self.setting_text(label, hint, cx).flex_1().min_w_0())
                 .child(
                     Switch::new(id)
                         .accessibility_label(self.tr(label))
@@ -287,5 +370,13 @@ impl AppView {
                 ),
         )
         .into_any_element()
+    }
+
+    fn setting_text(&self, label: &str, hint: &str, cx: &Context<Self>) -> Div {
+        div()
+            .v_flex()
+            .gap_1()
+            .child(self.text(self.tr(label)))
+            .child(self.caption(self.tr(hint), cx))
     }
 }

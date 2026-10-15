@@ -4,7 +4,7 @@ use super::support::{
     settle, wait_until,
 };
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{AppContext, TestAppContext};
+use gpui_kit::{AppContext, ScrollDelta, TestAppContext, point, px};
 
 #[gpui_kit::test]
 fn wizard_requires_a_ready_receiver_and_persists_completion(cx: &mut TestAppContext) {
@@ -19,6 +19,11 @@ fn wizard_requires_a_ready_receiver_and_persists_completion(cx: &mut TestAppCont
     settle(cx, handle, &view);
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
+        window.scroll(
+            "settings",
+            ScrollDelta::Pixels(point(px(0.), px(-2000.))),
+            cx,
+        );
         window.click("wizard", cx);
         assert!(window.find("binding-enabled-media.play-pause").visible());
         assert_eq!(view.read(cx).ui.wizard_page, 0);

@@ -231,6 +231,7 @@
   "theme.system": "System",
   "tray.close.hint": "Still running in the background. Quit from the tray; change close behavior in Settings.",
   "tray.open": "Open window",
+  "tray.tooltip": "TapRelay\nDevice: %{device}\nStatus: %{status}",
   "wizard.bindings": "Choose a Tap shortcut",
   "wizard.input.count": "Shortcut inputs detected: ",
   "wizard.receiver": "Choose a receiver",

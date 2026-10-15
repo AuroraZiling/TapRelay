@@ -92,7 +92,7 @@ fn capture_escape_keeps_existing_shortcuts_and_restores_focus(cx: &mut TestAppCo
 }
 
 #[gpui_kit::test]
-fn recording_a_shortcut_updates_the_row_and_saved_binding(cx: &mut TestAppContext) {
+fn shortcut_button_records_cancels_and_removes_without_cross_triggering(cx: &mut TestAppContext) {
     let (handle, view, folder) = open(cx);
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
@@ -128,5 +128,61 @@ fn recording_a_shortcut_updates_the_row_and_saved_binding(cx: &mut TestAppContex
             Default::default(),
             0x77
         )]
+    );
+    for trigger in ["binding-media.play-pause-0", "binding-add-media.play-pause"] {
+        cx.update_window(handle, |_, window, cx| window.click(trigger, cx))
+            .unwrap();
+        settle(cx, handle, &view);
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            assert!(view.read(cx).controller.recording());
+            let button = window.find(trigger).bounds();
+            let cancel = window.find("capture-cancel-media.play-pause");
+            let bounds = cancel.bounds();
+            assert_ne!(cancel.disabled(), Some(true));
+            assert!(bounds.left() > button.center().x);
+            assert!(bounds.right() < button.right());
+            assert!(bounds.top() >= button.top() && bounds.bottom() <= button.bottom());
+            window.click("capture-cancel-media.play-pause", cx);
+        })
+        .unwrap();
+        settle(cx, handle, &view);
+        cx.update(|cx| {
+            assert!(!view.read(cx).controller.recording());
+            assert_eq!(
+                view.read(cx).controller.runtime.config.functions,
+                saved.functions
+            );
+        });
+    }
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        let button = window.find("binding-media.play-pause-0").bounds();
+        let clear = window.find("remove-media.play-pause-0").bounds();
+        assert!(clear.left() > button.center().x);
+        assert!(clear.right() < button.right());
+        assert!(clear.top() >= button.top() && clear.bottom() <= button.bottom());
+        window.click("remove-media.play-pause-0", cx);
+    })
+    .unwrap();
+    settle(cx, handle, &view);
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(!view.read(cx).controller.recording());
+        assert!(window.find("binding-add-media.play-pause").visible());
+        assert!(
+            view.read(cx).controller.runtime.config.functions
+                [&taprelay_core::function::FunctionId::MediaPlayPause]
+                .shortcuts
+                .is_empty()
+        );
+        view.update(cx, |view, _| view.controller.flush(true));
+    })
+    .unwrap();
+    let saved = crate::config::Config::load(&folder.path().join("config.json")).unwrap();
+    assert!(
+        saved.functions[&taprelay_core::function::FunctionId::MediaPlayPause]
+            .shortcuts
+            .is_empty()
     );
 }

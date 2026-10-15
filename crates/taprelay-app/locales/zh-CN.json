@@ -66,6 +66,7 @@
   "common.save_changes": "保存修改？",
   "common.save_failed": "保存失败，已保留当前编辑内容，请重试。",
   "common.saving": "正在保存…",
+  "common.shortcut": "快捷键",
   "common.skip": "跳过",
   "common.undo": "撤销",
   "diagnostics.inputs": "检测到输入",

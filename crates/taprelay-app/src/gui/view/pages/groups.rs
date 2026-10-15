@@ -75,7 +75,6 @@ impl AppView {
             .flex_1()
             .min_h_0()
             .gap_4()
-            .child(self.caption(self.tr("groups.help"), cx))
             .when(!group.error.is_empty(), |body| {
                 body.child(self.error(&group.error, cx))
             })

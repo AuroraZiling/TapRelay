@@ -10,10 +10,7 @@ use gpui_kit::{prelude::*, *};
 
 impl AppView {
     pub(in crate::gui::view) fn devices(&self, cx: &Context<Self>) -> AnyElement {
-        let mut body = div()
-            .v_flex()
-            .gap_3()
-            .child(self.caption(self.ui.discovery_status.clone(), cx));
+        let mut body = div().v_flex().gap_3();
         for row in &self.ui.paired_devices {
             let action = Action::try_from(row.action.as_str()).unwrap_or(Action::Device);
             let kind = match row.device_kind.as_str() {

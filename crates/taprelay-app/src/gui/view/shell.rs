@@ -258,7 +258,7 @@ impl AppView {
 
     pub(super) fn page_header(&self, cx: &Context<Self>) -> AnyElement {
         let mut header = div()
-            .id("page-header")
+            .id("page-heading-row")
             .h_flex()
             .gap_3()
             .flex_shrink_0()
@@ -320,6 +320,15 @@ impl AppView {
                     cx,
                 ));
                 if !self.ui.mapping.editor {
+                    header = header.when(self.ui.mapping.can_undo, |header| {
+                        header.child(self.button(
+                            "mapping-undo",
+                            self.tr("common.undo"),
+                            Command::Mapping("undo", String::new()),
+                            self.ui.mapping.busy,
+                            cx,
+                        ))
+                    });
                     header = header.child(
                         self.button(
                             "mapping-create",
@@ -356,6 +365,27 @@ impl AppView {
             }
             _ => {}
         }
-        header.test_support().into_any_element()
+        let description = match self.ui.page {
+            1 if !self.ui.mapping.open => Some(self.tr("bindings.help")),
+            1 if !self.ui.mapping.editor => Some(self.tr("mappings.help")),
+            2 => Some(self.ui.discovery_status.clone()),
+            4 if !self.ui.groups.editor_open => Some(self.tr("groups.help")),
+            _ => None,
+        };
+        div()
+            .id("page-header")
+            .v_flex()
+            .gap_1()
+            .flex_shrink_0()
+            .child(header.test_support())
+            .when_some(description, |header, description| {
+                header.child(
+                    self.caption(description, cx)
+                        .id("page-description")
+                        .test_support(),
+                )
+            })
+            .test_support()
+            .into_any_element()
     }
 }

@@ -17,13 +17,11 @@ pub(super) fn init(cx: &mut App) {
                 config.colors.primary_hover = Some("#3B50B0".into());
                 config.colors.primary_active = Some("#334699".into());
                 config.colors.ring = Some("#435AC4".into());
-                config.colors.input = Some("#777B8E".into());
                 config.colors.switch = Some("#777B8E".into());
                 "#EFF1F5"
             }
             "Catppuccin Macchiato" => {
                 config.colors.secondary_hover = Some("#494D64".into());
-                config.colors.input = Some("#868BA7".into());
                 config.colors.switch = Some("#70758D".into());
                 "#24273A"
             }

@@ -3,8 +3,10 @@ use crate::gui::action::Action;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::base::motion::{Transition, transition};
+#[cfg(not(windows))]
+use gpui_kit::component::TitleBar;
 use gpui_kit::component::{
-    ActiveTheme, Icon, Selectable, StyledExt, TitleBar,
+    ActiveTheme, Icon, Selectable, StyledExt,
     button::{Button, ButtonVariants},
     sidebar::SidebarToggleButton,
 };
@@ -23,66 +25,162 @@ const TITLES: [&str; 5] = [
 ];
 
 impl AppView {
-    pub(super) fn title_bar(&mut self, window: &Window, cx: &Context<Self>) -> TitleBar {
+    pub(super) fn title_bar(&mut self, window: &Window, cx: &Context<Self>) -> AnyElement {
         let icon = self.app_icon.image(window.rem_size() * 1.5, window);
         let origin = f32::from(window.rem_size()) * (CHROME_SIZE_REMS - 1.5) * 0.5;
         // A fractional device-pixel origin softens the raster even at its native size.
         let offset = px((origin * window.scale_factor()).round() / window.scale_factor() - origin);
-        TitleBar::new()
+        let brand = div()
+            .id("titlebar-brand")
+            .h_flex()
+            .flex_shrink_0()
+            .text_sm()
+            .when(self.ui.mode == 2, |brand| {
+                brand.child(
+                    div()
+                        .w(rems(CHROME_SIZE_REMS))
+                        .h(rems(CHROME_SIZE_REMS))
+                        .flex_shrink_0()
+                        .h_flex()
+                        .justify_center()
+                        // Native title-bar hit testing must not treat this control as a drag area.
+                        .occlude()
+                        .child(
+                            SidebarToggleButton::new()
+                                .collapsed(self.sidebar_collapsed)
+                                .accessibility_label(self.tr(if self.sidebar_collapsed {
+                                    "nav.expand"
+                                } else {
+                                    "nav.collapse"
+                                }))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.sidebar_collapsed = !this.sidebar_collapsed;
+                                    cx.notify();
+                                })),
+                        ),
+                )
+            })
+            .child(
+                div()
+                    .w(rems(CHROME_SIZE_REMS))
+                    .flex_shrink_0()
+                    .h_flex()
+                    .justify_center()
+                    .child(
+                        img(icon)
+                            .id("titlebar-icon")
+                            .size_6()
+                            .relative()
+                            .left(offset)
+                            .top(offset)
+                            .test_support(),
+                    ),
+            )
+            .child(self.text("TapRelay").id("titlebar-title").test_support())
+            .test_support();
+
+        #[cfg(not(windows))]
+        return TitleBar::new()
             .h(rems(CHROME_SIZE_REMS))
             .pl_0()
             .bg(cx.theme().title_bar)
             .border_b_0()
-            .child(
+            .child(brand)
+            .into_any_element();
+
+        #[cfg(windows)]
+        {
+            let control = |id, label, icon, area, close| {
                 div()
-                    .id("titlebar-brand")
-                    .h_flex()
+                    .id(id)
+                    .role(Role::Button)
+                    .aria_label(label)
+                    .w_12()
+                    .h_full()
                     .flex_shrink_0()
-                    .text_sm()
-                    .when(self.ui.mode == 2, |brand| {
-                        brand.child(
-                            div()
-                                .w(rems(CHROME_SIZE_REMS))
-                                .h(rems(CHROME_SIZE_REMS))
-                                .flex_shrink_0()
-                                .h_flex()
-                                .justify_center()
-                                // Native title-bar hit testing must not treat this control as a drag area.
-                                .occlude()
-                                .child(
-                                    SidebarToggleButton::new()
-                                        .collapsed(self.sidebar_collapsed)
-                                        .accessibility_label(self.tr(if self.sidebar_collapsed {
-                                            "nav.expand"
-                                        } else {
-                                            "nav.collapse"
-                                        }))
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.sidebar_collapsed = !this.sidebar_collapsed;
-                                            cx.notify();
-                                        })),
-                                ),
-                        )
+                    .h_flex()
+                    .justify_center()
+                    .window_control_area(area)
+                    .text_color(cx.theme().foreground)
+                    .hover(|style| {
+                        style
+                            .bg(if close {
+                                cx.theme().danger
+                            } else {
+                                cx.theme().secondary_hover
+                            })
+                            .text_color(if close {
+                                cx.theme().danger_foreground
+                            } else {
+                                cx.theme().secondary_foreground
+                            })
                     })
-                    .child(
-                        div()
-                            .w(rems(CHROME_SIZE_REMS))
-                            .flex_shrink_0()
-                            .h_flex()
-                            .justify_center()
-                            .child(
-                                img(icon)
-                                    .id("titlebar-icon")
-                                    .size_6()
-                                    .relative()
-                                    .left(offset)
-                                    .top(offset)
-                                    .test_support(),
-                            ),
-                    )
-                    .child(self.text("TapRelay").id("titlebar-title").test_support())
-                    .test_support(),
-            )
+                    .active(|style| {
+                        style
+                            .bg(if close {
+                                cx.theme().danger_active
+                            } else {
+                                cx.theme().secondary_active
+                            })
+                            .text_color(if close {
+                                cx.theme().danger_foreground
+                            } else {
+                                cx.theme().secondary_foreground
+                            })
+                    })
+                    .child(Icon::new(icon).size_3())
+                    .test_support()
+            };
+            let supported = window.window_controls();
+            div()
+                .id("title-bar")
+                .h_flex()
+                .h(rems(CHROME_SIZE_REMS))
+                .flex_shrink_0()
+                .bg(cx.theme().title_bar)
+                .child(
+                    div()
+                        .h_flex()
+                        .flex_1()
+                        .h_full()
+                        .window_control_area(WindowControlArea::Drag)
+                        .child(brand),
+                )
+                .child(
+                    div()
+                        .id("window-controls")
+                        .h_flex()
+                        .h_full()
+                        .flex_shrink_0()
+                        .when(supported.minimize, |controls| {
+                            controls.child(control(
+                                "minimize",
+                                "Minimize",
+                                IconName::WindowMinimize,
+                                WindowControlArea::Min,
+                                false,
+                            ))
+                        })
+                        .when(supported.maximize, |controls| {
+                            let (id, label, icon) = if window.is_maximized() {
+                                ("restore", "Restore", IconName::WindowRestore)
+                            } else {
+                                ("maximize", "Maximize", IconName::WindowMaximize)
+                            };
+                            controls.child(control(id, label, icon, WindowControlArea::Max, false))
+                        })
+                        .child(control(
+                            "close",
+                            "Close",
+                            IconName::WindowClose,
+                            WindowControlArea::Close,
+                            true,
+                        ))
+                        .test_support(),
+                )
+                .test_support()
+                .into_any_element()
+        }
     }
 
     pub(super) fn navigation(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {

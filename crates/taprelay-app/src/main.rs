@@ -1,23 +1,13 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 rust_i18n::i18n!("locales", fallback = "en");
-mod action;
-mod administrator;
-#[cfg(windows)]
-mod bluetooth_worker;
-mod capture_key;
 mod config;
-mod feedback;
+mod constants;
 mod gui;
 mod i18n;
 mod logging;
-mod passthrough_overlay;
 mod platform;
-mod receiver_view;
 mod runtime;
-mod runtime_worker;
-mod startup_checks;
-mod version;
-pub(crate) use gui::presentation::*;
+
 fn main() {
     #[cfg(windows)]
     if std::env::args().nth(1).as_deref() == Some("--bluetooth-worker") {
@@ -26,7 +16,7 @@ fn main() {
             eprintln!("Bluetooth worker logging: {error:#}");
             std::process::exit(2);
         }
-        let code = match bluetooth_worker::run_child() {
+        let code = match platform::bluetooth_worker::run_child() {
             Ok(()) => 0,
             Err(error) => {
                 tracing::error!(%error, "Bluetooth worker failed");

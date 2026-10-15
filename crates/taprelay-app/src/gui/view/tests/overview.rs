@@ -87,7 +87,7 @@ fn overview_listener_control_tracks_runtime_and_rejects_testing_without_receiver
             window.click("test-receiver", cx);
             assert!(matches!(
                 view.read(cx).controller.runtime.test,
-                crate::feedback::TestStatus::Idle
+                crate::runtime::TestStatus::Idle
             ));
         })
         .unwrap();
@@ -95,7 +95,7 @@ fn overview_listener_control_tracks_runtime_and_rejects_testing_without_receiver
         cx.update(|cx| {
             assert!(matches!(
                 view.read(cx).controller.runtime.test,
-                crate::feedback::TestStatus::Idle
+                crate::runtime::TestStatus::Idle
             ))
         });
     }

@@ -140,7 +140,7 @@ impl AppView {
         }));
         let empty = BTreeSet::new();
         for row in self.ui.binding.rows.iter().filter(|row| row.scope_editable) {
-            let Some(id) = crate::gui::FunctionId::from_stable_id(&row.id) else {
+            let Some(id) = taprelay_core::function::FunctionId::from_stable_id(&row.id) else {
                 continue;
             };
             let picker = self.scope_pickers.entry(id).or_insert_with(|| {

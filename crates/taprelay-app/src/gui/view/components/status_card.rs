@@ -1,4 +1,4 @@
-use crate::action::Action;
+use crate::gui::action::Action;
 use crate::gui::view::AppView;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::{

@@ -1,4 +1,4 @@
-use crate::action::Action;
+use crate::gui::action::Action;
 use crate::gui::view::{AppView, Command};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{Disableable, button::Button};

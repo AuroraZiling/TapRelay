@@ -1,6 +1,8 @@
 use super::components::LiveElement;
 use super::{AppView, Command};
-use crate::gui::{BindingCommand, WindowCommand, desktop};
+use crate::{
+    gui::presentation::WindowCommand, platform::desktop, runtime::commands::BindingCommand,
+};
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::{ActiveTheme, Theme, ThemeMode, WindowExt, notification::Notification};
 use gpui_kit::component::{
@@ -207,7 +209,7 @@ impl AppView {
         }
         if key == "escape" && down {
             self.dispatch(Command::Binding(BindingCommand::CancelCapture), window, cx);
-        } else if let Some(code) = crate::capture_key::virtual_key(key) {
+        } else if let Some(code) = crate::platform::capture_key::virtual_key(key) {
             self.controller
                 .runtime
                 .window_key(taprelay_core::input::InputEvent {

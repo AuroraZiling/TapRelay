@@ -112,15 +112,15 @@ fn passthrough_feedback_preserves_device_and_respects_system_notification_settin
                 for enabled in [true, false] {
                     view.controller.runtime.config.options.notifications = enabled;
                     view.controller
-                        .passthrough_feedback(&crate::passthrough_overlay::Notice {
-                            status: crate::passthrough_overlay::Status::Disconnected,
+                        .passthrough_feedback(&crate::runtime::passthrough::Notice {
+                            status: crate::runtime::passthrough::Status::Disconnected,
                             device: "Tablet".into(),
                         });
                     assert_eq!(
                         view.controller.pending_notification.as_deref(),
                         Some(expected)
                     );
-                    let crate::gui::Shell::Headless { notifications, .. } =
+                    let crate::gui::controller::Shell::Headless { notifications, .. } =
                         &view.controller.desktop
                     else {
                         unreachable!()

@@ -1,4 +1,4 @@
-use crate::action::Action;
+use crate::gui::action::Action;
 use crate::gui::{
     presentation::ChoiceOption,
     view::{AppView, Command},

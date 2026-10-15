@@ -1,6 +1,6 @@
 use super::support::{open, settle};
 use crate::{
-    action::Action,
+    gui::action::Action,
     gui::view::{Command, components::LiveElement},
 };
 use gpui_kit::base::test_support::snapshots;

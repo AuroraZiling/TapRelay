@@ -736,10 +736,11 @@ impl Controller {
         }
         if self.last_slow.elapsed() >= Duration::from_secs(1) {
             self.last_slow = now;
-            let tip = format!(
-                "TapRelay · {} · {}",
-                ui.device_name.clone(),
-                ui.stage.clone()
+            let tip = rust_i18n::t!(
+                keys::TRAY_TOOLTIP,
+                locale = self.locale(),
+                device = &ui.device_name,
+                status = &ui.stage
             );
             self.desktop.update(
                 ui.state_color as u8,

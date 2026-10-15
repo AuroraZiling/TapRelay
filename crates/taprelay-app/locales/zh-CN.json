@@ -231,6 +231,7 @@
   "theme.system": "跟随系统",
   "tray.close.hint": "仍在后台运行，可从托盘退出。关闭行为可在设置中更改。",
   "tray.open": "打开窗口",
+  "tray.tooltip": "TapRelay\n设备：%{device}\n状态：%{status}",
   "wizard.bindings": "设置 Tap 按键",
   "wizard.input.count": "检测到绑定输入：",
   "wizard.receiver": "选择接收设备",

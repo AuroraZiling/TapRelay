@@ -1,7 +1,5 @@
 use super::support::{open, settle};
-use crate::action::Action;
 use crate::config::Config;
-use crate::gui::view::Command;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{AppContext, TestAppContext};
 
@@ -9,30 +7,28 @@ use gpui_kit::{AppContext, TestAppContext};
 fn invalid_group_name_stays_in_editor_and_save_persists(cx: &mut TestAppContext) {
     let (handle, view, folder) = open(cx);
     cx.update_window(handle, |_, window, cx| {
-        view.update(cx, |view, cx| {
-            view.dispatch(Command::App(Action::Navigate, "4".into()), window, cx);
-        });
+        window.render_frame(cx);
+        window.click("0-2", cx);
     })
     .unwrap();
     settle(cx, handle, &view);
     cx.update_window(handle, |_, window, cx| {
-        view.update(cx, |view, cx| {
-            // Edit a supplied group so this test never enumerates native windows.
-            view.controller
-                .runtime
-                .config
-                .foreground_app_rules
-                .groups
-                .insert(
-                    "games".into(),
-                    taprelay_core::foreground_app::ForegroundAppGroup {
-                        name: "Games".into(),
-                        foreground_apps: Default::default(),
-                    },
-                );
-            view.dispatch(Command::Group("edit", "games".into()), window, cx);
-        });
         window.render_frame(cx);
+        window.click("group-create", cx);
+        window.click("group-name", cx);
+        window.press("ctrl-a", cx);
+        window.input("Games", cx);
+        window.click("group-save", cx);
+    })
+    .unwrap();
+    settle(cx, handle, &view);
+    let saved = Config::load(&folder.path().join("config.json")).unwrap();
+    assert_eq!(saved.foreground_app_rules.groups.len(), 1);
+    let id = saved.foreground_app_rules.groups.keys().next().unwrap();
+    let edit = gpui_kit::SharedString::from(format!("group-edit-{id}"));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(edit.clone(), cx);
         window.click("group-name", cx);
         window.press("ctrl-a", cx);
         window.press("backspace", cx);
@@ -51,15 +47,98 @@ fn invalid_group_name_stays_in_editor_and_save_persists(cx: &mut TestAppContext)
     .unwrap();
     settle(cx, handle, &view);
     cx.update(|cx| assert!(!view.read(cx).ui.groups.editor_open));
-    let saved = Config::load(&folder.path().join("config.json")).unwrap();
-    assert_eq!(saved.foreground_app_rules.groups["games"].name, "Work");
+    let updated = Config::load(&folder.path().join("config.json")).unwrap();
+    assert_eq!(updated.foreground_app_rules.groups[id].name, "Work");
     cx.update_window(handle, |_, window, cx| {
-        view.update(cx, |view, cx| {
-            view.dispatch(Command::Group("edit", "games".into()), window, cx)
-        });
         window.render_frame(cx);
+        window.click(edit, cx);
         window.press("escape", cx);
         assert!(!view.read(cx).ui.groups.editor_open);
     })
     .unwrap();
+}
+
+#[gpui_kit::test]
+fn creates_selects_removes_and_deletes_an_application_group_through_controls(
+    cx: &mut TestAppContext,
+) {
+    let (handle, view, folder) = open(cx);
+    let app = r"C:\Apps\Editor.exe";
+    cx.update_window(handle, |_, window, cx| {
+        cx.set_reduce_motion(true);
+        view.update(cx, |view, _| {
+            let crate::gui::Shell::Headless { running_apps, .. } = &mut view.controller.desktop
+            else {
+                unreachable!()
+            };
+            running_apps.push(app.into());
+        });
+        window.render_frame(cx);
+        window.click("0-2", cx);
+    })
+    .unwrap();
+    settle(cx, handle, &view);
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("group-create", cx);
+        window.click("group-name", cx);
+        window.press("ctrl-a", cx);
+        window.input("Editors 中文", cx);
+        let add = gpui_kit::SharedString::from(format!("group-app-{app}"));
+        assert!(window.find(add.clone()).visible());
+        window.click(add.clone(), cx);
+        assert!(window.try_find(add.clone()).is_none());
+        window.within("group-tabs").click(0usize, cx);
+        assert!(window.find(add.clone()).visible());
+        window.click(add.clone(), cx);
+        assert!(window.try_find(add.clone()).is_none());
+        assert!(view.read(cx).ui.groups.foreground_apps.is_empty());
+        window.within("group-tabs").click(1usize, cx);
+        window.click(add, cx);
+        window.click("group-save", cx);
+    })
+    .unwrap();
+    settle(cx, handle, &view);
+    let saved = Config::load(&folder.path().join("config.json")).unwrap();
+    assert_eq!(saved.foreground_app_rules.groups.len(), 1);
+    let (id, group) = saved.foreground_app_rules.groups.iter().next().unwrap();
+    assert_eq!(group.name, "Editors 中文");
+    assert_eq!(group.foreground_apps, [app]);
+    let delete = gpui_kit::SharedString::from(format!("group-delete-{id}"));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(!view.read(cx).ui.groups.editor_open);
+        assert!(window.find(delete.clone()).visible());
+        window.click(delete.clone(), cx);
+        window.within("dialog").click("dialog-cancel", cx);
+        assert!(window.find(delete.clone()).visible());
+        assert_eq!(
+            view.read(cx)
+                .controller
+                .runtime
+                .config
+                .foreground_app_rules
+                .groups
+                .len(),
+            1
+        );
+        window.click(delete.clone(), cx);
+        window.within("dialog").click("dialog-delete", cx);
+    })
+    .unwrap();
+    settle(cx, handle, &view);
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find(delete).is_none());
+        assert!(window.find("group-create").visible());
+        assert!(!view.read(cx).ui.groups.confirming_delete);
+    })
+    .unwrap();
+    assert!(
+        Config::load(&folder.path().join("config.json"))
+            .unwrap()
+            .foreground_app_rules
+            .groups
+            .is_empty()
+    );
 }

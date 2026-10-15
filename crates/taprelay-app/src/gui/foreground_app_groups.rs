@@ -146,7 +146,8 @@ impl Controller {
                     .as_ref()
                     .context(self.tr(keys::GROUPS_INVALID))?;
                 let foreground_apps =
-                    crate::platform::foreground_apps::running()?
+                    self.desktop
+                        .running_apps()?
                         .into_iter()
                         .filter(|path| {
                             !draft.group.foreground_apps.iter().any(|other| {

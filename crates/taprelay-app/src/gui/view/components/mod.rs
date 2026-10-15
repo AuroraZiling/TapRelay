@@ -1,5 +1,6 @@
 mod action_alert;
 mod admin_alert;
+mod app_icon;
 mod button;
 mod content;
 mod focus_reveal;
@@ -11,6 +12,7 @@ mod status_card;
 mod status_indicator;
 
 pub(super) use action_alert::ActionAlert;
+pub(super) use app_icon::AppIcon;
 pub(super) use live_region::{LiveElement, LiveRegion};
 pub(super) use scope_picker::ScopePicker;
 pub(super) use shortcut_button::ShortcutButton;

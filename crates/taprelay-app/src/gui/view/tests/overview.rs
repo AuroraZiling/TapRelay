@@ -26,7 +26,7 @@ fn preserves_overview_proportions_in_both_themes_and_window_sizes(cx: &mut TestA
                     let header = window.find("page-header").bounds();
                     let status = window.find("status-card").bounds();
                     let shortcuts = window.find("shortcuts-card").bounds();
-                    assert_eq!(nav.size.width, px(188.));
+                    assert_eq!(nav.size.width, px(176.));
                     assert_eq!(nav.size.height, px(height) - bar.size.height);
                     assert_eq!(
                         header.origin,

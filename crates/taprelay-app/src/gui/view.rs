@@ -11,7 +11,6 @@ use gpui_kit::component::{
 use gpui_kit::{prelude::*, *};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -38,7 +37,7 @@ pub(super) struct AppView {
     sidebar_collapsed: bool,
     content_scroll: ScrollHandle,
     scroll_region: std::cell::Cell<&'static str>,
-    app_icon: Arc<Image>,
+    app_icon: components::AppIcon,
     group_name: Entity<InputState>,
     mapping_name: Entity<InputState>,
     output_filter: Entity<InputState>,
@@ -187,10 +186,7 @@ impl AppView {
             sidebar_collapsed: false,
             content_scroll: ScrollHandle::new(),
             scroll_region: std::cell::Cell::new(""),
-            app_icon: Arc::new(Image::from_bytes(
-                ImageFormat::Png,
-                include_bytes!("../../resources/taprelay-128.png").to_vec(),
-            )),
+            app_icon: components::AppIcon::default(),
             group_name,
             mapping_name,
             output_filter,
@@ -329,7 +325,7 @@ impl Render for AppView {
         if self.ui.mode == 2 {
             workspace = workspace.child(self.navigation(window, cx));
         }
-        root.child(self.title_bar(cx))
+        root.child(self.title_bar(window, cx))
             .child(workspace.child(content))
     }
 }

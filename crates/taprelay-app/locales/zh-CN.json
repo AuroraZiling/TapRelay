@@ -16,6 +16,7 @@
   "bindings.gesture.press": "点按",
   "bindings.gesture.repeat": "连续调节",
   "bindings.help": "启用所需功能，并设置对应的快捷键。",
+  "bindings.more_scopes": "+%{count} 项",
   "bluetooth.checking": "正在检查蓝牙",
   "bluetooth.disabled": "未启用",
   "bluetooth.enabled": "已启用",

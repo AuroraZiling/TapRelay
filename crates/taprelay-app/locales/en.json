@@ -16,6 +16,7 @@
   "bindings.gesture.press": "Tap",
   "bindings.gesture.repeat": "Adjust continuously",
   "bindings.help": "Enable the functions you need and assign their shortcuts.",
+  "bindings.more_scopes": "+%{count} more",
   "bluetooth.checking": "Checking Bluetooth",
   "bluetooth.disabled": "Disabled",
   "bluetooth.enabled": "Enabled",

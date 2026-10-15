@@ -51,7 +51,7 @@ impl AppView {
             body = body.child(self.admin_alert(cx));
         }
         body = body.child(match step {
-            0 => self.bindings(cx),
+            0 => self.bindings(window, cx),
             1 => self.devices(cx),
             _ => self.scroller(
                 "wizard-test",

@@ -145,9 +145,6 @@ impl crate::platform::Transport for Handle {
     fn disconnect(&self) -> Result<u64> {
         self.change(Control::Select(None))
     }
-    fn bluetooth_settings(&self) -> Result<()> {
-        Ok(taprelay_windows::desktop::open("ms-settings:bluetooth")?)
-    }
     fn invalidate(&self) {
         if let Err(error) = self.change(Control::Invalidate) {
             self.link.fail(error.to_string());

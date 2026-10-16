@@ -7,6 +7,7 @@ pub(in crate::gui) enum Shell {
         autostart: bool,
         running_apps: Vec<String>,
         notifications: std::cell::RefCell<Vec<(String, String)>>,
+        bluetooth_settings_opened: bool,
     },
 }
 
@@ -39,6 +40,20 @@ impl Shell {
             Self::Native(_) => Ok(crate::platform::foreground_apps::running()?),
             #[cfg(test)]
             Self::Headless { running_apps, .. } => Ok(running_apps.clone()),
+        }
+    }
+
+    pub(in crate::gui) fn bluetooth_settings(&mut self) -> Result<()> {
+        match self {
+            Self::Native(_) => Ok(desktop::open("ms-settings:bluetooth")?),
+            #[cfg(test)]
+            Self::Headless {
+                bluetooth_settings_opened,
+                ..
+            } => {
+                *bluetooth_settings_opened = true;
+                Ok(())
+            }
         }
     }
 

@@ -97,13 +97,6 @@ impl Runtime {
         Ok(())
     }
 
-    pub fn bluetooth_settings(&self) -> Result<()> {
-        self.transport
-            .as_ref()
-            .context("Bluetooth not started")?
-            .bluetooth_settings()
-    }
-
     pub fn refresh(&self) -> Result<()> {
         self.transport
             .as_ref()

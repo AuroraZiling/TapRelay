@@ -15,7 +15,6 @@ pub(in crate::gui::view::tests) enum Call {
     Pair(String),
     Disconnect,
     Refresh,
-    Settings,
     Send,
 }
 
@@ -93,11 +92,6 @@ impl Transport for Receiver {
 
     fn refresh(&self) -> Result<()> {
         self.calls.lock().unwrap().push(Call::Refresh);
-        Ok(())
-    }
-
-    fn bluetooth_settings(&self) -> Result<()> {
-        self.calls.lock().unwrap().push(Call::Settings);
         Ok(())
     }
 

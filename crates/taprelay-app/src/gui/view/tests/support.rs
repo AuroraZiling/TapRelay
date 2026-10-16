@@ -82,6 +82,7 @@ pub(super) fn open_with_config(
             autostart: false,
             running_apps: Vec::new(),
             notifications: Default::default(),
+            bluetooth_settings_opened: false,
         },
         Default::default(),
         None,

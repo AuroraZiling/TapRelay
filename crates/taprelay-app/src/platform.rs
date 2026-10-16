@@ -59,9 +59,6 @@ pub trait Transport {
     fn disconnect(&self) -> Result<u64> {
         anyhow::bail!("Disconnect unavailable")
     }
-    fn bluetooth_settings(&self) -> Result<()> {
-        anyhow::bail!("Bluetooth settings unavailable")
-    }
     fn invalidate(&self);
     fn send(&self, command: QueuedCommand) -> Result<oneshot::Receiver<Result<(), BackendError>>>;
 }

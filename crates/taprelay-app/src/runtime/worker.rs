@@ -605,9 +605,6 @@ impl RuntimeHandle {
     pub fn disconnect(&mut self) -> Result<()> {
         self.update(move |r| r.disconnect())
     }
-    pub fn bluetooth_settings(&mut self) -> Result<()> {
-        self.update(move |r| r.bluetooth_settings())
-    }
     pub fn refresh(&mut self) -> Result<()> {
         self.update(move |r| r.refresh())
     }

@@ -29,6 +29,7 @@ fn controller(state: Snapshot) -> (Controller, tempfile::TempDir) {
             autostart: false,
             running_apps: Vec::new(),
             notifications: Default::default(),
+            bluetooth_settings_opened: false,
         },
         Default::default(),
         None,
@@ -45,6 +46,27 @@ fn ready() -> Snapshot {
         broadcasting: true,
         ..Default::default()
     }
+}
+
+#[test]
+fn bluetooth_settings_open_without_transport_after_startup_failure() {
+    let (mut controller, _folder) = controller(Snapshot {
+        last_error: Some("Bluetooth unavailable".into()),
+        ..Default::default()
+    });
+    let mut ui = Presentation::default();
+    controller.tick(&mut ui);
+    assert_eq!(controller.startup_state(), StartupState::Failed);
+    controller
+        .action(&mut ui, Action::BluetoothSettings, "")
+        .unwrap();
+    assert!(matches!(
+        controller.desktop,
+        Shell::Headless {
+            bluetooth_settings_opened: true,
+            ..
+        }
+    ));
 }
 
 #[test]

@@ -119,7 +119,7 @@ impl Controller {
                 self.stage_since = Instant::now();
                 self.last_error.clear();
             }
-            Action::BluetoothSettings => self.runtime.bluetooth_settings()?,
+            Action::BluetoothSettings => self.desktop.bluetooth_settings()?,
             Action::Repository => desktop::open("https://github.com/AuroraZiling/TapRelay")?,
             Action::License => {
                 desktop::open("https://github.com/AuroraZiling/TapRelay/blob/main/LICENSE")?

@@ -75,7 +75,14 @@ fn device_controls_route_identity_reject_unavailable_and_disconnect(cx: &mut Tes
     .unwrap();
     settle(cx, handle, &view);
     cx.update_window(handle, |_, window, cx| {
-        window.click("receiver-settings", cx)
+        window.click("receiver-settings", cx);
+        assert!(matches!(
+            view.read(cx).controller.desktop,
+            crate::gui::controller::Shell::Headless {
+                bluetooth_settings_opened: true,
+                ..
+            }
+        ));
     })
     .unwrap();
     settle(cx, handle, &view);
@@ -87,7 +94,7 @@ fn device_controls_route_identity_reject_unavailable_and_disconnect(cx: &mut Tes
     settle(cx, handle, &view);
     assert_eq!(
         *receiver.calls.lock().unwrap(),
-        [Call::Refresh, Call::Settings, Call::Select("tablet".into())]
+        [Call::Refresh, Call::Select("tablet".into())]
     );
     receiver.connected();
     wait_until(cx, handle, &view, |view| view.ui.ready);
@@ -119,7 +126,6 @@ fn device_controls_route_identity_reject_unavailable_and_disconnect(cx: &mut Tes
         *receiver.calls.lock().unwrap(),
         [
             Call::Refresh,
-            Call::Settings,
             Call::Select("tablet".into()),
             Call::Disconnect,
         ]

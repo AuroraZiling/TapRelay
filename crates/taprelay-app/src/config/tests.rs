@@ -1,6 +1,61 @@
 use super::*;
 
 #[test]
+fn missing_options_use_application_defaults_and_preserve_explicit_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.json");
+    for (options, expected) in [
+        (serde_json::json!({}), Options::default()),
+        (
+            serde_json::json!({
+                "passthrough_overlay": false,
+                "passthrough_mouse_percent": 75,
+                "auto_listen": false,
+                "theme": "dark"
+            }),
+            Options {
+                passthrough_overlay: false,
+                passthrough_mouse_percent: 75,
+                auto_listen: false,
+                theme: Theme::Dark,
+                ..Options::default()
+            },
+        ),
+    ] {
+        let mut json = serde_json::to_value(Config::default()).unwrap();
+        json["options"] = options;
+        let bytes = serde_json::to_vec(&json).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        let config = Config::load(&path).unwrap();
+        assert_eq!(
+            serde_json::to_value(config.options).unwrap(),
+            serde_json::to_value(expected).unwrap()
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn invalid_options_are_rejected_instead_of_replaced_with_defaults() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.json");
+    for options in [
+        serde_json::json!({ "passthrough_overlay": null }),
+        serde_json::json!({ "passthrough_overlay": "true" }),
+        serde_json::json!({ "passthrough_mouse_percent": 0 }),
+        serde_json::json!({ "passthrough_mouse_percent": 101 }),
+        serde_json::json!({ "unknown_setting": true }),
+    ] {
+        let mut json = serde_json::to_value(Config::default()).unwrap();
+        json["options"] = options;
+        let bytes = serde_json::to_vec(&json).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(Config::load(&path).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+}
+
+#[test]
 fn sidebar_defaults_expanded_for_old_configs_and_round_trips_both_states() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.json");

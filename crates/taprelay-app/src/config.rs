@@ -41,17 +41,12 @@ pub struct Wizard {
     pub page: u8,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct Options {
-    #[serde(default)]
     pub sidebar_collapsed: bool,
-    #[serde(default = "default_passthrough_overlay")]
     pub passthrough_overlay: bool,
-    #[serde(default = "default_mouse_percent")]
     pub passthrough_mouse_percent: u16,
-    #[serde(default)]
     pub passthrough_mouse_report_rate: u16,
-    #[serde(default)]
     pub passthrough_reverse_scroll: bool,
     pub always_admin: bool,
     pub auto_listen: bool,
@@ -69,7 +64,7 @@ impl Default for Options {
         Self {
             sidebar_collapsed: false,
             passthrough_overlay: true,
-            passthrough_mouse_percent: default_mouse_percent(),
+            passthrough_mouse_percent: 50,
             passthrough_mouse_report_rate: 0,
             passthrough_reverse_scroll: false,
             always_admin: true,
@@ -84,12 +79,6 @@ impl Default for Options {
             language: Language::System,
         }
     }
-}
-fn default_passthrough_overlay() -> bool {
-    true
-}
-fn default_mouse_percent() -> u16 {
-    50
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

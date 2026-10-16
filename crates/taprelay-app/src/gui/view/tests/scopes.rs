@@ -187,7 +187,7 @@ fn scope_tags_collapse_without_overflowing_and_keep_the_full_selection(cx: &mut 
         })
         .unwrap();
         settle(cx, handle, &view);
-        for language in ["english", "chinese"] {
+        for language in ["en", "zh-CN"] {
             cx.update_window(handle, |_, window, cx| {
                 view.update(cx, |view, cx| {
                     view.controller.runtime.config.options.language =
@@ -208,7 +208,7 @@ fn scope_tags_collapse_without_overflowing_and_keep_the_full_selection(cx: &mut 
                 assert!(scope.try_find(("scope-tag", visible)).is_none());
                 let more = scope.find("scope-more");
                 assert!(more.bounds().is_contained_within(&bounds));
-                let expected = if language == "english" {
+                let expected = if language == "en" {
                     format!("+{} more", 3 - visible)
                 } else {
                     format!("+{} 项", 3 - visible)
@@ -257,7 +257,7 @@ fn scope_combobox_refreshes_labels_without_recreating_state(cx: &mut TestAppCont
                 .groups
                 .remove("work");
             view.controller.runtime.config.options.language =
-                crate::config::Language::from_name("chinese").unwrap();
+                crate::config::Language::from_name("zh-CN").unwrap();
             view.controller.sync(&mut view.ui);
             view.effects(window, cx);
         });

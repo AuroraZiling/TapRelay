@@ -8,7 +8,7 @@ use gpui_kit::{AppContext, ElementId, TestAppContext, px};
 fn renders_every_page_in_both_languages_in_a_compact_window(cx: &mut TestAppContext) {
     let (handle, view, _folder) = open(cx);
     cx.update_window(handle, |_, window, cx| {
-        for language in ["english", "chinese"] {
+        for language in ["en", "zh-CN"] {
             for (page, landmark) in [
                 (0, ElementId::from("status-card")),
                 (1, "custom-mappings".into()),

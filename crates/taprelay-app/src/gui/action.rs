@@ -25,7 +25,6 @@ actions! {
     WizardFinish => "wizard-finish",
     // Payload: a `Theme` name ("system", "light", "dark").
     Theme => "theme",
-    // Payload: a `Language` name ("system", "chinese", "english").
     Language => "language",
     // One command per option: the name says which setting, and the payload is
     // its new state, so the UI never has to number them.

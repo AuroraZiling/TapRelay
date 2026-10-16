@@ -11,7 +11,7 @@ fn title_bar_remains_above_every_screen_in_both_locales_and_themes(cx: &mut Test
     for scale in [1., 1.25, 1.5, 2.] {
         cx.simulate_window_scale_factor_change(handle, scale);
         cx.update_window(handle, |_, window, cx| {
-            for language in ["english", "chinese"] {
+            for language in ["en", "zh-CN"] {
                 for dark in [false, true] {
                     for mode in [0, 1, 2, 3] {
                         view.update(cx, |view, cx| {
@@ -233,7 +233,7 @@ fn sidebar_toggles_and_navigates_in_both_locales(cx: &mut TestAppContext) {
     let (handle, view, _folder) = open(cx);
     cx.update_window(handle, |_, window, cx| {
         cx.set_reduce_motion(true);
-        for language in ["english", "chinese"] {
+        for language in ["en", "zh-CN"] {
             view.update(cx, |view, cx| {
                 view.controller.runtime.config.options.language =
                     crate::config::Language::from_name(language).unwrap();

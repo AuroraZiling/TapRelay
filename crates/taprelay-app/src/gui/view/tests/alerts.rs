@@ -9,10 +9,10 @@ fn alerts_keep_actions_inside_with_long_messages_and_both_themes(cx: &mut TestAp
         let (handle, view, _folder) = open_sized(cx, width, height);
         cx.update_window(handle, |_, window, cx| {
             for dark in [false, true] {
-                for (locale, language) in [("en", "english"), ("zh-CN", "chinese")] {
+                for locale in ["en", "zh-CN"] {
                     view.update(cx, |view, cx| {
                         view.controller.runtime.config.options.language =
-                            crate::config::Language::from_name(language).unwrap();
+                            crate::config::Language::from_name(locale).unwrap();
                         view.ui.page = 0;
                         view.ui.dark = dark;
                         view.ui.locale = locale.into();

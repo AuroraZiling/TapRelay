@@ -1,7 +1,4 @@
-use crate::{
-    gui::presentation::CheckRow,
-    i18n::{self, keys},
-};
+use crate::{gui::presentation::CheckRow, i18n::keys};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State {
@@ -16,7 +13,6 @@ pub fn rows(
     flags: [bool; 4],
     failed: bool,
 ) -> Vec<CheckRow> {
-    let locale = i18n::resolve(locale).unwrap_or(locale);
     let flags = if environment_failed {
         [false; 5]
     } else {

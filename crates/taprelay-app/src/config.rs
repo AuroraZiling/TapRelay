@@ -112,32 +112,19 @@ impl Theme {
 #[serde(rename_all = "snake_case")]
 pub enum Language {
     System,
-    Chinese,
-    English,
     Locale(String),
 }
 impl Language {
     pub fn locale(&self) -> &'static str {
         match self {
-            Self::Chinese => "zh-CN",
-            Self::English => "en",
             Self::Locale(id) => crate::i18n::resolve(id).unwrap_or(crate::i18n::locale::SOURCE),
             Self::System => crate::i18n::locale::SOURCE,
         }
     }
     pub fn from_name(name: &str) -> Option<Self> {
-        if let Some(id) = crate::i18n::resolve(name) {
-            return match id {
-                "en" => Some(Self::English),
-                "zh-CN" => Some(Self::Chinese),
-                _ => Some(Self::Locale(id.to_owned())),
-            };
-        }
         match name {
             "system" => Some(Self::System),
-            "chinese" => Some(Self::Chinese),
-            "english" => Some(Self::English),
-            _ => None,
+            _ => crate::i18n::resolve(name).map(|id| Self::Locale(id.to_owned())),
         }
     }
 }

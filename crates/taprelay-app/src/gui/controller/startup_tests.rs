@@ -6,7 +6,7 @@ use taprelay_core::state::Snapshot;
 fn controller(state: Snapshot) -> (Controller, tempfile::TempDir) {
     let folder = tempfile::tempdir().unwrap();
     let mut config = Config::default();
-    config.options.language = Language::from_name("english").unwrap();
+    config.options.language = Language::from_name("en").unwrap();
     config.options.notifications = false;
     config.options.auto_listen = false;
     config.wizard.dismissed = true;

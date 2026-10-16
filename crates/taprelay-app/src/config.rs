@@ -1,7 +1,5 @@
-mod save_queue;
 mod storage;
 
-pub use save_queue::SaveQueue;
 pub use storage::{check_writable, path};
 
 use anyhow::{Result, ensure};

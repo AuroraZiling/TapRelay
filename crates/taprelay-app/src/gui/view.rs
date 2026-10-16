@@ -141,7 +141,7 @@ impl AppView {
             false
         });
         subscriptions
-            .push(cx.observe_window_bounds(window, |this, window, _| this.save_geometry(window)));
+            .push(cx.observe_window_bounds(window, |this, window, _| this.update_geometry(window)));
         let pump = cx.spawn_in(window, async move |this, cx| {
             loop {
                 let delay = this.update_in(cx, |this, window, cx| {
@@ -226,7 +226,7 @@ impl AppView {
     fn dispatch(&mut self, command: Command, window: &mut Window, cx: &mut Context<Self>) {
         self.pull_inputs(cx);
         self.controller.runtime.poll();
-        self.save_geometry(window);
+        self.update_geometry(window);
         self.controller.runtime.consume_ui_input();
         let result = match &command {
             Command::App(action, value) => self.controller.action(&mut self.ui, *action, value),

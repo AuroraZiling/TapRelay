@@ -143,36 +143,6 @@ fn loading_removes_only_standalone_primary_mouse_bindings() {
     }
 }
 #[test]
-fn rapid_edits_and_forced_flush_preserve_last_value() {
-    let dir = tempfile::tempdir().unwrap();
-    let p = dir.path().join("config.json");
-    let mut c = Config::default();
-    let mut q = SaveQueue::default();
-    q.changed();
-    c.options.start_hidden = true;
-    q.changed();
-    q.flush(&c, &p, false).unwrap();
-    assert!(!p.exists());
-    q.flush(&c, &p, true).unwrap();
-    assert!(Config::load(&p).unwrap().options.start_hidden);
-}
-#[test]
-fn failed_save_remains_pending_for_a_later_forced_flush() {
-    let directory = tempfile::tempdir().unwrap();
-    let parent = directory.path().join("temporarily-unavailable");
-    let path = parent.join("config.json");
-    let mut config = Config::default();
-    config.options.theme = Theme::Dark;
-    let mut saves = SaveQueue::default();
-    saves.changed();
-    assert!(saves.flush(&config, &path, true).is_err());
-    std::fs::create_dir(&parent).unwrap();
-    saves.flush(&config, &path, true).unwrap();
-    assert!(path.exists());
-    assert_eq!(Config::load(&path).unwrap().options.theme, Theme::Dark);
-}
-
-#[test]
 fn invalid_config_is_not_overwritten() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("config.json");

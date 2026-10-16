@@ -11,7 +11,6 @@ impl Controller {
         } else {
             self.runtime.poll();
         }
-        self.track_remembered_device();
         let mut passthrough_notice = None;
         while let Some(notice) = self.runtime.take_notice() {
             match notice {
@@ -105,7 +104,7 @@ impl Controller {
             self.say(message.clone());
             self.notify_error(&message);
         }
-        self.flush(false);
+        self.save_config();
         if let Err(error) = self.present_startup(ui) {
             self.error(&format!("{error:#}"));
         }
@@ -209,13 +208,14 @@ impl Controller {
         match self.exit {
             Some(ExitIntent::Quit) if self.runtime.stopped() => {
                 self.save_geometry(ui);
-                self.flush(true);
+                self.save_config();
                 self.shutdown = true;
                 ui.window_command = Some(WindowCommand::Quit);
             }
             Some(ExitIntent::Elevate) if !self.runtime.busy() => {
                 self.save_geometry(ui);
                 self.runtime.config.save(&self.path)?;
+                self.save_pending = false;
                 self.exit = None;
                 if !self.status.elevated && administrator::restart()? {
                     self.runtime.shutdown()?;
@@ -229,6 +229,6 @@ impl Controller {
 
     pub(in crate::gui) fn save_geometry(&mut self, ui: &mut Presentation) {
         self.runtime.config.window = ui.geometry.clone();
-        self.saves.changed();
+        self.save_pending = true;
     }
 }

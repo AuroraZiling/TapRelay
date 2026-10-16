@@ -45,7 +45,7 @@ fn notification(message: String, close_label: String) -> Notification {
 }
 
 impl AppView {
-    pub(super) fn save_geometry(&mut self, window: &Window) {
+    pub(super) fn update_geometry(&mut self, window: &Window) {
         if self.controller.hidden || !window.is_visible() {
             return;
         }
@@ -61,9 +61,6 @@ impl AppView {
                 self.ui.geometry.x = Some((f32::from(bounds.origin.x) * scale).round() as i32);
                 self.ui.geometry.y = Some((f32::from(bounds.origin.y) * scale).round() as i32);
             }
-        }
-        if self.controller.runtime.config.window != self.ui.geometry {
-            self.controller.save_geometry(&mut self.ui);
         }
     }
 
@@ -157,8 +154,6 @@ impl AppView {
         if let Some(command) = self.ui.window_command.take() {
             match command {
                 WindowCommand::Quit => {
-                    self.controller.save_geometry(&mut self.ui);
-                    self.controller.flush(true);
                     cx.quit();
                 }
                 WindowCommand::Show | WindowCommand::Hide => {

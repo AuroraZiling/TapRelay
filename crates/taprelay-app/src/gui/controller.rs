@@ -1,5 +1,5 @@
 use crate::{
-    config::{Device, Language, SaveQueue, Theme as ThemeSetting},
+    config::{Device, Language, Theme as ThemeSetting},
     gui::action::{self, Action},
     gui::feedback::WaitWarning,
     gui::presentation::startup::State as StartupState,
@@ -63,7 +63,7 @@ pub(super) struct Controller {
     pub(super) path: PathBuf,
     logs: Option<tracing_appender::non_blocking::ErrorCounter>,
     pub(super) desktop: Shell,
-    pub(super) saves: SaveQueue,
+    pub(super) save_pending: bool,
     status: administrator::Status,
     pub(super) fatal: Option<String>,
     pub(super) passed: bool,
@@ -94,7 +94,7 @@ pub(super) struct Controller {
     pub(super) last_system_poll: Instant,
     last_ui_sync: Instant,
     last_dropped_logs: usize,
-    persisted_remembered_device: Option<Device>,
+    last_remembered_device: Option<Device>,
 }
 impl Controller {
     pub(super) fn new(
@@ -105,7 +105,7 @@ impl Controller {
         status: administrator::Status,
         fatal: Option<String>,
     ) -> Result<Self> {
-        let persisted_remembered_device = runtime.config.remembered_device.clone();
+        let last_remembered_device = runtime.config.remembered_device.clone();
         let now = Instant::now();
         Ok(Self {
             mapping_draft: None,
@@ -122,7 +122,7 @@ impl Controller {
             path,
             logs,
             desktop,
-            saves: SaveQueue::default(),
+            save_pending: false,
             status,
             fatal,
             passed: false,
@@ -149,7 +149,7 @@ impl Controller {
             last_system_poll: now,
             last_ui_sync: now,
             last_dropped_logs: 0,
-            persisted_remembered_device,
+            last_remembered_device,
         })
     }
 
@@ -206,7 +206,7 @@ impl Controller {
         }
     }
 
-    pub(super) fn flush(&mut self, force: bool) {
+    pub(super) fn save_config(&mut self) {
         // Do not race the worker's atomic group save with an older UI snapshot.
         if self.fatal.is_some()
             || self.runtime.saving_foreground_app_rules()
@@ -214,19 +214,15 @@ impl Controller {
         {
             return;
         }
-        self.track_remembered_device();
-        if self.runtime.take_bindings_changed() {
-            self.saves.changed();
+        if self.last_remembered_device != self.runtime.config.remembered_device {
+            self.last_remembered_device = self.runtime.config.remembered_device.clone();
+            self.save_pending = true;
         }
-        if let Err(e) = self.saves.flush(&self.runtime.config, &self.path, force) {
+        self.save_pending |= self.runtime.take_bindings_changed();
+        if std::mem::take(&mut self.save_pending)
+            && let Err(e) = self.runtime.config.save(&self.path)
+        {
             self.error(&format!("{}: {e:#}", self.tr(keys::ERROR_SAVE)));
-        }
-    }
-
-    pub(super) fn track_remembered_device(&mut self) {
-        if self.persisted_remembered_device != self.runtime.config.remembered_device {
-            self.persisted_remembered_device = self.runtime.config.remembered_device.clone();
-            self.saves.changed();
         }
     }
 }

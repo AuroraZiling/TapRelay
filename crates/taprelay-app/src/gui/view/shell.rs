@@ -57,7 +57,8 @@ impl AppView {
                                     this.sidebar_collapsed = !this.sidebar_collapsed;
                                     this.controller.runtime.config.options.sidebar_collapsed =
                                         this.sidebar_collapsed;
-                                    this.controller.saves.changed();
+                                    this.controller.save_pending = true;
+                                    this.controller.save_config();
                                     cx.notify();
                                 })),
                         ),

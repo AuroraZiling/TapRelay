@@ -85,7 +85,7 @@ fn toggling_a_binding_keeps_other_switches_visually_stable(cx: &mut TestAppConte
                     .enabled,
                 enabled
             );
-            view.update(cx, |view, _| view.controller.flush(true));
+            view.update(cx, |view, _| view.controller.tick(&mut view.ui));
         })
         .unwrap();
         let saved = crate::config::Config::load(&folder.path().join("config.json")).unwrap();
@@ -349,7 +349,7 @@ fn shortcut_button_records_cancels_and_removes_without_cross_triggering(cx: &mut
                 .height,
             px(32.)
         );
-        view.update(cx, |view, _| view.controller.flush(true));
+        view.update(cx, |view, _| view.controller.tick(&mut view.ui));
     })
     .unwrap();
     let saved = crate::config::Config::load(&folder.path().join("config.json")).unwrap();
@@ -407,7 +407,7 @@ fn shortcut_button_records_cancels_and_removes_without_cross_triggering(cx: &mut
                 .shortcuts
                 .is_empty()
         );
-        view.update(cx, |view, _| view.controller.flush(true));
+        view.update(cx, |view, _| view.controller.tick(&mut view.ui));
     })
     .unwrap();
     let saved = crate::config::Config::load(&folder.path().join("config.json")).unwrap();

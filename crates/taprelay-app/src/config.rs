@@ -126,11 +126,15 @@ pub struct Geometry {
     pub y: Option<i32>,
     pub maximized: bool,
 }
+impl Geometry {
+    pub const MIN_WIDTH: f32 = 900.;
+    pub const MIN_HEIGHT: f32 = 500.;
+}
 impl Default for Geometry {
     fn default() -> Self {
         Self {
-            width: 900.,
-            height: 500.,
+            width: Self::MIN_WIDTH,
+            height: Self::MIN_HEIGHT,
             x: None,
             y: None,
             maximized: false,

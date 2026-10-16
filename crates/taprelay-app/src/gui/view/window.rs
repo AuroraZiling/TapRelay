@@ -1,7 +1,8 @@
 use super::components::LiveElement;
 use super::{AppView, Command};
 use crate::{
-    gui::presentation::WindowCommand, platform::desktop, runtime::commands::BindingCommand,
+    config::Geometry, gui::presentation::WindowCommand, platform::desktop,
+    runtime::commands::BindingCommand,
 };
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::{ActiveTheme, Theme, ThemeMode, WindowExt, notification::Notification};
@@ -54,7 +55,9 @@ impl AppView {
             let WindowBounds::Windowed(bounds) = window.window_bounds() else {
                 return;
             };
-            if bounds.size.width >= px(900.) && bounds.size.height >= px(500.) {
+            if bounds.size.width >= px(Geometry::MIN_WIDTH)
+                && bounds.size.height >= px(Geometry::MIN_HEIGHT)
+            {
                 self.ui.geometry.width = bounds.size.width.into();
                 self.ui.geometry.height = bounds.size.height.into();
                 let scale = window.scale_factor();

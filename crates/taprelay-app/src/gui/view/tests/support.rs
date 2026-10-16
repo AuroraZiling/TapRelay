@@ -1,6 +1,6 @@
 use crate::gui::view::AppView;
 use crate::{
-    config::Config,
+    config::{Config, Geometry},
     gui::controller::{Controller, Shell},
     runtime::Runtime,
     runtime::worker::RuntimeHandle,
@@ -17,7 +17,8 @@ pub(super) mod receiver;
 pub(super) fn open(
     cx: &mut TestAppContext,
 ) -> (AnyWindowHandle, Entity<AppView>, tempfile::TempDir) {
-    open_sized(cx, 900., 500.)
+    let geometry = Geometry::default();
+    open_sized(cx, geometry.width, geometry.height)
 }
 
 pub(super) fn open_sized(

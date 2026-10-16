@@ -3,7 +3,7 @@ mod options;
 use super::controller::{Controller, Shell};
 use super::view::AppView;
 use crate::{
-    config::{self, Config, Language},
+    config::{self, Config, Geometry, Language},
     i18n, logging,
     platform::{
         administrator,
@@ -96,8 +96,7 @@ pub fn run() -> Result<()> {
         .with_assets(gpui_kit::assets::AllAssets)
         .run(move |cx| {
             gpui_kit::init(cx);
-            let size = size(px(geometry.width.max(1000.)), px(geometry.height.max(600.)));
-            let mut bounds = Bounds::centered(None, size, cx);
+            let mut bounds = Bounds::centered(None, window_size(&geometry), cx);
             let mut display_id = None;
             #[cfg(windows)]
             if let (Some(x), Some(y)) = (geometry.x, geometry.y)
@@ -117,7 +116,7 @@ pub fn run() -> Result<()> {
                     title: Some("TapRelay".into()),
                     ..TitleBar::title_bar_options()
                 }),
-                window_min_size: Some(size_for_minimum()),
+                window_min_size: Some(size(px(Geometry::MIN_WIDTH), px(Geometry::MIN_HEIGHT))),
                 show: false,
                 focus: false,
                 app_id: Some("TapRelay".into()),
@@ -139,6 +138,28 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-fn size_for_minimum() -> gpui_kit::Size<gpui_kit::Pixels> {
-    size(px(900.), px(500.))
+fn window_size(geometry: &Geometry) -> gpui_kit::Size<gpui_kit::Pixels> {
+    size(
+        px(geometry.width.max(Geometry::MIN_WIDTH)),
+        px(geometry.height.max(Geometry::MIN_HEIGHT)),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn saved_window_size_is_preserved_above_the_minimum() {
+        let geometry = Geometry {
+            width: 950.,
+            height: 550.,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            window_size(&geometry),
+            size(px(geometry.width), px(geometry.height))
+        );
+    }
 }

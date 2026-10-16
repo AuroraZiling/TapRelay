@@ -32,9 +32,9 @@ fn title_bar_remains_above_every_screen_in_both_locales_and_themes(cx: &mut Test
                         let brand = window.find("titlebar-brand").bounds();
                         let controls = window.find("window-controls").bounds();
                         assert_eq!(bar.size.height, px(44.));
-                        assert_eq!(bar.size.width, px(900.));
+                        assert_eq!(bar.size.width, window.viewport_size().width);
                         assert_eq!(workspace.top(), bar.bottom());
-                        assert_eq!(workspace.bottom(), px(500.));
+                        assert_eq!(workspace.bottom(), window.viewport_size().height);
                         assert!(
                             brand.left() >= bar.left()
                                 && brand.top() >= bar.top()

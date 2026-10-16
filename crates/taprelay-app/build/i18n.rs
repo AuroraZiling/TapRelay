@@ -82,13 +82,11 @@ pub fn generate() -> PathBuf {
                 "Invalid device placeholder: {id}/{key}"
             );
         }
-        for key in ["groups.count_one", "groups.count_other"] {
-            assert_eq!(
-                catalog[key].matches("%{count}").count(),
-                1,
-                "Invalid count placeholder: {id}/{key}"
-            );
-        }
+        assert_eq!(
+            catalog["groups.count"].matches("%{count}").count(),
+            1,
+            "Invalid count placeholder: {id}/groups.count"
+        );
     }
 
     let mut rust = String::from("#[allow(dead_code)]\npub mod keys {\n");

@@ -27,14 +27,6 @@ pub fn resolve(id: &str) -> Option<&'static str> {
         .find(|locale| *locale == id)
 }
 
-pub fn foreground_app_count(locale: &str, count: usize) -> String {
-    if count == 1 {
-        t!("groups.count_one", locale = locale, count = count).into_owned()
-    } else {
-        t!("groups.count_other", locale = locale, count = count).into_owned()
-    }
-}
-
 pub fn language_options(locale_id: &str) -> Vec<crate::gui::presentation::ChoiceOption> {
     let mut options = vec![crate::gui::presentation::ChoiceOption {
         label: t!("language.system", locale = locale_id).into_owned(),

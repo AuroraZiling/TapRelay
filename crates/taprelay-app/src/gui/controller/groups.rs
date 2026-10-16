@@ -274,7 +274,12 @@ impl Controller {
                 id: id.clone(),
                 name: group.name.clone(),
                 count: group.foreground_apps.len() as i32,
-                count_label: i18n::foreground_app_count(self.locale(), group.foreground_apps.len()),
+                count_label: rust_i18n::t!(
+                    keys::GROUPS_COUNT,
+                    locale = self.locale(),
+                    count = group.foreground_apps.len()
+                )
+                .into_owned(),
                 summary: group
                     .foreground_apps
                     .iter()

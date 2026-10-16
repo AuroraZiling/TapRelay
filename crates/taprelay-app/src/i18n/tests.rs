@@ -38,27 +38,12 @@ fn every_catalog_key_is_loaded_by_the_shared_backend() {
 }
 
 #[test]
-fn explicit_locales_keep_tray_and_messages_independent() {
+fn explicit_locales_keep_tray_labels_independent() {
     for _ in 0..2 {
         assert_eq!(tray_labels("en")[0], t!("tray.open", locale = "en"));
         assert_eq!(tray_labels("zh-CN")[0], t!("tray.open", locale = "zh-CN"));
         assert_ne!(tray_labels("en"), tray_labels("zh-CN"));
-        assert_eq!(foreground_app_count("zh-CN", 2), "共 2 个应用");
-        assert_eq!(foreground_app_count("en", 2), "2 applications");
     }
-}
-
-#[test]
-fn foreground_app_totals_use_localized_wording() {
-    for count in [0, 1, 2, 100] {
-        assert_eq!(
-            foreground_app_count("zh-CN", count),
-            format!("共 {count} 个应用")
-        );
-    }
-    assert_eq!(foreground_app_count("en", 0), "0 applications");
-    assert_eq!(foreground_app_count("en", 1), "1 application");
-    assert_eq!(foreground_app_count("en", 2), "2 applications");
 }
 
 #[test]

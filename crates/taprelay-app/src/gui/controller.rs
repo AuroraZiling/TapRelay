@@ -8,7 +8,6 @@ use crate::{
         ShortcutItem, WindowCommand,
     },
     i18n::{self, keys},
-    logging,
     platform::administrator,
     platform::desktop::{self, Desktop},
     runtime::TestStatus,

@@ -48,8 +48,8 @@ pub fn init(
         .rotation(tracing_appender::rolling::Rotation::DAILY)
         .filename_prefix("taprelay")
         .filename_suffix("jsonl")
+        .max_log_files(7)
         .build(&dir)?;
-    cleanup(&dir, time::OffsetDateTime::now_utc().date())?;
     let (writer, guard) = tracing_appender::non_blocking::NonBlockingBuilder::default()
         .buffered_lines_limit(1024)
         .finish(file);
@@ -64,40 +64,6 @@ pub fn init(
         )
         .try_init()?;
     Ok((counter, guard))
-}
-
-pub fn cleanup(dir: &Path, today: time::Date) -> anyhow::Result<()> {
-    for item in std::fs::read_dir(dir)? {
-        let item = item?;
-        if !item.file_type()?.is_file() {
-            continue;
-        }
-        let name = item.file_name();
-        let name = name.to_string_lossy();
-        let Some(date) = name
-            .strip_prefix("taprelay.")
-            .or_else(|| name.strip_prefix("taprelay-panic."))
-            .and_then(|s| s.strip_suffix(".jsonl").or_else(|| s.strip_suffix(".log")))
-        else {
-            continue;
-        };
-        let parts: Vec<_> = date.split('-').collect();
-        if parts.len() != 3 {
-            continue;
-        }
-        let parsed = (|| {
-            time::Date::from_calendar_date(
-                parts[0].parse().ok()?,
-                time::Month::try_from(parts[1].parse::<u8>().ok()?).ok()?,
-                parts[2].parse().ok()?,
-            )
-            .ok()
-        })();
-        if parsed.is_some_and(|d| d < today - time::Duration::days(7)) {
-            std::fs::remove_file(item.path())?;
-        }
-    }
-    Ok(())
 }
 
 #[cfg(windows)]
@@ -181,15 +147,6 @@ fn panic_handler_in(dir: std::path::PathBuf) {
         }
         previous(info);
     }));
-}
-pub fn cleanup_due(data: &Path) -> anyhow::Result<()> {
-    static LAST: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
-    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
-    if last.is_none_or(|t| t.elapsed() > std::time::Duration::from_secs(3600)) {
-        *last = Some(std::time::Instant::now());
-        cleanup(&data.join("logs"), time::OffsetDateTime::now_utc().date())?;
-    }
-    Ok(())
 }
 #[cfg(test)]
 mod tests;

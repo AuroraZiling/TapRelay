@@ -138,9 +138,6 @@ impl Controller {
                 );
                 self.last_dropped_logs = dropped;
             }
-            if let Err(e) = logging::cleanup_due(self.path.parent().unwrap()) {
-                tracing::warn!("Log cleanup: {e}");
-            }
         }
     }
 

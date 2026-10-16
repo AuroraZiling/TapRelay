@@ -110,35 +110,85 @@ fn panic_is_written_without_a_tracing_subscriber() {
     assert!(backtrace.contains("panic_is_written_without_a_tracing_subscriber"));
 }
 #[test]
-fn retention_preserves_recent_and_unrelated_files() {
-    let dir = tempfile::tempdir().unwrap();
-    for prefix in ["taprelay", "taprelay-panic"] {
-        for ext in ["log", "jsonl"] {
-            for date in ["2026-08-30", "2026-08-31", "2026-09-07"] {
-                std::fs::write(dir.path().join(format!("{prefix}.{date}.{ext}")), "x").unwrap();
+fn retention_limits_app_and_panic_logs_without_blocking_logging() {
+    const CHILD: &str = "TAPRELAY_RETENTION_TEST_DIR";
+    if let Some(dir) = std::env::var_os(CHILD) {
+        let (_, guard) = init(&Path::new(&dir).join("config.json")).unwrap();
+        tracing::info!("logging after retention");
+        drop(guard);
+        return;
+    }
+    #[cfg(windows)]
+    let cases = [false, true];
+    #[cfg(not(windows))]
+    let cases = [false];
+    for blocked in cases {
+        let dir = tempfile::tempdir().unwrap();
+        let logs = dir.path().join("logs");
+        std::fs::create_dir(&logs).unwrap();
+        #[cfg(windows)]
+        let mut locked = Vec::new();
+        for prefix in ["taprelay", "taprelay-panic"] {
+            for day in 1..=5 {
+                let path = logs.join(format!("{prefix}.2020-01-{day:02}.jsonl"));
+                std::fs::write(&path, "old log").unwrap();
+                #[cfg(windows)]
+                if blocked {
+                    use std::os::windows::fs::OpenOptionsExt;
+                    // Allow reads and writes, but deny deletion while the log is open.
+                    locked.push(
+                        std::fs::OpenOptions::new()
+                            .read(true)
+                            .share_mode(3)
+                            .open(path)
+                            .unwrap(),
+                    );
+                }
             }
         }
-    }
-    for name in ["personal.log", "personal.jsonl", "taprelay.invalid.jsonl"] {
-        std::fs::write(dir.path().join(name), "x").unwrap();
-    }
-    cleanup(dir.path(), time::macros::date!(2026 - 09 - 07)).unwrap();
-    for prefix in ["taprelay", "taprelay-panic"] {
-        for ext in ["log", "jsonl"] {
-            for (date, retained) in [
-                ("2026-08-30", false),
-                ("2026-08-31", true),
-                ("2026-09-07", true),
-            ] {
-                assert_eq!(
-                    dir.path().join(format!("{prefix}.{date}.{ext}")).exists(),
-                    retained
-                );
-            }
+        for name in ["personal.log", "personal.jsonl", "taprelay.2020-01-01.log"] {
+            std::fs::write(logs.join(name), "unrelated").unwrap();
         }
-    }
-    for name in ["personal.log", "personal.jsonl", "taprelay.invalid.jsonl"] {
-        assert!(dir.path().join(name).exists());
+        std::fs::create_dir(logs.join("taprelay.archive.jsonl")).unwrap();
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "logging::tests::retention_limits_app_and_panic_logs_without_blocking_logging",
+                "--nocapture",
+            ])
+            .env(CHILD, dir.path())
+            .output()
+            .unwrap();
+        #[cfg(windows)]
+        drop(locked);
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let retained: Vec<_> = std::fs::read_dir(&logs)
+            .unwrap()
+            .map(Result::unwrap)
+            .filter(|entry| {
+                entry.file_type().unwrap().is_file()
+                    && entry.file_name().to_string_lossy().starts_with("taprelay")
+                    && entry.path().extension().is_some_and(|ext| ext == "jsonl")
+            })
+            .map(|entry| entry.path())
+            .collect();
+        assert_eq!(retained.len(), if blocked { 11 } else { 7 });
+        assert!(retained.iter().any(|path| {
+            std::fs::read_to_string(path)
+                .unwrap()
+                .contains("logging after retention")
+        }));
+        for name in ["personal.log", "personal.jsonl", "taprelay.2020-01-01.log"] {
+            assert_eq!(
+                std::fs::read_to_string(logs.join(name)).unwrap(),
+                "unrelated"
+            );
+        }
+        assert!(logs.join("taprelay.archive.jsonl").is_dir());
     }
 }
 

@@ -4,6 +4,10 @@ use std::path::{Path, PathBuf};
 mod i18n;
 
 fn main() {
+    assert!(
+        std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows"),
+        "taprelay-app only supports Windows targets"
+    );
     let version = std::env::var("TAPRELAY_VERSION")
         .unwrap_or_else(|_| std::env::var("CARGO_PKG_VERSION").expect("Cargo package version"));
     let windows_version = windows_version(&version);
@@ -11,9 +15,7 @@ fn main() {
     println!("cargo:rustc-env=TAPRELAY_VERSION={version}");
 
     i18n::generate();
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
-        compile_windows_resources(&windows_version);
-    }
+    compile_windows_resources(&windows_version);
 }
 
 fn compile_windows_resources(windows_version: &str) {

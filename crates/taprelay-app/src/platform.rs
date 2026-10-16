@@ -1,5 +1,4 @@
 pub(crate) mod administrator;
-#[cfg(windows)]
 pub(crate) mod bluetooth_worker;
 pub(crate) mod capture_key;
 
@@ -11,7 +10,12 @@ use taprelay_core::{
     ports::BackendError,
     state::Snapshot,
 };
+pub use taprelay_windows::{
+    InstanceLock, desktop, foreground_apps,
+    input::{key_name, keyboard_layout},
+};
 use tokio::sync::{mpsc, oneshot};
+
 pub trait InputSource {
     fn attach_passthrough(&self, _link: Option<taprelay_core::passthrough::InputLink>) {}
     fn passthrough_error(&self) -> Option<String> {
@@ -53,7 +57,6 @@ pub trait Transport {
     fn invalidate(&self);
     fn send(&self, command: QueuedCommand) -> Result<oneshot::Receiver<Result<(), BackendError>>>;
 }
-#[cfg(windows)]
 impl InputSource for taprelay_windows::input::InputHandle {
     fn attach_passthrough(&self, link: Option<taprelay_core::passthrough::InputLink>) {
         self.attach_passthrough(link);
@@ -87,54 +90,10 @@ impl InputSource for taprelay_windows::input::InputHandle {
 }
 
 pub fn input(sender: mpsc::Sender<RoutedInput>) -> Result<Box<dyn InputSource>> {
-    #[cfg(windows)]
-    {
-        Ok(Box::new(taprelay_windows::input::InputHandle::start(
-            sender,
-        )?))
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = sender;
-        anyhow::bail!("Input is not implemented on this platform")
-    }
-}
-pub fn key_name(key: u8) -> String {
-    #[cfg(windows)]
-    {
-        taprelay_windows::input::key_name(key)
-    }
-    #[cfg(not(windows))]
-    {
-        taprelay_core::input::key_name(key)
-    }
-}
-pub fn keyboard_layout() -> usize {
-    #[cfg(windows)]
-    {
-        taprelay_windows::input::keyboard_layout()
-    }
-    #[cfg(not(windows))]
-    {
-        0
-    }
+    Ok(Box::new(taprelay_windows::input::InputHandle::start(
+        sender,
+    )?))
 }
 pub fn transport(remembered: Option<taprelay_core::state::Target>) -> Result<Box<dyn Transport>> {
-    #[cfg(windows)]
-    {
-        Ok(Box::new(crate::platform::bluetooth_worker::Handle::start(
-            remembered,
-        )?))
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = remembered;
-        anyhow::bail!("Bluetooth is not implemented on this platform")
-    }
+    Ok(Box::new(bluetooth_worker::Handle::start(remembered)?))
 }
-#[cfg(windows)]
-pub use taprelay_windows::InstanceLock;
-#[cfg(windows)]
-pub use taprelay_windows::desktop;
-#[cfg(windows)]
-pub use taprelay_windows::foreground_apps;

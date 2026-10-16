@@ -24,6 +24,8 @@ mod capture;
 pub(crate) mod commands;
 mod connection;
 pub(crate) mod passthrough;
+#[cfg(test)]
+mod test_input;
 pub(crate) mod worker;
 
 pub use capture::{CaptureError, CaptureKind, CapturePhase, CaptureSession};
@@ -89,15 +91,9 @@ impl Runtime {
 
     #[cfg(test)]
     pub(crate) fn headless_tick(&mut self) {
-        struct Input;
-        impl crate::platform::InputSource for Input {
-            fn is_finished(&self) -> bool {
-                false
-            }
-        }
-        self.input = Some(Box::new(Input));
+        self.input = Some(Box::new(test_input::FakeInput(None)));
         self.tick_with_capture_context(true, false);
-        self.input = Some(Box::new(Input));
+        self.input = Some(Box::new(test_input::FakeInput(None)));
     }
 
     pub fn passthrough_epoch(&self) -> u64 {

@@ -1,3 +1,4 @@
+use super::test_input::FakeInput;
 use super::*;
 
 use crate::config::Config;
@@ -5,13 +6,6 @@ use taprelay_core::{
     function::{FunctionConfig, FunctionId, ModifierSet, Shortcut},
     input::MouseButton,
 };
-
-struct FakeInput;
-impl InputSource for FakeInput {
-    fn is_finished(&self) -> bool {
-        false
-    }
-}
 
 struct FakeTransport;
 impl Transport for FakeTransport {
@@ -80,7 +74,7 @@ fn mapping_profile_is_revoked_even_after_the_input_source_is_gone() {
             groups: Default::default(),
         });
     runtime.listening = true;
-    runtime.input = Some(Box::new(FakeInput));
+    runtime.input = Some(Box::new(FakeInput(None)));
     runtime.configure_input();
     assert!(link.profile_requested() && !link.capture_requested());
     runtime.listening = false;
@@ -410,7 +404,7 @@ fn disabled_function_shortcut_can_be_saved_but_is_not_recognized() {
         },
     );
     runtime.bindings_changed();
-    runtime.input = Some(Box::new(FakeInput));
+    runtime.input = Some(Box::new(FakeInput(None)));
     runtime.listening = true;
     runtime
         .sender
@@ -436,7 +430,7 @@ fn app_runtime() -> Runtime {
         },
     );
     let mut runtime = Runtime::new(config);
-    runtime.input = Some(Box::new(FakeInput));
+    runtime.input = Some(Box::new(FakeInput(None)));
     runtime
 }
 
@@ -485,7 +479,7 @@ fn ui_input_cutoff_preserves_media_releases_but_suppresses_queued_presses() {
     for action in [MediaCommand::Rewind, MediaCommand::FastForward] {
         let mut runtime = Runtime::new(Config::default());
         runtime.input_initialized = true;
-        runtime.input = Some(Box::new(FakeInput));
+        runtime.input = Some(Box::new(FakeInput(None)));
         runtime.transport = Some(Box::new(FakeTransport));
         runtime.listening = true;
         runtime.state.ready = true;
@@ -619,18 +613,9 @@ fn paused_or_stale_media_presses_do_not_reach_transport() {
 
 #[test]
 fn failed_idle_app_hook_is_reported_without_automatic_restart() {
-    struct FailedInput;
-    impl InputSource for FailedInput {
-        fn is_finished(&self) -> bool {
-            true
-        }
-        fn failure(&self) -> Option<String> {
-            Some("hook failed".into())
-        }
-    }
     let mut runtime = app_runtime();
     runtime.input_initialized = true;
-    runtime.input = Some(Box::new(FailedInput));
+    runtime.input = Some(Box::new(FakeInput(Some("hook failed"))));
     runtime.tick();
     assert_eq!(runtime.error.as_deref(), Some("hook failed"));
     assert!(runtime.input.is_none());
@@ -640,7 +625,7 @@ fn failed_idle_app_hook_is_reported_without_automatic_restart() {
 }
 fn capture_runtime() -> Runtime {
     let mut runtime = Runtime::new(Config::default());
-    runtime.input = Some(Box::new(FakeInput));
+    runtime.input = Some(Box::new(FakeInput(None)));
     runtime.input_initialized = true;
     runtime.listening = true;
     for (id, key) in [
@@ -1182,21 +1167,12 @@ fn interrupted_capture_waits_for_held_keys_before_accepting_a_new_gesture() {
 
 #[test]
 fn capture_listener_failure_discards_candidate_and_ends_session() {
-    struct FailedInput;
-    impl InputSource for FailedInput {
-        fn is_finished(&self) -> bool {
-            true
-        }
-        fn failure(&self) -> Option<String> {
-            Some("capture hook failed".into())
-        }
-    }
     let mut runtime = capture_runtime();
     begin_capture(&mut runtime, FunctionId::MediaPlayPause, 0);
     runtime.tick_with_capture_context(true, false);
     let original = runtime.functions.clone();
     queue_capture_keys(&mut runtime, &[(0x79, true), (0x79, false)], false);
-    runtime.input = Some(Box::new(FailedInput));
+    runtime.input = Some(Box::new(FakeInput(Some("capture hook failed"))));
     runtime.tick_with_capture_context(true, false);
     assert!(runtime.capture().is_none());
     assert_eq!(runtime.error.as_deref(), Some("capture hook failed"));
@@ -1253,6 +1229,12 @@ fn handoff_drains_accepted_hook_input_before_a_queued_listener_edit() {
                     .unwrap();
             }
             RouteResult::default()
+        }
+        fn terminate(&self, reason: RouterReason) -> RouteResult {
+            FakeInput(None).terminate(reason)
+        }
+        fn replay(&self, input: taprelay_core::input_router::PhysicalInput) -> Result<()> {
+            FakeInput(None).replay(input)
         }
     }
     let (release, gate) = sync::channel();

@@ -20,24 +20,15 @@ pub trait InputSource {
     fn is_finished(&self) -> bool;
     fn configure(
         &self,
-        _functions: &FunctionConfigs,
-        _mappings: &[taprelay_core::mapping::CustomMapping],
-        _rules: &taprelay_core::foreground_app::ForegroundAppRules,
-        _listening: bool,
-        _recording: bool,
-        _revision: u64,
-    ) -> RouteResult {
-        RouteResult::default()
-    }
-    fn terminate(&self, _reason: RouterReason) -> RouteResult {
-        RouteResult::default()
-    }
-    /// Replay an input that the synchronous platform hook consumed. The
-    /// default keeps non-Windows fakes and the recorder independent of native
-    /// input injection.
-    fn replay(&self, _input: PhysicalInput) -> Result<()> {
-        Ok(())
-    }
+        functions: &FunctionConfigs,
+        mappings: &[taprelay_core::mapping::CustomMapping],
+        rules: &taprelay_core::foreground_app::ForegroundAppRules,
+        listening: bool,
+        recording: bool,
+        revision: u64,
+    ) -> RouteResult;
+    fn terminate(&self, reason: RouterReason) -> RouteResult;
+    fn replay(&self, input: PhysicalInput) -> Result<()>;
     fn failure(&self) -> Option<String> {
         None
     }

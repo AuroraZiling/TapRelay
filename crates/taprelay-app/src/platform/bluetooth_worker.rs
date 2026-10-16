@@ -123,7 +123,20 @@ impl crate::platform::Transport for Handle {
         Some(self.link.clone())
     }
     fn snapshot(&mut self) -> Option<Snapshot> {
-        crate::platform::poll_snapshot(&mut self.state)
+        match self.state.has_changed() {
+            Ok(false) => None,
+            Ok(true) => Some(self.state.borrow_and_update().clone()),
+            Err(_) => {
+                // A closed watch can still contain an unread terminal error.
+                let mut last = self.state.borrow_and_update().clone();
+                taprelay_core::devices::revoke_session(&mut last);
+                last.service = false;
+                last.broadcasting = false;
+                last.last_error
+                    .get_or_insert_with(|| "Bluetooth worker stopped; retry to restart".into());
+                Some(last)
+            }
+        }
     }
     fn is_finished(&self) -> bool {
         self.worker

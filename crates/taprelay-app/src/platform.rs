@@ -94,25 +94,6 @@ impl InputSource for taprelay_windows::input::InputHandle {
         self.failure()
     }
 }
-/// A closed watch can still contain an unread terminal error. Always read it,
-/// and never let a dead worker leave an old ready state visible.
-pub(crate) fn poll_snapshot(
-    state: &mut tokio::sync::watch::Receiver<Snapshot>,
-) -> Option<Snapshot> {
-    match state.has_changed() {
-        Ok(false) => None,
-        Ok(true) => Some(state.borrow_and_update().clone()),
-        Err(_) => {
-            let mut last = state.borrow_and_update().clone();
-            taprelay_core::devices::revoke_session(&mut last);
-            last.service = false;
-            last.broadcasting = false;
-            last.last_error
-                .get_or_insert_with(|| "Bluetooth worker stopped; retry to restart".into());
-            Some(last)
-        }
-    }
-}
 
 pub fn input(sender: mpsc::Sender<RoutedInput>) -> Result<Box<dyn InputSource>> {
     #[cfg(windows)]
@@ -166,24 +147,3 @@ pub use taprelay_windows::InstanceLock;
 pub use taprelay_windows::desktop;
 #[cfg(windows)]
 pub use taprelay_windows::foreground_apps;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn closed_watch_preserves_terminal_error_and_revokes_ready() {
-        let (tx, mut rx) = tokio::sync::watch::channel(Snapshot::default());
-        tx.send_replace(Snapshot {
-            ready: true,
-            selected: Some("old-receiver".into()),
-            service: true,
-            last_error: Some("Apartment failed".into()),
-            ..Default::default()
-        });
-        drop(tx);
-        let state = poll_snapshot(&mut rx).unwrap();
-        assert_eq!(state.last_error.as_deref(), Some("Apartment failed"));
-        assert!(!state.ready && !state.service);
-        assert!(state.selected.is_none() && state.selected_target().is_none());
-    }
-}

@@ -3,6 +3,35 @@ use crate::platform::Transport;
 use std::{collections::VecDeque, sync::Mutex};
 use taprelay_core::{command::MediaCommand, passthrough::Event};
 
+#[test]
+fn closed_watch_preserves_terminal_error_and_revokes_ready() {
+    let (tx, state) = watch::channel(Snapshot::default());
+    let revision = Arc::new(AtomicU64::new(1));
+    let (link, _input) = InputLink::channel(revision.clone());
+    let (commands, _control) = mpsc::sync_channel(1);
+    let mut handle = Handle {
+        commands,
+        state,
+        link,
+        revision,
+        stopping: Arc::new(AtomicBool::new(false)),
+        worker: None,
+    };
+    tx.send_replace(Snapshot {
+        ready: true,
+        selected: Some("old-receiver".into()),
+        service: true,
+        broadcasting: true,
+        last_error: Some("Apartment failed".into()),
+        ..Default::default()
+    });
+    drop(tx);
+    let state = handle.snapshot().unwrap();
+    assert_eq!(state.last_error.as_deref(), Some("Apartment failed"));
+    assert!(!state.ready && !state.service && !state.broadcasting);
+    assert!(state.selected.is_none() && state.selected_target().is_none());
+}
+
 #[derive(Debug)]
 enum Call {
     Start(usize, Command),

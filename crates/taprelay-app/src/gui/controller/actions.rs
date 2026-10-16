@@ -73,12 +73,11 @@ impl Controller {
                 if self.runtime.config.options.close_to_tray && self.fatal.is_none() {
                     self.cancel_capture()?;
                     self.save_geometry(ui);
-                    self.flush(true);
                     if !self.runtime.config.options.close_hint_seen {
                         self.desktop
                             .notify("TapRelay", &self.tr(keys::TRAY_CLOSE_HINT));
                         self.runtime.config.options.close_hint_seen = true;
-                        self.saves.changed();
+                        self.save_pending = true;
                     }
                     ui.window_command = Some(WindowCommand::Hide);
                     self.hidden = true;
@@ -161,7 +160,7 @@ impl Controller {
                 ui.wizard_page = 0;
                 self.runtime.config.wizard.dismissed = false;
                 self.runtime.config.wizard.page = 0;
-                self.saves.changed();
+                self.save_pending = true;
             }
             Action::WizardNext | Action::WizardBack => {
                 if name == Action::WizardNext
@@ -180,68 +179,68 @@ impl Controller {
                 };
                 ui.wizard_page = page;
                 self.runtime.config.wizard.page = page as u8;
-                self.saves.changed();
+                self.save_pending = true;
             }
             Action::WizardFinish => {
                 self.cancel_capture()?;
                 self.runtime.config.wizard.dismissed = true;
-                self.saves.changed();
+                self.save_pending = true;
                 ui.mode = 2;
                 ui.page = 0;
             }
             Action::Theme => {
                 self.runtime.config.options.theme = ThemeSetting::from_name(value)
                     .with_context(|| format!("Unknown theme: {value}"))?;
-                self.saves.changed();
+                self.save_pending = true;
             }
             Action::Language => {
                 self.runtime.config.options.language = Language::from_name(value)
                     .with_context(|| format!("Unknown language: {value}"))?;
-                self.saves.changed();
+                self.save_pending = true;
             }
             Action::SetStartHidden => {
                 self.runtime.config.options.start_hidden = action::toggle(value)?;
-                self.saves.changed();
+                self.save_pending = true;
             }
             Action::SetAutoListen => {
                 self.runtime.config.options.auto_listen = action::toggle(value)?;
-                self.saves.changed();
+                self.save_pending = true;
             }
             Action::SetPassthroughOverlay => {
                 self.runtime.config.options.passthrough_overlay = action::toggle(value)?;
-                self.saves.changed();
+                self.save_pending = true;
             }
             Action::SetPassthroughReverseScroll => {
                 self.runtime
                     .set_passthrough_reverse_scroll(action::toggle(value)?)?;
-                self.saves.changed();
+                self.save_pending = true;
             }
             Action::SetPassthroughMouseReportRate => {
                 self.runtime
                     .set_passthrough_mouse_report_rate(value.parse()?)?;
-                self.saves.changed();
+                self.save_pending = true;
             }
             Action::SetCloseToTray => {
                 self.runtime.config.options.close_to_tray = action::toggle(value)?;
-                self.saves.changed();
+                self.save_pending = true;
             }
             Action::SetAlwaysAdmin => {
                 self.runtime.config.options.always_admin = action::toggle(value)?;
-                self.saves.changed();
+                self.save_pending = true;
             }
             Action::SetNotifications => {
                 self.runtime.config.options.notifications = action::toggle(value)?;
-                self.saves.changed();
+                self.save_pending = true;
             }
             Action::SetConnectionWaitWarning => {
                 self.runtime.config.options.connection_wait_warning = action::toggle(value)?;
-                self.saves.changed();
+                self.save_pending = true;
             }
             Action::SetAutostart => {
                 // Read back what the OS accepted instead of trusting the request.
                 self.runtime.config.options.autostart =
                     self.desktop.set_autostart(action::toggle(value)?)?;
-                self.saves.changed();
+                self.save_pending = true;
             }
             Action::Elevate => {
                 self.cancel_capture()?;
@@ -249,6 +248,7 @@ impl Controller {
             }
         }
         self.sync(ui);
+        self.save_config();
         Ok(())
     }
 }

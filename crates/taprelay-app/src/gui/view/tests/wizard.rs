@@ -74,7 +74,6 @@ fn wizard_requires_a_ready_receiver_and_persists_completion(cx: &mut TestAppCont
         assert_eq!(view.read(cx).ui.mode, 2);
         assert!(window.find("status-card").visible());
         assert!(window.try_find("wizard-next").is_none());
-        view.update(cx, |view, _| view.controller.flush(true));
     })
     .unwrap();
     let saved = crate::config::Config::load(&folder.path().join("config.json")).unwrap();

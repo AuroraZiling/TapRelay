@@ -105,7 +105,6 @@ fn settings_controls_update_their_own_preferences_and_persist(cx: &mut TestAppCo
                 expected,
                 "{id} changed another preference"
             );
-            view.update(cx, |view, _| view.controller.flush(true));
         })
         .unwrap();
         let saved = crate::config::Config::load(&folder.path().join("config.json")).unwrap();
@@ -150,7 +149,6 @@ fn settings_controls_update_their_own_preferences_and_persist(cx: &mut TestAppCo
             assert_eq!(window.find(combobox_id).focused(), Some(true));
             assert_eq!(report_rate.read(cx).selected_values(), [rate.to_string()]);
             assert_eq!(view.read(cx).ui.passthrough_mouse_report_rate, rate as i32);
-            view.update(cx, |view, _| view.controller.flush(true));
         })
         .unwrap();
         let saved = crate::config::Config::load(&folder.path().join("config.json")).unwrap();
@@ -166,7 +164,6 @@ fn settings_controls_update_their_own_preferences_and_persist(cx: &mut TestAppCo
             window.find("overlay").label(),
             Some(view.read(cx).tr("settings.passthrough_overlay").as_str())
         );
-        view.update(cx, |view, _| view.controller.flush(true));
     })
     .unwrap();
     let saved = crate::config::Config::load(&folder.path().join("config.json")).unwrap();

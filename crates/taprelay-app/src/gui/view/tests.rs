@@ -8,6 +8,7 @@ mod groups;
 mod mappings;
 mod notifications;
 mod overview;
+mod persistence;
 mod scopes;
 mod settings;
 mod shell;

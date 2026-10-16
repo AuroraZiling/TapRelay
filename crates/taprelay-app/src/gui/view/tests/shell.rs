@@ -131,7 +131,6 @@ fn sidebar_state_is_saved_and_restored_when_the_view_is_recreated(cx: &mut TestA
             window.render_frame(cx);
             window.click("collapse", cx);
             assert_eq!(view.read(cx).sidebar_collapsed, collapsed);
-            view.update(cx, |view, _| view.controller.flush(true));
         })
         .unwrap();
         let saved = crate::config::Config::load(&folder.path().join("config.json")).unwrap();

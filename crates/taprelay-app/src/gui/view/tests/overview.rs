@@ -15,10 +15,10 @@ fn preserves_overview_proportions_in_both_themes_and_window_sizes(cx: &mut TestA
         cx.simulate_window_scale_factor_change(handle, scale);
         cx.update_window(handle, |_, window, cx| {
             for dark in [false, true] {
-                for (locale, language) in [("en", "english"), ("zh-CN", "chinese")] {
+                for locale in ["en", "zh-CN"] {
                     view.update(cx, |view, cx| {
                         view.controller.runtime.config.options.language =
-                            crate::config::Language::from_name(language).unwrap();
+                            crate::config::Language::from_name(locale).unwrap();
                         view.ui.page = 0;
                         view.ui.dark = dark;
                         view.ui.locale = locale.into();

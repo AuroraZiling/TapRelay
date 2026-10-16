@@ -26,8 +26,7 @@ impl Notice {
     }
 
     pub fn text_parts(&self, locale: &str) -> (String, String, String) {
-        use crate::i18n::{self, keys};
-        let locale = i18n::resolve(locale).unwrap_or(locale);
+        use crate::i18n::keys;
         let key = match self.status {
             Status::Controlling => keys::OVERLAY_CONTROLLING,
             Status::Stopped => keys::OVERLAY_STOPPED,

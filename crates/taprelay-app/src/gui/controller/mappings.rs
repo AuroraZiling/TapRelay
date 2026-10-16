@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    gui::presentation::{MappingOutputOption, MappingRow},
+    gui::presentation::{MappingOutputOption, MappingRow, input},
     platform,
 };
 use taprelay_core::{
@@ -240,7 +240,8 @@ impl Controller {
                 {
                     let base = format!(
                         "{} → {}",
-                        i18n::shortcut_labels(self.locale(), &draft.mapping.shortcuts[0]).join("+"),
+                        input::shortcut_labels(self.locale(), &draft.mapping.shortcuts[0])
+                            .join("+"),
                         self.mapping_output_label(draft.mapping.output)
                     );
                     let name = unique_mapping_name(&base, &self.runtime.config.custom_mappings);
@@ -379,7 +380,7 @@ impl Controller {
             .mapping
             .shortcuts
             .iter()
-            .map(|input| i18n::shortcut_labels(self.locale(), input).join("+"))
+            .map(|shortcut| input::shortcut_labels(self.locale(), shortcut).join("+"))
             .collect();
         let mut scopes = vec![crate::gui::presentation::ForegroundAppScopeOption {
             id: "".into(),
@@ -489,7 +490,7 @@ impl Controller {
                 } else if capture.preview.is_empty() {
                     self.tr(keys::CAPTURE_RECORDING)
                 } else {
-                    i18n::capture_preview(self.locale(), capture)
+                    input::capture_preview(self.locale(), capture)
                 }
             })
             .unwrap_or_default();
@@ -576,7 +577,7 @@ impl Controller {
                 input: mapping
                     .shortcuts
                     .iter()
-                    .map(|shortcut| i18n::shortcut_labels(self.locale(), shortcut).join("+"))
+                    .map(|shortcut| input::shortcut_labels(self.locale(), shortcut).join("+"))
                     .collect::<Vec<_>>()
                     .join(" / "),
                 output: self.mapping_output_label(mapping.output),
@@ -627,7 +628,7 @@ impl Controller {
                 parts.push(platform::key_name(key));
                 parts.join("+")
             }
-            MappingOutput::Mouse { button } => i18n::mouse_button_label(self.locale(), button),
+            MappingOutput::Mouse { button } => input::mouse_button_label(self.locale(), button),
         }
     }
 }
@@ -657,7 +658,7 @@ fn output_option(locale: &str, output: MappingOutput) -> MappingOutputOption {
             .find_map(|(key, value)| (value == usage).then(|| keyboard_option(key, usage)))
             .unwrap_or_default(),
         MappingOutput::Mouse { button } => MappingOutputOption {
-            label: i18n::mouse_button_label(locale, button),
+            label: input::mouse_button_label(locale, button),
             value: format!("mouse/{}", button as usize),
             is_mouse: true,
         },

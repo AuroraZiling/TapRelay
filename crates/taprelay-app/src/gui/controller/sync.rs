@@ -1,4 +1,5 @@
 use super::*;
+use crate::gui::presentation::input;
 
 impl Controller {
     pub(in crate::gui) fn sync(&mut self, ui: &mut Presentation) {
@@ -226,7 +227,7 @@ impl Controller {
                     .iter()
                     .enumerate()
                     .map(|(slot, shortcut)| {
-                        let keys = i18n::shortcut_labels(self.locale(), shortcut);
+                        let keys = input::shortcut_labels(self.locale(), shortcut);
                         ShortcutItem {
                             text: keys.join("+"),
                             keys: keys.into_iter().collect::<Vec<String>>(),
@@ -237,7 +238,7 @@ impl Controller {
                     .collect::<Vec<_>>();
                 if config.enabled {
                     for shortcut in &config.shortcuts {
-                        let keys = i18n::shortcut_labels(self.locale(), shortcut);
+                        let keys = input::shortcut_labels(self.locale(), shortcut);
                         summary.push(BindingRow {
                             text: keys.join("+"),
                             function_name: self.tr(definition.name_key),
@@ -277,7 +278,7 @@ impl Controller {
             for mapping in &self.runtime.config.custom_mappings {
                 if mapping.enabled {
                     for shortcut in &mapping.shortcuts {
-                        let keys = i18n::shortcut_labels(self.locale(), shortcut);
+                        let keys = input::shortcut_labels(self.locale(), shortcut);
                         summary.push(BindingRow {
                             text: keys.join("+"),
                             function_name: mapping.name.clone(),
@@ -339,7 +340,7 @@ impl Controller {
                     self.tr(keys::CAPTURE_RELEASE)
                 }
                 Some(session) if !session.preview.is_empty() => {
-                    i18n::capture_preview(self.locale(), session)
+                    input::capture_preview(self.locale(), session)
                 }
                 _ => self.tr(keys::CAPTURE_RECORDING),
             },

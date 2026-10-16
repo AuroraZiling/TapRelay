@@ -35,7 +35,7 @@ pub(super) fn open_with_transport(
     transport: Option<Box<dyn crate::platform::Transport + Send>>,
 ) -> (AnyWindowHandle, Entity<AppView>, tempfile::TempDir) {
     let mut config = Config::default();
-    config.options.language = crate::config::Language::from_name("english").unwrap();
+    config.options.language = crate::config::Language::from_name("en").unwrap();
     config.options.notifications = false;
     config.wizard.dismissed = true;
     config

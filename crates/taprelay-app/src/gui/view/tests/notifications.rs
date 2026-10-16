@@ -104,8 +104,8 @@ fn passthrough_feedback_preserves_device_and_respects_system_notification_settin
             view._pump = gpui_kit::Task::ready(());
             view.controller.hidden = true;
             for (language, expected) in [
-                ("english", "Disconnected from Tablet"),
-                ("chinese", "已断开与 Tablet 的连接"),
+                ("en", "Disconnected from Tablet"),
+                ("zh-CN", "已断开与 Tablet 的连接"),
             ] {
                 view.controller.runtime.config.options.language =
                     crate::config::Language::from_name(language).unwrap();

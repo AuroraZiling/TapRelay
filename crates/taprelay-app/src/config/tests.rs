@@ -152,7 +152,7 @@ fn invalid_config_is_not_overwritten() {
 }
 
 #[test]
-fn theme_and_language_names_match_the_persisted_config() {
+fn theme_names_match_the_persisted_config() {
     // The settings page sends these names, so they must stay identical to
     // what serde writes; otherwise a click would change nothing on reload.
     for (name, theme) in [
@@ -166,30 +166,46 @@ fn theme_and_language_names_match_the_persisted_config() {
             serde_json::json!(name)
         );
     }
-    for (name, language) in [
-        ("system", Language::System),
-        ("chinese", Language::Chinese),
-        ("english", Language::English),
-    ] {
-        assert_eq!(Language::from_name(name), Some(language.clone()));
-        assert_eq!(
-            serde_json::to_value(&language).unwrap(),
-            serde_json::json!(name)
-        );
-    }
     assert_eq!(Theme::from_name("Dark"), None);
-    assert_eq!(Language::from_name(""), None);
 }
 
 #[test]
-fn locale_identifiers_select_the_matching_catalog() {
-    assert_eq!(Language::from_name("zh-CN"), Some(Language::Chinese));
-    assert_eq!(Language::from_name("zh-cn"), Some(Language::Chinese));
-    assert_eq!(Language::from_name("ZH_cn"), Some(Language::Chinese));
-    let legacy: Language = serde_json::from_str(r#"{"locale":"zh-cn"}"#).unwrap();
-    assert_eq!(legacy.locale(), "zh-CN");
-    assert_eq!(Language::from_name("en"), Some(Language::English));
-    assert_eq!(Language::from_name("de"), None);
+fn language_choices_save_and_load_with_catalog_identifiers() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config.json");
+    for (name, language, serialized) in [
+        ("system", Language::System, serde_json::json!("system")),
+        (
+            "zh-CN",
+            Language::Locale("zh-CN".into()),
+            serde_json::json!({ "locale": "zh-CN" }),
+        ),
+        (
+            "en",
+            Language::Locale("en".into()),
+            serde_json::json!({ "locale": "en" }),
+        ),
+    ] {
+        let mut config = Config::default();
+        config.options.language = Language::from_name(name).unwrap();
+        assert_eq!(config.options.language, language);
+        assert_eq!(serde_json::to_value(&language).unwrap(), serialized);
+        config.save(&path).unwrap();
+        assert_eq!(Config::load(&path).unwrap().options.language, language);
+        if name != "system" {
+            assert_eq!(language.locale(), name);
+        }
+    }
+}
+
+#[test]
+fn language_selection_rejects_aliases_and_unknown_identifiers() {
+    for name in ["", "de", "zh-cn", "ZH_cn", " en ", "chinese", "english"] {
+        assert_eq!(Language::from_name(name), None, "{name}");
+    }
+    for serialized in [r#""chinese""#, r#""english""#] {
+        assert!(serde_json::from_str::<Language>(serialized).is_err());
+    }
 }
 
 #[test]

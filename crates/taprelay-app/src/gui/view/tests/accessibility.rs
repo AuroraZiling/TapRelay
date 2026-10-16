@@ -51,7 +51,7 @@ fn sidebar_destinations_are_named_and_keyboard_operable_in_both_states(cx: &mut 
 fn tab_and_reverse_tab_reveal_controls_in_compact_scroll_regions(cx: &mut TestAppContext) {
     let (handle, view, _folder) = open(cx);
     settle(cx, handle, &view);
-    for language in ["english", "chinese"] {
+    for language in ["en", "zh-CN"] {
         for page in [1, 3] {
             cx.update_window(handle, |_, window, cx| {
                 view.update(cx, |view, cx| {

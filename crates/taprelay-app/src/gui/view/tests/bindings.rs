@@ -217,7 +217,7 @@ fn function_badges_fit_their_rows_without_overlapping(cx: &mut TestAppContext) {
         for scale in [1., 1.5, 2.] {
             cx.simulate_window_scale_factor_change(handle, scale);
             cx.update_window(handle, |_, window, cx| {
-                for language in ["english", "chinese"] {
+                for language in ["en", "zh-CN"] {
                     view.update(cx, |view, cx| {
                         view._pump = gpui_kit::Task::ready(());
                         view.controller.runtime.config.options.language =

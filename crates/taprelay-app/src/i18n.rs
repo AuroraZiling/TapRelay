@@ -27,13 +27,6 @@ pub fn resolve(id: &str) -> Option<&'static str> {
         .find(|locale| *locale == id)
 }
 
-pub fn system_locale() -> &'static str {
-    crate::platform::desktop::system_locale_id()
-        .as_deref()
-        .and_then(resolve)
-        .unwrap_or(locale::SOURCE)
-}
-
 pub fn foreground_app_count(locale: &str, count: usize) -> String {
     if count == 1 {
         t!("groups.count_one", locale = locale, count = count).into_owned()

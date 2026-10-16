@@ -2,6 +2,7 @@ mod options;
 
 use super::controller::{Controller, Shell};
 use super::view::AppView;
+use crate::i18n::{locale, resolve};
 use crate::{
     config::{self, Config, Geometry, Language},
     i18n, logging,
@@ -74,7 +75,10 @@ pub fn run() -> Result<()> {
         "TapRelay started"
     );
     let locale = match &config.options.language {
-        Language::System => i18n::system_locale(),
+        Language::System => desktop::system_locale_id()
+            .as_deref()
+            .and_then(resolve)
+            .unwrap_or(locale::SOURCE),
         selected => selected.locale(),
     };
     let desktop = Desktop::new(i18n::tray_labels(locale))?;

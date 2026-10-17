@@ -308,6 +308,7 @@ impl BleHandle {
                             }
                             let subscription_refresh =
                                 server.as_ref().is_some_and(|s| s.refresh_signal.take());
+                            let mut rebuild = false;
                             if subscription_refresh || Instant::now() >= refresh_at {
                                 let candidates = discovery.inventory.merged();
                                 if let Some(s) = &mut server {
@@ -319,14 +320,24 @@ impl BleHandle {
                                             .borrow()
                                             .refresh_due(discovery.adapter, Instant::now())
                                     {
-                                        if let Err(e) = s.refresh() {
-                                            s.fail(&e);
-                                        } else {
-                                            s.try_startup_restore();
-                                            startup_restore.borrow_mut().observe(
-                                                &s.state,
-                                                worker_revision.load(Ordering::Acquire),
-                                            );
+                                        match s.refresh() {
+                                            Ok(()) => {
+                                                s.try_startup_restore();
+                                                startup_restore.borrow_mut().observe(
+                                                    &s.state,
+                                                    worker_revision.load(Ordering::Acquire),
+                                                );
+                                            }
+                                            Err(e) => {
+                                                // Invalid GATT objects (for example a
+                                                // session that closed while it was being
+                                                // read) and an advertisement stuck in
+                                                // Aborted both keep failing forever. Do
+                                                // not turn that into a permanent startup
+                                                // error; rebuild the service instead.
+                                                tracing::warn!(%e, "GATT state refresh failed; rebuilding Bluetooth service");
+                                                rebuild = true;
+                                            }
                                         }
                                     } else if discovery.adapter != AdapterState::Available {
                                         s.state.ready = false;
@@ -349,6 +360,15 @@ impl BleHandle {
                                     });
                                 }
                                 refresh_at = Instant::now() + Duration::from_millis(100);
+                            }
+                            if rebuild {
+                                if let Some(current) = &server {
+                                    publication.selection = startup_restore
+                                        .borrow_mut()
+                                        .service_recreated(&current.state, Instant::now());
+                                }
+                                server.take();
+                                manager.borrow_mut().disconnect();
                             }
                             let request = match rx.try_recv() {
                                 Ok(request) => Ok(request),
@@ -633,6 +653,7 @@ struct Server {
     radio: Radio,
     radio_token: Option<i64>,
     advertisement_tokens: Vec<i64>,
+    advertisement_retried: bool,
     revision: Arc<AtomicU64>,
     authorization: Arc<authorization::Authorization<GattSession>>,
     refresh_signal: Arc<authorization::Refresh>,
@@ -700,6 +721,7 @@ impl Server {
             radio,
             radio_token: None,
             advertisement_tokens: vec![],
+            advertisement_retried: false,
             revision,
             authorization,
             refresh_signal: Arc::new(authorization::Refresh::new()),
@@ -1061,23 +1083,40 @@ impl Server {
     }
     fn refresh_native(&mut self) -> windows::core::Result<()> {
         self.adopt_generation();
+        let now = Instant::now();
         let radio_on = self.radio.State()? == RadioState::On;
         self.state.adapter = radio_on;
-        self.state.broadcasting = matches!(
-            self.providers[0].AdvertisementStatus()?,
-            GattServiceProviderAdvertisementStatus::Started
-                | GattServiceProviderAdvertisementStatus::StartedWithoutAllAdvertisementData
+        let statuses = self
+            .providers
+            .iter()
+            .map(GattServiceProvider::AdvertisementStatus)
+            .collect::<windows::core::Result<Vec<_>>>()?;
+        let recovery = advertisement_recovery(
+            &statuses,
+            radio_on,
+            self.advertisement_retried,
+            now >= self.retry_at,
         );
-        if radio_on && Instant::now() >= self.retry_at {
-            for p in &self.providers {
-                if matches!(
-                    p.AdvertisementStatus()?,
-                    GattServiceProviderAdvertisementStatus::Stopped
-                        | GattServiceProviderAdvertisementStatus::Aborted
-                ) {
-                    advertise(p)?;
-                    self.retry_at = Instant::now() + Duration::from_secs(3);
+        self.state.broadcasting = recovery == AdvertisementRecovery::Broadcasting;
+        match recovery {
+            AdvertisementRecovery::Broadcasting => self.advertisement_retried = false,
+            AdvertisementRecovery::Waiting => {}
+            AdvertisementRecovery::Retry => {
+                for (provider, status) in self.providers.iter().zip(&statuses) {
+                    if !advertisement_started(*status) {
+                        advertise(provider)?;
+                    }
                 }
+                self.advertisement_retried = true;
+                self.retry_at = now + Duration::from_secs(3);
+            }
+            AdvertisementRecovery::Rebuild => {
+                // A provider stuck in Aborted cannot leave that state; make the
+                // caller rebuild the service with fresh native objects.
+                return Err(windows::core::Error::new(
+                    windows::core::HRESULT(0x80004005u32 as i32),
+                    "Bluetooth advertisement did not start",
+                ));
             }
         }
         let clients = self
@@ -1679,6 +1718,41 @@ impl Drop for Server {
         tracing::info!("GATT cleanup attempted; individual failures are reported above");
     }
 }
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum AdvertisementRecovery {
+    Broadcasting,
+    Waiting,
+    Retry,
+    Rebuild,
+}
+
+fn advertisement_started(status: GattServiceProviderAdvertisementStatus) -> bool {
+    matches!(
+        status,
+        GattServiceProviderAdvertisementStatus::Started
+            | GattServiceProviderAdvertisementStatus::StartedWithoutAllAdvertisementData
+    )
+}
+
+fn advertisement_recovery(
+    statuses: &[GattServiceProviderAdvertisementStatus],
+    radio_on: bool,
+    retried: bool,
+    retry_due: bool,
+) -> AdvertisementRecovery {
+    if statuses.iter().all(|status| advertisement_started(*status)) {
+        return AdvertisementRecovery::Broadcasting;
+    }
+    if !radio_on || !retry_due {
+        return AdvertisementRecovery::Waiting;
+    }
+    if retried {
+        AdvertisementRecovery::Rebuild
+    } else {
+        AdvertisementRecovery::Retry
+    }
+}
+
 fn advertise(p: &GattServiceProvider) -> windows::core::Result<()> {
     let a = GattServiceProviderAdvertisingParameters::new()?;
     a.SetIsConnectable(true)?;
@@ -1867,5 +1941,57 @@ mod tests {
         assert!(!ADVERTISED_SERVICES.contains(&0x180a));
         assert!(HID_CHARACTERISTICS.contains(&PROTOCOL_MODE_CHARACTERISTIC));
         assert_eq!(PROTOCOL_MODE, [1]);
+    }
+
+    #[test]
+    fn advertisement_recovery_retries_aborted_battery_while_hid_is_started() {
+        let statuses = [
+            GattServiceProviderAdvertisementStatus::Started,
+            GattServiceProviderAdvertisementStatus::Aborted,
+        ];
+        assert_eq!(
+            advertisement_recovery(&statuses, true, false, true),
+            AdvertisementRecovery::Retry
+        );
+    }
+
+    #[test]
+    fn advertisement_recovery_rebuilds_after_a_retry_also_failed() {
+        let statuses = [
+            GattServiceProviderAdvertisementStatus::Started,
+            GattServiceProviderAdvertisementStatus::Aborted,
+        ];
+        assert_eq!(
+            advertisement_recovery(&statuses, true, true, true),
+            AdvertisementRecovery::Rebuild
+        );
+    }
+
+    #[test]
+    fn advertisement_recovery_waits_while_retry_is_not_due_or_radio_is_off() {
+        let statuses = [
+            GattServiceProviderAdvertisementStatus::Started,
+            GattServiceProviderAdvertisementStatus::Aborted,
+        ];
+        assert_eq!(
+            advertisement_recovery(&statuses, true, false, false),
+            AdvertisementRecovery::Waiting
+        );
+        assert_eq!(
+            advertisement_recovery(&statuses, false, true, true),
+            AdvertisementRecovery::Waiting
+        );
+    }
+
+    #[test]
+    fn advertisement_recovery_broadcasts_only_when_every_provider_started() {
+        let statuses = [
+            GattServiceProviderAdvertisementStatus::Started,
+            GattServiceProviderAdvertisementStatus::StartedWithoutAllAdvertisementData,
+        ];
+        assert_eq!(
+            advertisement_recovery(&statuses, true, false, true),
+            AdvertisementRecovery::Broadcasting
+        );
     }
 }

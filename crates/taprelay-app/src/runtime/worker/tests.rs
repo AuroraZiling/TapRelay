@@ -69,6 +69,118 @@ fn mapping_write_failures_preserve_live_rules_and_success_publishes_the_saved_re
 }
 
 #[test]
+fn scope_saves_merge_queued_assignments_and_preserve_live_rules_on_failure() {
+    use taprelay_core::foreground_app::ForegroundAppGroup;
+    let mut config = Config::default();
+    for id in ["games", "work"] {
+        config.foreground_app_rules.groups.insert(
+            id.into(),
+            ForegroundAppGroup {
+                name: id.into(),
+                foreground_apps: vec![],
+            },
+        );
+    }
+    let mut handle =
+        RuntimeHandle::spawn(config, Runtime::new, Runtime::headless_tick, 64).unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config.json");
+    let (release, wait) = mpsc::channel();
+    let (entered, started) = mpsc::channel();
+    handle
+        .enqueue(
+            Kind::Poll,
+            Box::new(move |_| {
+                entered.send(()).unwrap();
+                wait.recv_timeout(Duration::from_secs(3)).unwrap();
+                Ok(())
+            }),
+        )
+        .unwrap();
+    started.recv_timeout(Duration::from_secs(3)).unwrap();
+    handle
+        .set_function_scope(FunctionId::MediaPlayPause, ["games".into()].into(), &path)
+        .unwrap();
+    handle
+        .apply_binding_command(BindingCommand::SetFunctionEnabled {
+            id: FunctionId::MediaMute,
+            enabled: true,
+        })
+        .unwrap();
+    handle
+        .set_function_scope(FunctionId::MediaPrevious, ["work".into()].into(), &path)
+        .unwrap();
+    assert!(!handle.edits_blocked());
+    for id in [FunctionId::MediaPlayPause, FunctionId::MediaPrevious] {
+        assert!(handle.saving_function_scope(id));
+    }
+    assert!(matches!(
+        handle
+            .set_function_scope(FunctionId::MediaPlayPause, Default::default(), &path)
+            .unwrap_err()
+            .downcast_ref::<HandoffError>(),
+        Some(HandoffError::Busy)
+    ));
+    assert!(matches!(
+        handle
+            .set_foreground_app_rules(Default::default(), &path)
+            .unwrap_err()
+            .downcast_ref::<HandoffError>(),
+        Some(HandoffError::Busy)
+    ));
+    release.send(()).unwrap();
+    idle(&mut handle);
+    let saved = Config::load(&path).unwrap();
+    let rules = handle.config.foreground_app_rules.clone();
+    assert_eq!(saved.foreground_app_rules, rules);
+    assert_eq!(
+        rules.assignments[&FunctionId::MediaPlayPause],
+        ["games".into()].into()
+    );
+    assert_eq!(
+        rules.assignments[&FunctionId::MediaPrevious],
+        ["work".into()].into()
+    );
+    assert!(saved.functions[&FunctionId::MediaMute].enabled);
+    assert!(handle.take_notice().is_none());
+    assert!(!handle.saving_foreground_app_rules());
+    let revision = handle.bindings_revision;
+    handle
+        .set_function_scope(
+            FunctionId::MediaPlayPause,
+            ["work".into()].into(),
+            directory.path(),
+        )
+        .unwrap();
+    idle(&mut handle);
+    assert_eq!(handle.take_foreground_app_rules_saved(), Some(false));
+    assert_eq!(handle.config.foreground_app_rules, rules);
+    assert_eq!(handle.bindings_revision, revision);
+    assert_eq!(Config::load(&path).unwrap().foreground_app_rules, rules);
+    assert!(matches!(handle.take_notice(), Some(Notice::Error(_))));
+    handle
+        .set_function_scope(FunctionId::MediaPlayPause, Default::default(), &path)
+        .unwrap();
+    idle(&mut handle);
+    assert_eq!(handle.take_foreground_app_rules_saved(), Some(true));
+    assert!(
+        !handle
+            .config
+            .foreground_app_rules
+            .assignments
+            .contains_key(&FunctionId::MediaPlayPause)
+    );
+    assert_eq!(
+        handle.config.foreground_app_rules.assignments[&FunctionId::MediaPrevious],
+        ["work".into()].into()
+    );
+    assert_eq!(
+        Config::load(&path).unwrap().foreground_app_rules,
+        handle.config.foreground_app_rules
+    );
+}
+
+#[test]
 fn foreground_app_group_edits_publish_only_valid_revisions_and_persist_in_config() {
     use taprelay_core::foreground_app::ForegroundAppGroup;
     let mut handle = RuntimeHandle::new(Config::default()).unwrap();

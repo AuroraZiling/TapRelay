@@ -12,6 +12,31 @@ impl Controller {
         ui: &mut Presentation,
         rules: ForegroundAppRules,
     ) -> Result<()> {
+        self.validate_foreground_app_rules(&rules)?;
+        self.runtime.set_foreground_app_rules(rules, &self.path)?;
+        ui.groups.error = "".into();
+        Ok(())
+    }
+
+    pub(in crate::gui) fn save_function_scope(
+        &mut self,
+        ui: &mut Presentation,
+        id: FunctionId,
+        groups: std::collections::BTreeSet<String>,
+    ) -> Result<()> {
+        let mut rules = self.runtime.config.foreground_app_rules.clone();
+        if groups.is_empty() {
+            rules.assignments.remove(&id);
+        } else {
+            rules.assignments.insert(id, groups.clone());
+        }
+        self.validate_foreground_app_rules(&rules)?;
+        self.runtime.set_function_scope(id, groups, &self.path)?;
+        ui.groups.error = "".into();
+        Ok(())
+    }
+
+    fn validate_foreground_app_rules(&self, rules: &ForegroundAppRules) -> Result<()> {
         anyhow::ensure!(rules.valid(), self.tr(keys::GROUPS_INVALID));
         if let Some((first, second)) = rules.conflict(&self.runtime.config.functions) {
             bail!(
@@ -26,7 +51,7 @@ impl Controller {
             mapping.groups.retain(|id| rules.groups.contains_key(id));
         }
         if let Some((first, second)) =
-            taprelay_core::mapping::conflict(&self.runtime.config.functions, &rules, &mappings)
+            taprelay_core::mapping::conflict(&self.runtime.config.functions, rules, &mappings)
         {
             let name = |id| match id {
                 taprelay_core::mapping::RuleId::Function(id) => {
@@ -44,8 +69,6 @@ impl Controller {
                 name(second)
             );
         }
-        self.runtime.set_foreground_app_rules(rules, &self.path)?;
-        ui.groups.error = "".into();
         Ok(())
     }
 

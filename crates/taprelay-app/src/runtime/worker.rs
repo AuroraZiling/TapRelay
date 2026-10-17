@@ -6,7 +6,7 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     ops::Deref,
     sync::mpsc,
     thread,
@@ -65,6 +65,7 @@ enum Kind {
     Edit,
     ToggleFunction(FunctionId),
     SaveRules,
+    SaveScope(FunctionId),
     Cancel,
     Shutdown,
 }
@@ -283,9 +284,15 @@ impl RuntimeHandle {
         anyhow::ensure!(!self.stopped && !self.closing, HandoffError::Stopped);
         if matches!(
             kind,
-            Kind::Edit | Kind::ToggleFunction(_) | Kind::SaveRules | Kind::SaveMappings
+            Kind::Edit
+                | Kind::ToggleFunction(_)
+                | Kind::SaveRules
+                | Kind::SaveScope(_)
+                | Kind::SaveMappings
         ) && (self.edits_blocked()
-            || matches!(kind, Kind::ToggleFunction(id) if self.toggling_function(id)))
+            || matches!(kind, Kind::ToggleFunction(id) if self.toggling_function(id))
+            || matches!(kind, Kind::SaveScope(id) if self.saving_function_scope(id))
+            || (kind == Kind::SaveRules && self.saving_foreground_app_rules()))
         {
             return Err(HandoffError::Busy.into());
         }
@@ -356,11 +363,9 @@ impl RuntimeHandle {
                     {
                         self.mappings_saved = Some(result.is_ok());
                     }
-                    if self
-                        .pending
-                        .remove(&id)
-                        .is_some_and(|pending| pending.kind == Kind::SaveRules)
-                    {
+                    if self.pending.remove(&id).is_some_and(|pending| {
+                        matches!(pending.kind, Kind::SaveRules | Kind::SaveScope(_))
+                    }) {
                         self.rules_saved = Some(result.is_ok());
                     }
                     self.apply(view);
@@ -435,9 +440,12 @@ impl RuntimeHandle {
             .any(|pending| pending.kind != Kind::Poll)
     }
     pub fn edits_blocked(&self) -> bool {
-        self.pending
-            .values()
-            .any(|pending| !matches!(pending.kind, Kind::Poll | Kind::ToggleFunction(_)))
+        self.pending.values().any(|pending| {
+            !matches!(
+                pending.kind,
+                Kind::Poll | Kind::ToggleFunction(_) | Kind::SaveScope(_)
+            )
+        })
     }
     pub fn toggling_function(&self, id: FunctionId) -> bool {
         self.pending
@@ -510,10 +518,44 @@ impl RuntimeHandle {
         Ok(())
     }
 
+    pub fn set_function_scope(
+        &mut self,
+        id: FunctionId,
+        groups: BTreeSet<String>,
+        path: &std::path::Path,
+    ) -> Result<()> {
+        let mut config = self.config.clone();
+        let path = path.to_owned();
+        self.enqueue(
+            Kind::SaveScope(id),
+            Box::new(move |runtime| {
+                config.functions = runtime.functions.clone();
+                config.custom_mappings = runtime.custom_mappings.clone();
+                config.remembered_device = runtime.remembered_device.clone();
+                config.foreground_app_rules = runtime.foreground_app_rules.clone();
+                if groups.is_empty() {
+                    config.foreground_app_rules.assignments.remove(&id);
+                } else {
+                    config.foreground_app_rules.assignments.insert(id, groups);
+                }
+                config.save(&path)?;
+                runtime.set_foreground_app_rules(config.foreground_app_rules)
+            }),
+        )?;
+        self.rules_saved = None;
+        Ok(())
+    }
+
+    pub fn saving_function_scope(&self, id: FunctionId) -> bool {
+        self.pending
+            .values()
+            .any(|pending| pending.kind == Kind::SaveScope(id))
+    }
+
     pub fn saving_foreground_app_rules(&self) -> bool {
         self.pending
             .values()
-            .any(|pending| pending.kind == Kind::SaveRules)
+            .any(|pending| matches!(pending.kind, Kind::SaveRules | Kind::SaveScope(_)))
     }
 
     pub fn take_foreground_app_rules_saved(&mut self) -> Option<bool> {

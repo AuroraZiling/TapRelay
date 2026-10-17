@@ -285,7 +285,7 @@ impl AppView {
                 visible_limit,
                 self.ui.locale.clone(),
                 self.tr("common.all_apps"),
-                busy,
+                busy || self.controller.runtime.saving_function_scope(id),
             ))
             .test_support()
             .into_any_element()

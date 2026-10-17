@@ -161,7 +161,10 @@ impl AppView {
                             .scope_pickers
                             .get_mut(&id)
                             .expect("retained scope picker");
-                        let groups = if this.ui.groups.busy || this.controller.recording() {
+                        let busy = this.ui.groups.busy
+                            || this.controller.recording()
+                            || this.controller.runtime.saving_function_scope(id);
+                        let groups = if busy {
                             picker
                                 .selection
                                 .iter()
@@ -185,8 +188,7 @@ impl AppView {
                             .get(&id)
                             .cloned()
                             .unwrap_or_default();
-                        if !this.ui.groups.busy && !this.controller.recording() && current != groups
-                        {
+                        if !busy && current != groups {
                             this.dispatch(Command::Scope(id, groups), window, cx);
                         }
                     },
@@ -197,7 +199,9 @@ impl AppView {
                     selection: Vec::new(),
                 }
             });
-            if !self.ui.groups.busy || picker.selection.is_empty() {
+            if (!self.ui.groups.busy || picker.selection.is_empty())
+                && !self.controller.runtime.saving_function_scope(id)
+            {
                 picker.sync(
                     &items,
                     rules.assignments.get(&id).unwrap_or(&empty),

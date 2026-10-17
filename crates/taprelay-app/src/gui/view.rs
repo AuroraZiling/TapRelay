@@ -245,14 +245,8 @@ impl AppView {
                     .mapping_command(&mut self.ui, command, value)
             }
             Command::Scope(id, groups) => {
-                let mut rules = self.controller.runtime.config.foreground_app_rules.clone();
-                if groups.is_empty() {
-                    rules.assignments.remove(id);
-                } else {
-                    rules.assignments.insert(*id, groups.clone());
-                }
                 self.controller
-                    .save_foreground_app_rules(&mut self.ui, rules)
+                    .save_function_scope(&mut self.ui, *id, groups.clone())
             }
         };
         if let Err(error) = result {

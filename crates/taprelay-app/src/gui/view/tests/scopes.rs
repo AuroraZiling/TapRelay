@@ -61,6 +61,85 @@ fn choose(cx: &mut TestAppContext, handle: AnyWindowHandle, view: &Entity<AppVie
 }
 
 #[gpui_kit::test]
+fn changing_scope_keeps_unrelated_binding_controls_visually_stable(cx: &mut TestAppContext) {
+    let (handle, view, _folder) = open_scopes(cx, 900.);
+    let before = cx
+        .update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            let other = window.find("binding-enabled-media.previous").bounds();
+            let colors = window
+                .painted_quads()
+                .into_iter()
+                .filter(|quad| {
+                    let center = quad.bounds.center();
+                    let scale = window.scale_factor();
+                    other.contains(&gpui_kit::point(
+                        px(center.x.as_f32() / scale),
+                        px(center.y.as_f32() / scale),
+                    ))
+                })
+                .map(|quad| quad.background)
+                .collect::<Vec<_>>();
+            assert!(!colors.is_empty());
+            window.click("scope-media.play-pause", cx);
+            window.press("down", cx);
+            window.press("down", cx);
+            window.press("enter", cx);
+            (other, colors)
+        })
+        .unwrap();
+    cx.run_until_parked();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            view.read(cx)
+                .controller
+                .runtime
+                .saving_foreground_app_rules()
+        );
+        assert!(!view.read(cx).ui.groups.busy);
+        let current = &view.read(cx).scope_pickers[&FUNCTION].state;
+        assert_eq!(current.read(cx).selected_values(), ["games"]);
+        assert!(
+            view.read(cx)
+                .controller
+                .runtime
+                .saving_function_scope(FUNCTION)
+        );
+        let other = &view.read(cx).scope_pickers[&FunctionId::MediaPrevious].state;
+        assert_ne!(
+            window
+                .find(("multi-combo-box", other.entity_id()))
+                .disabled(),
+            Some(true)
+        );
+        let colors = window
+            .painted_quads()
+            .into_iter()
+            .filter(|quad| {
+                let center = quad.bounds.center();
+                let scale = window.scale_factor();
+                before.0.contains(&gpui_kit::point(
+                    px(center.x.as_f32() / scale),
+                    px(center.y.as_f32() / scale),
+                ))
+            })
+            .map(|quad| quad.background)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            colors, before.1,
+            "changing scope must not dim unrelated binding controls"
+        );
+        assert_ne!(
+            window.find("binding-enabled-media.previous").disabled(),
+            Some(true)
+        );
+    })
+    .unwrap();
+    settle(cx, handle, &view);
+}
+
+#[gpui_kit::test]
 fn scope_combobox_multiselects_without_search_and_restores_all_apps(cx: &mut TestAppContext) {
     let (handle, view, folder) = open_scopes(cx, 900.);
     let state = cx.update(|cx| view.read(cx).scope_pickers[&FUNCTION].state.clone());

@@ -6,6 +6,49 @@ use gpui_kit::{AppContext, TestAppContext, px};
 use std::time::Duration;
 
 #[gpui_kit::test]
+fn invalid_shortcut_feedback_is_compact_in_both_languages(cx: &mut TestAppContext) {
+    let (handle, view, _folder) = open(cx);
+    settle(cx, handle, &view);
+    cx.update_window(handle, |_, window, cx| {
+        for language in ["en", "zh-CN"] {
+            view.update(cx, |view, cx| {
+                view._pump = gpui_kit::Task::ready(());
+                view.controller.runtime.config.options.language =
+                    crate::config::Language::from_name(language).unwrap();
+                view.ui.page = 1;
+                view.ui.binding.capture.function_id = "media.play-pause".into();
+                view.ui.binding.capture.slot = 0;
+                view.ui.binding.capture.error = view.tr("capture.invalid");
+                cx.notify();
+            });
+            window.render_frame(cx);
+            let error = window.find("binding-capture-error");
+            assert_eq!(error.role(), Some(gpui_kit::Role::Alert));
+            assert_eq!(
+                error.label(),
+                Some(view.read(cx).tr("capture.invalid").as_str())
+            );
+            assert!(error.visible());
+            assert!(error.bounds().size.height <= px(18.));
+            let column = window.find("binding-shortcuts-media.play-pause").bounds();
+            assert!(error.bounds().left() >= column.left());
+            assert!(error.bounds().right() <= column.right());
+            assert!(error.bounds().top() >= column.top());
+            assert!(error.bounds().bottom() <= column.bottom());
+            assert!(
+                error.bounds().top()
+                    >= window
+                        .find("binding-add-media.play-pause")
+                        .bounds()
+                        .bottom()
+                        + px(4.)
+            );
+        }
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
 fn toggling_a_binding_keeps_other_switches_visually_stable(cx: &mut TestAppContext) {
     let (handle, view, folder) = open(cx);
     settle(cx, handle, &view);
@@ -240,7 +283,11 @@ fn function_badges_fit_their_rows_without_overlapping(cx: &mut TestAppContext) {
                                 "{language}, scale={scale}, {}: badge {badge:?} exceeds row {gesture:?}", row.id);
                             assert!(badge.left() >= gesture.left() && badge.right() <= gesture.right());
                             if let Some(bottom) = previous_bottom {
-                                assert!(badge.top() >= bottom + px(4.), "{}: badges need a visible gap", row.id);
+                                assert!(
+                                    badge.top() + px(1. / scale) >= bottom + px(4.),
+                                    "{}: badges need a visible gap ({language}, scale={scale}): previous bottom {bottom:?}, badge {badge:?}, gesture {gesture:?}",
+                                    row.id
+                                );
                             }
                             previous_bottom = Some(badge.bottom());
                         }

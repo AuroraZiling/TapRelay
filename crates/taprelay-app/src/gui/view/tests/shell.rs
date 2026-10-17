@@ -68,7 +68,7 @@ fn title_bar_remains_above_every_screen_in_both_locales_and_themes(cx: &mut Test
                             assert!((toggle.center().y - px(22.)).abs() <= px(1. / scale));
                             assert!(icon.left() > toggle.right());
                             assert_eq!(window.find("navigation").bounds().top(), bar.bottom());
-                            assert_eq!(window.find("0-0").bounds().top(), bar.bottom() + px(12.));
+                            assert_eq!(window.find("0-0").bounds().top(), bar.bottom() + px(8.));
                             assert_eq!(
                                 window.find("receiver-status-indicator").label(),
                                 Some(view.read(cx).ui.stage.as_str()),

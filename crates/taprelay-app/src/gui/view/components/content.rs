@@ -60,6 +60,9 @@ impl AppView {
             .flex_1()
             .min_h_0()
             .min_w_0()
+            .when(id == "mapping-editor", |scroller| {
+                scroller.mx(rems(-0.25)).px_1()
+            })
             .overflow_y_scroll()
             .track_scroll(&self.content_scroll)
             .child(

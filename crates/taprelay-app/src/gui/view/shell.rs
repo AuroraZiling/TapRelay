@@ -212,9 +212,7 @@ impl AppView {
                 .w_full()
                 .px_1p5()
                 .when(!self.sidebar_collapsed, |button| {
-                    button
-                        .px_2()
-                        .child(div().flex_1().min_w_0().text_ellipsis().child(label))
+                    button.px_2().child(self.button_text(label).flex_1())
                 })
                 .selected(self.ui.page == page as i32)
                 .toggled(self.ui.page == page as i32)
@@ -237,7 +235,7 @@ impl AppView {
             .h_full()
             .flex_shrink_0()
             .v_flex()
-            .py_3()
+            .py_2()
             .px(rems(SIDEBAR_PADDING_REMS))
             .gap_3()
             .overflow_hidden()
@@ -305,7 +303,11 @@ impl AppView {
                         self.ui.groups.busy,
                         cx,
                     )
-                    .primary(),
+                    .primary()
+                    .icon(
+                        Icon::new(IconName::Settings)
+                            .transform(Transformation::scale(size(0.875, 0.875))),
+                    ),
                 );
             }
             1 => {
@@ -333,12 +335,16 @@ impl AppView {
                     header = header.child(
                         self.button(
                             "mapping-create",
-                            self.tr("mappings.create"),
+                            self.tr("common.new"),
                             Command::Mapping("create", String::new()),
                             self.ui.mapping.busy,
                             cx,
                         )
-                        .primary(),
+                        .primary()
+                        .icon(
+                            Icon::new(IconName::Plus)
+                                .transform(Transformation::scale(size(0.875, 0.875))),
+                        ),
                     );
                 }
             }
@@ -362,6 +368,10 @@ impl AppView {
                         cx,
                     )
                     .primary()
+                    .icon(
+                        Icon::new(IconName::Plus)
+                            .transform(Transformation::scale(size(0.875, 0.875))),
+                    )
                 });
             }
             _ => {}
@@ -376,7 +386,7 @@ impl AppView {
         div()
             .id("page-header")
             .v_flex()
-            .gap_1()
+            .gap_2()
             .flex_shrink_0()
             .child(header.test_support())
             .when_some(description, |header, description| {

@@ -103,6 +103,7 @@ pub(crate) struct MappingOutputOption {
     pub label: String,
     pub value: String,
     pub is_mouse: bool,
+    pub category: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -146,7 +147,6 @@ pub(super) struct Mapping {
     pub inputs: Vec<String>,
     pub output_options: Vec<MappingOutputOption>,
     pub selected_output: MappingOutputOption,
-    pub output_filter: String,
     pub entry_mode: i32,
     pub ctrl: bool,
     pub shift: bool,

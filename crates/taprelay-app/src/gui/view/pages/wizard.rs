@@ -77,7 +77,7 @@ impl AppView {
                         format!("{}{}", self.tr("wizard.input.count"), self.ui.input_count),
                         cx,
                     ))
-                    .child(div().h(rems(11.25)).child(self.status_card(window, cx))),
+                    .child(self.status_card(window, cx)),
             ),
         });
         body.child(

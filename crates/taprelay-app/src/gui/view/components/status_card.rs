@@ -1,8 +1,9 @@
 use crate::gui::action::Action;
-use crate::gui::view::AppView;
+use crate::gui::view::{AppView, Command};
+use gpui_kit::assets::IconName;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::{
-    StyledExt,
+    Icon, StyledExt,
     button::ButtonVariants,
     group_box::{GroupBox, GroupBoxVariants},
 };
@@ -50,23 +51,12 @@ impl AppView {
         GroupBox::new()
             .id("receiver-status")
             .fill()
-            .h_full()
-            .grid()
-            .grid_rows(1)
-            .content_style(
-                self.card_style(cx)
-                    .flex_1()
-                    .min_h_0()
-                    .relative()
-                    .overflow_hidden(),
-            )
+            .content_style(self.card_style(cx).relative().overflow_hidden())
             .child(waves)
             .child(
                 div()
                     .v_flex()
-                    .flex_1()
-                    .min_h_0()
-                    .gap_2()
+                    .gap_3()
                     .child(self.caption(self.tr("receiver.current"), cx))
                     .child(self.heading(self.ui.device_name.clone()))
                     .child(
@@ -81,7 +71,6 @@ impl AppView {
                     .child(
                         div()
                             .h_flex()
-                            .mt_auto()
                             .flex_shrink_0()
                             .gap_3()
                             .pt_1()
@@ -98,7 +87,15 @@ impl AppView {
                                     self.ui.busy,
                                     cx,
                                 )
-                                .primary(),
+                                .primary()
+                                .icon(
+                                    Icon::new(if self.ui.listening {
+                                        IconName::Square
+                                    } else {
+                                        IconName::Play
+                                    })
+                                    .transform(Transformation::scale(size(0.875, 0.875))),
+                                ),
                             )
                             .child(
                                 self.app_button(
@@ -112,10 +109,11 @@ impl AppView {
                             )
                             .when(self.ui.state_color != 0, |row| {
                                 row.child(
-                                    self.app_button(
+                                    self.icon_button(
                                         "retry-receiver",
-                                        "common.retry",
-                                        Action::Retry,
+                                        IconName::RotateCw,
+                                        self.tr("common.retry"),
+                                        Command::App(Action::Retry, String::new()),
                                         self.ui.problem_busy,
                                         cx,
                                     )

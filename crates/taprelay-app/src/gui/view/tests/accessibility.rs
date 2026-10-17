@@ -137,13 +137,16 @@ fn mapping_editor_reveals_manual_controls_and_keeps_escape_available_as_output(
                 for element in snapshots(window) {
                     if matches!(
                         element.role(),
-                        Some(Role::Button | Role::CheckBox | Role::TextInput)
+                        Some(Role::Button | Role::CheckBox | Role::TextInput | Role::ComboBox)
                     ) && element.focused() == Some(true)
                     {
                         assert!(element.visible(), "{element:?}");
                     }
                 }
-                saw_output |= window.find("mapping-output-choice").focused() == Some(true);
+                saw_output |= window
+                    .find(("select", view.read(cx).output_choice.entity_id()))
+                    .focused()
+                    == Some(true);
             })
             .unwrap();
         }

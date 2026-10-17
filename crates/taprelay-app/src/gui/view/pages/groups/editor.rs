@@ -252,7 +252,11 @@ impl AppView {
                             busy,
                             cx,
                         )
-                        .primary(),
+                        .primary()
+                        .icon(
+                            Icon::new(IconName::Save)
+                                .transform(Transformation::scale(size(0.875, 0.875))),
+                        ),
                     ),
             )
             .into_any_element()

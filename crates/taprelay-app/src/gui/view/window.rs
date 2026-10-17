@@ -79,6 +79,7 @@ impl AppView {
         gpui_kit::component::set_locale(&self.ui.locale);
         self.sync_report_rate(window, cx);
         self.sync_scope_pickers(window, cx);
+        self.sync_output_choice(window, cx);
         if let Some(message) = self.controller.pending_notification.take() {
             let close_label = self.tr("a11y.dismiss_notification");
             window.defer(cx, move |window, cx| {
@@ -114,7 +115,6 @@ impl AppView {
         for (input, value) in [
             (&self.group_name, &self.ui.groups.selected_name),
             (&self.mapping_name, &self.ui.mapping.name),
-            (&self.output_filter, &self.ui.mapping.output_filter),
         ] {
             if input.read(cx).value().as_ref() != value.as_str() {
                 input.update(cx, |input, cx| input.set_value(value.clone(), window, cx));

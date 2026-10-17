@@ -20,33 +20,36 @@ impl AppView {
         if !self.ui.groups.error.is_empty() {
             page = page.child(self.error(&self.ui.groups.error, cx));
         }
-        let mut rows = div().v_flex().gap_2().child(
-            div()
-                .h_flex()
-                .h_7()
-                .px_4()
-                .gap_4()
-                .child(
-                    self.caption(self.tr("common.enabled"), cx)
-                        .w_9()
-                        .flex_shrink_0(),
-                )
-                .child(
-                    self.caption(self.tr("common.shortcut"), cx)
-                        .flex_1()
-                        .min_w_0(),
-                )
-                .child(
-                    self.caption(self.tr("common.function"), cx)
-                        .w(rems(15.))
-                        .flex_shrink_0(),
-                )
-                .child(
-                    self.caption(self.tr("common.effective_scope"), cx)
-                        .w(scope_width)
-                        .flex_shrink_0(),
-                ),
-        );
+        let header = div()
+            .h_flex()
+            .h_7()
+            .px_4()
+            .gap_4()
+            .child(
+                self.caption(self.tr("common.enabled"), cx)
+                    .w_9()
+                    .flex_shrink_0(),
+            )
+            .child(
+                self.caption(self.tr("common.shortcut"), cx)
+                    .flex_1()
+                    .min_w_0(),
+            )
+            .child(
+                self.caption(self.tr("common.function"), cx)
+                    .w(rems(15.))
+                    .flex_shrink_0(),
+            )
+            .child(
+                self.caption(self.tr("common.effective_scope"), cx)
+                    .w(scope_width)
+                    .flex_shrink_0(),
+            );
+        let mut rows = div()
+            .grid()
+            .grid_cols(1)
+            .grid_rows(self.ui.binding.rows.len() as u16)
+            .gap_2();
         let busy = self.controller.recording() || self.ui.groups.busy;
         for row in &self.ui.binding.rows {
             let Some(id) = FunctionId::from_stable_id(&row.id) else {
@@ -81,7 +84,7 @@ impl AppView {
                     .selected(recording),
                 );
                 if row.enabled {
-                    chip = chip.clear_button(self.icon_button(
+                    chip = chip.clear_button(self.plain_icon_button(
                         SharedString::from(if recording {
                             format!("capture-cancel-{}", row.id)
                         } else {
@@ -130,7 +133,7 @@ impl AppView {
                     .selected(recording),
                 );
                 if recording {
-                    chip = chip.clear_button(self.icon_button(
+                    chip = chip.clear_button(self.plain_icon_button(
                         SharedString::from(format!("capture-cancel-{}", row.id)),
                         IconName::X,
                         self.tr("capture.cancel_shortcut"),
@@ -152,8 +155,13 @@ impl AppView {
                 .gap_1()
                 .child(shortcuts);
             if capturing && !self.ui.binding.capture.error.is_empty() {
-                shortcut_column =
-                    shortcut_column.child(self.error(&self.ui.binding.capture.error, cx));
+                shortcut_column = shortcut_column.child(
+                    self.error(&self.ui.binding.capture.error, cx)
+                        .id("binding-capture-error")
+                        .text_xs()
+                        .line_height(relative(1.25))
+                        .test_support(),
+                );
             }
             let mut gestures = div()
                 .id(SharedString::from(format!("binding-function-{}", row.id)))
@@ -173,6 +181,7 @@ impl AppView {
                         .child(
                             self.caption(gesture.gesture.clone(), cx)
                                 .w_10()
+                                .text_right()
                                 .flex_shrink_0(),
                         )
                         .child(
@@ -200,11 +209,23 @@ impl AppView {
             rows = rows.child(
                 div()
                     .id(SharedString::from(format!("binding-row-{}", row.id)))
+                    .h_full()
                     .child(
                         GroupBox::new()
                             .id(SharedString::from(format!("binding-{}", row.id)))
                             .fill()
-                            .content_style(self.card_style(cx).h_flex().min_h_16())
+                            .h_full()
+                            .grid()
+                            .grid_cols(1)
+                            .grid_rows(1)
+                            .content_style(
+                                self.card_style(cx)
+                                    .h_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .min_h_16()
+                                    .py_2(),
+                            )
                             .child(
                                 div().w_9().flex_shrink_0().child(
                                     Switch::new(SharedString::from(format!(
@@ -256,7 +277,7 @@ impl AppView {
                     }),
             );
         }
-        page.child(self.scroller("bindings", rows))
+        page.child(self.scroller("bindings", div().v_flex().gap_2().child(header).child(rows)))
             .into_any_element()
     }
 

@@ -40,7 +40,6 @@ impl AppView {
         content = content.child(
             div()
                 .id("status-card")
-                .h(rems(11.25))
                 .flex_shrink_0()
                 .child(self.status_card(window, cx))
                 .test_support(),

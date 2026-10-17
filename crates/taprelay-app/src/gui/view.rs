@@ -3,7 +3,7 @@ use crate::{
     gui::{
         action::Action,
         controller::Controller,
-        presentation::{ChoiceOption, Presentation},
+        presentation::{ChoiceOption, MappingOutputOption, Presentation},
     },
     platform::desktop::{self, DesktopEvent},
     runtime::commands::BindingCommand,
@@ -13,6 +13,8 @@ use gpui_kit::component::{
     ActiveTheme, StyledExt,
     combobox::{ComboboxEvent, ComboboxState},
     input::{InputEvent, InputState},
+    searchable_list::SearchableVec,
+    select::{SelectEvent, SelectState},
 };
 use gpui_kit::{prelude::*, *};
 use std::{
@@ -47,7 +49,8 @@ pub(super) struct AppView {
     app_icon: components::AppIcon,
     group_name: Entity<InputState>,
     mapping_name: Entity<InputState>,
-    output_filter: Entity<InputState>,
+    output_choice: Entity<SelectState<SearchableVec<MappingOutputOption>>>,
+    output_choice_items: Vec<MappingOutputOption>,
     report_rate: Entity<ComboboxState<Vec<ChoiceOption>>>,
     report_rate_auto_label: String,
     scope_pickers: BTreeMap<FunctionId, components::ScopePicker>,
@@ -71,7 +74,15 @@ impl AppView {
         super::theme::init(cx);
         let group_name = cx.new(|cx| InputState::new(window, cx));
         let mapping_name = cx.new(|cx| InputState::new(window, cx));
-        let output_filter = cx.new(|cx| InputState::new(window, cx));
+        let output_choice = cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(Vec::<MappingOutputOption>::new()),
+                None,
+                window,
+                cx,
+            )
+            .searchable(true)
+        });
         let report_rate =
             cx.new(|cx| ComboboxState::new(Vec::<ChoiceOption>::new(), Vec::new(), window, cx));
         let mut subscriptions = vec![
@@ -108,19 +119,15 @@ impl AppView {
                     this.ui.mapping.name = input.read(cx).value().to_string();
                 }
             }),
-            cx.subscribe_in(
-                &output_filter,
-                window,
-                |this, input, event: &InputEvent, window, cx| {
-                    if matches!(event, InputEvent::Change) {
-                        this.dispatch(
-                            Command::Mapping("filter-output", input.read(cx).value().to_string()),
-                            window,
-                            cx,
-                        );
-                    }
-                },
-            ),
+            cx.subscribe_in(&output_choice, window, |this, _, event, window, cx| {
+                if let SelectEvent::Confirm(Some(value)) = event
+                    && !this.ui.mapping.busy
+                    && !this.ui.mapping.saving
+                    && !this.controller.recording()
+                {
+                    this.dispatch(Command::Mapping("select-output", value.clone()), window, cx);
+                }
+            }),
         ];
         let weak = cx.entity().downgrade();
         let handle = window.window_handle();
@@ -197,7 +204,8 @@ impl AppView {
             app_icon: components::AppIcon::default(),
             group_name,
             mapping_name,
-            output_filter,
+            output_choice,
+            output_choice_items: Vec::new(),
             report_rate,
             report_rate_auto_label: String::new(),
             scope_pickers: BTreeMap::new(),

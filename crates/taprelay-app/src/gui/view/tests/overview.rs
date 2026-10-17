@@ -1,7 +1,7 @@
 use super::support::{open, open_sized, settle};
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{AppContext, TestAppContext, px};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[gpui_kit::test]
 fn preserves_overview_proportions_in_both_themes_and_window_sizes(cx: &mut TestAppContext) {
@@ -38,7 +38,7 @@ fn preserves_overview_proportions_in_both_themes_and_window_sizes(cx: &mut TestA
                         header.origin,
                         gpui_kit::point(nav.right() + px(28.), bar.bottom() + px(28.))
                     );
-                    assert_eq!(status.size.height, px(180.));
+                    assert!(status.size.height > px(0.));
                     assert_eq!(status.origin.x, header.origin.x);
                     assert_eq!(status.right(), px(width - 28.));
                     assert_eq!(shortcuts.top(), status.bottom() + px(16.));
@@ -53,9 +53,14 @@ fn preserves_overview_proportions_in_both_themes_and_window_sizes(cx: &mut TestA
                     assert!(scroll.top() >= manage.bottom() + px(16.));
                     assert_eq!(
                         window.find(("nav", 3usize)).bounds().bottom(),
-                        px(height - 12.)
+                        px(height - 8.)
                     );
                     assert_eq!(window.find("listen").bounds().size.height, px(32.));
+                    let indicator = window.find("receiver-status-indicator").bounds();
+                    assert_eq!(
+                        (f32::from(window.find("listen").bounds().top()) * scale).round(),
+                        (f32::from(indicator.bottom() + px(16.)) * scale).round()
+                    );
                     for action in ["listen", "test-receiver"] {
                         let bounds = window.find(action).bounds();
                         assert!((bounds.bottom() - (status.bottom() - px(16.))).abs() <= px(1. / scale),
@@ -66,6 +71,90 @@ fn preserves_overview_proportions_in_both_themes_and_window_sizes(cx: &mut TestA
         })
         .unwrap();
     }
+}
+
+#[gpui_kit::test]
+fn receiver_card_grows_with_wrapped_status_in_overview_and_wizard(cx: &mut TestAppContext) {
+    let (handle, view, _folder) = open_sized(cx, 900., 800.);
+    cx.update_window(handle, |_, window, cx| {
+        for mode in [2, 1] {
+            view.update(cx, |view, cx| {
+                view.ui.mode = mode;
+                view.ui.page = 0;
+                view.ui.wizard_page = 3;
+                view.ui.elevated = true;
+                view.ui.stage = "Receiver paused".into();
+                cx.notify();
+            });
+            window.render_frame(cx);
+            let initial_indicator = window.find("receiver-status-indicator").bounds();
+            let initial_button = window.find("listen").bounds();
+            let initial_card = (mode == 2).then(|| window.find("status-card").bounds());
+            view.update(cx, |view, cx| {
+                view.ui.stage =
+                    "Receiver paused, waiting for the receiving device to resume. ".repeat(12);
+                cx.notify();
+            });
+            window.render_frame(cx);
+            let indicator = window.find("receiver-status-indicator").bounds();
+            let button = window.find("listen").bounds();
+            let growth = indicator.size.height - initial_indicator.size.height;
+            assert!(growth > px(0.));
+            assert_eq!(button.top() - initial_button.top(), growth);
+            assert_eq!(button.top(), indicator.bottom() + px(16.));
+            assert!(window.find("listen").visible());
+            if let Some(initial_card) = initial_card {
+                let card = window.find("status-card").bounds();
+                assert_eq!(card.size.height - initial_card.size.height, growth);
+                assert_eq!(card.bottom(), button.bottom() + px(16.));
+                assert_eq!(
+                    window.find("shortcuts-card").bounds().top(),
+                    card.bottom() + px(16.)
+                );
+            }
+        }
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn receiver_retry_icon_keeps_its_label_disabled_state_and_keyboard_action(cx: &mut TestAppContext) {
+    let (handle, view, _folder) = open(cx);
+    settle(cx, handle, &view);
+    cx.update_window(handle, |_, window, cx| {
+        for (busy, keyboard) in [(true, false), (false, false), (false, true)] {
+            let started = Instant::now() - Duration::from_secs(3);
+            view.update(cx, |view, cx| {
+                view.controller.started = started;
+                view.ui.state_color = 2;
+                view.ui.problem_busy = busy;
+                view.focus.focus(window, cx);
+                cx.notify();
+            });
+            window.render_frame(cx);
+            let retry = window.find("retry-receiver");
+            assert_eq!(
+                retry.label(),
+                Some(view.read(cx).tr("common.retry").as_str())
+            );
+            assert_eq!(retry.bounds().size.width, px(32.));
+            assert_eq!(retry.bounds().size.height, px(32.));
+            if keyboard {
+                for _ in 0..16 {
+                    if window.find("retry-receiver").focused() == Some(true) {
+                        break;
+                    }
+                    window.press("tab", cx);
+                }
+                assert_eq!(window.find("retry-receiver").focused(), Some(true));
+                window.press("enter", cx);
+            } else {
+                window.click("retry-receiver", cx);
+            }
+            assert_eq!(view.read(cx).controller.started == started, busy);
+        }
+    })
+    .unwrap();
 }
 
 #[gpui_kit::test]

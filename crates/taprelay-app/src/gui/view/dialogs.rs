@@ -52,7 +52,7 @@ impl AppView {
             return;
         }
         let weak = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, _, cx| {
+        window.open_dialog(cx, move |dialog, window, cx| {
             let Some(entity) = weak.upgrade() else {
                 return dialog;
             };
@@ -69,7 +69,7 @@ impl AppView {
                     )
                 };
                 let dialog = if next == 1 {
-                    this.mapping_leave_dialog(dialog, cancel.clone(), cx)
+                    this.mapping_leave_dialog(dialog, cancel.clone(), window, cx)
                 } else {
                     this.group_delete_dialog(dialog, cancel.clone(), cx)
                 };

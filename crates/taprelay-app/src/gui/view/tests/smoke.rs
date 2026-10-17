@@ -30,7 +30,7 @@ fn renders_every_page_in_both_languages_in_a_compact_window(cx: &mut TestAppCont
                         .within("page-header")
                         .find("page-description")
                         .bounds();
-                    assert_eq!(description.top(), title.bottom() + px(4.));
+                    assert_eq!(description.top(), title.bottom() + px(8.));
                     assert!(
                         description.left() >= header.left()
                             && description.right() <= header.right()

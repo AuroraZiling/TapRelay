@@ -167,7 +167,6 @@ impl Controller {
                 ui.mapping.editor = true;
                 ui.mapping.new_mapping = new;
                 ui.mapping.entry_mode = 0;
-                ui.mapping.output_filter = "".into();
                 self.sync_output_options(ui);
                 ui.mapping.focus_request += 1;
                 ui.mapping.name = self.mapping_draft.as_ref().unwrap().mapping.name.clone();
@@ -177,10 +176,6 @@ impl Controller {
                 ui.mapping.meta = false;
                 self.mapping_output_to_ui(ui);
                 self.sync_mapping_draft(ui);
-            }
-            "filter-output" => {
-                ui.mapping.output_filter = value.into();
-                self.sync_output_options(ui);
             }
             "select-output" => {
                 let output = with_ui_modifiers(
@@ -602,8 +597,7 @@ impl Controller {
     }
 
     fn sync_output_options(&self, ui: &mut Presentation) {
-        ui.mapping.output_options =
-            output_options(self.locale(), &ui.mapping.output_filter.clone());
+        ui.mapping.output_options = output_options(self.locale(), "");
     }
 
     pub(in crate::gui) fn mapping_output_label(&self, output: MappingOutput) -> String {
@@ -643,11 +637,12 @@ fn with_ui_modifiers(mut output: MappingOutput, ui: &mut Presentation) -> Mappin
     output
 }
 
-fn keyboard_option(key: u8, usage: u8) -> MappingOutputOption {
+fn keyboard_option(locale: &str, key: u8, usage: u8) -> MappingOutputOption {
     MappingOutputOption {
         label: platform::key_name(key),
         value: format!("key/{usage}"),
         is_mouse: false,
+        category: rust_i18n::t!(keys::INPUT_KEYBOARD, locale = locale).into_owned(),
     }
 }
 
@@ -655,31 +650,29 @@ fn output_option(locale: &str, output: MappingOutput) -> MappingOutputOption {
     match output {
         MappingOutput::Keyboard { usage, .. } => mapping::output_keys()
             .into_iter()
-            .find_map(|(key, value)| (value == usage).then(|| keyboard_option(key, usage)))
+            .find_map(|(key, value)| (value == usage).then(|| keyboard_option(locale, key, usage)))
             .unwrap_or_default(),
         MappingOutput::Mouse { button } => MappingOutputOption {
             label: input::mouse_button_label(locale, button),
             value: format!("mouse/{}", button as usize),
             is_mouse: true,
+            category: rust_i18n::t!(keys::INPUT_MOUSE, locale = locale).into_owned(),
         },
     }
 }
 
 fn output_options(locale: &str, filter: &str) -> Vec<MappingOutputOption> {
     let filter = filter.trim().to_lowercase();
-    let keyboard = rust_i18n::t!(keys::INPUT_KEYBOARD, locale = locale);
-    let mouse = rust_i18n::t!(keys::INPUT_MOUSE, locale = locale);
     mapping::output_keys()
         .into_iter()
-        .map(|(key, usage)| keyboard_option(key, usage))
+        .map(|(key, usage)| keyboard_option(locale, key, usage))
         .chain(
             MouseButton::ALL
                 .into_iter()
                 .map(|button| output_option(locale, MappingOutput::Mouse { button })),
         )
         .filter(|option| {
-            let category = if option.is_mouse { &mouse } else { &keyboard };
-            format!("{category} {}", option.label)
+            format!("{} {}", option.category, option.label)
                 .to_lowercase()
                 .contains(&filter)
         })

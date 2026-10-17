@@ -57,14 +57,9 @@ impl AppView {
         if !self.ui.problem.is_empty() {
             body = body
                 .child(self.error(&self.ui.problem, cx))
-                .child(self.caption(
-                    self.tr(if self.ui.mode == 3 {
-                        "startup.environment.troubleshooting"
-                    } else {
-                        "startup.troubleshooting"
-                    }),
-                    cx,
-                ));
+                .when(self.ui.mode != 3, |body| {
+                    body.child(self.caption(self.tr("startup.troubleshooting"), cx))
+                });
         }
         div()
             .v_flex()

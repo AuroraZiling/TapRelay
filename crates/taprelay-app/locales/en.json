@@ -236,7 +236,6 @@
   "shortcuts.unset": "No shortcut set",
   "startup.bluetooth.settings": "Bluetooth settings",
   "startup.description": "Checking the application environment and Bluetooth media controls.",
-  "startup.environment.troubleshooting": "Check the error details, configuration file, and folder permissions. Fix an invalid config.json or back it up and move it aside. If the folder is not writable, move the app to a writable folder. Restart the app after resolving the problem.",
   "startup.error": "Unable to start",
   "startup.preparing": "Preparing TapRelay",
   "startup.retry": "Retry checks",

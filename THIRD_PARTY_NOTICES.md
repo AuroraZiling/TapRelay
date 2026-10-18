@@ -63,6 +63,22 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## GPUI Windows backend
+
+- Source: [`gpui-pre-windows` 0.3.9](https://crates.io/crates/gpui-pre-windows/0.3.9),
+  a snapshot of Zed's `gpui_windows` at
+  [`93d745668805029476e6d7fbb19652116fed51de`](https://github.com/zed-industries/zed/tree/93d745668805029476e6d7fbb19652116fed51de/crates/gpui_windows).
+- Path: `vendor/gpui-pre-windows/`.
+- License: Apache-2.0; the upstream license is retained in
+  `vendor/gpui-pre-windows/LICENSE-APACHE`.
+- Modifications: renderer adapter metadata is obtained from the created D3D11
+  device instead of the requested adapter, so `Window::gpu_specs()` reports the
+  actual software-rendering state after an external override. Device creation
+  uses WARP software rendering by default instead of enumerating hardware
+  adapters, with no configuration switch. Feature checks and shaders are
+  unchanged. Regression tests cover default WARP creation and actual-device
+  metadata.
+
 ## Maintenance
 
 1. Ordinary Cargo dependency additions/updates: no notice entry by default.

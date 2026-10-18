@@ -4,7 +4,11 @@ members = [
     "crates/taprelay-windows",
     "crates/taprelay-app",
 ]
+exclude = ["vendor/gpui-pre-windows"]
 resolver = "2"
+
+[patch.crates-io]
+gpui-pre-windows = { path = "vendor/gpui-pre-windows" }
 
 [workspace.package]
 version = "0.1.0"

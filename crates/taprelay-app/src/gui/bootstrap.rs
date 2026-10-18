@@ -127,6 +127,16 @@ pub fn run() -> Result<()> {
                 ..TitleBar::window_options()
             };
             match gpui_kit::open_window(options, cx, |window, cx| {
+                match window.gpu_specs() {
+                    Some(gpu) => tracing::info!(
+                        device = %gpu.device_name,
+                        software_rendering = gpu.is_software_emulated,
+                        driver = %gpu.driver_name,
+                        driver_info = %gpu.driver_info,
+                        "Window graphics device"
+                    ),
+                    None => tracing::warn!("Window graphics device information unavailable"),
+                }
                 cx.new(|cx| AppView::new(controller, geometry, window, cx))
             }) {
                 Ok(_) => {}

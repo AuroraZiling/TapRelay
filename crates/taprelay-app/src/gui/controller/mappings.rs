@@ -17,8 +17,6 @@ pub(in crate::gui) struct MappingDraft {
 pub(in crate::gui) enum MappingSave {
     Editor,
     Change,
-    Undo,
-    Delete(Vec<CustomMapping>),
 }
 
 impl Controller {
@@ -276,30 +274,14 @@ impl Controller {
                     .iter()
                     .position(|rule| rule.id.to_string() == value)
                     .context("Mapping no longer exists")?;
-                let purpose = if command == "toggle" {
+                if command == "toggle" {
                     candidate[index].enabled = !candidate[index].enabled;
-                    MappingSave::Change
                 } else {
                     candidate.remove(index);
-                    MappingSave::Delete(self.runtime.config.custom_mappings.clone())
                 };
                 self.runtime
                     .set_custom_mappings(candidate.clone(), &self.path)?;
-                self.pending_mappings = Some((candidate, purpose));
-            }
-            "undo" => {
-                let (before, until) = self.mapping_undo.as_ref().context("Nothing to undo")?;
-                anyhow::ensure!(Instant::now() < *until, "Undo expired");
-                let mut candidate = self.runtime.config.custom_mappings.clone();
-                for (index, mapping) in before.iter().enumerate() {
-                    if !candidate.iter().any(|current| current.id == mapping.id) {
-                        candidate.insert(index.min(candidate.len()), mapping.clone());
-                    }
-                }
-                self.validate_mappings(ui, &candidate)?;
-                self.runtime
-                    .set_custom_mappings(candidate.clone(), &self.path)?;
-                self.pending_mappings = Some((candidate, MappingSave::Undo));
+                self.pending_mappings = Some((candidate, MappingSave::Change));
             }
             _ => bail!("Unknown mapping command"),
         }
@@ -424,13 +406,7 @@ impl Controller {
                             ui.mapping.error = error.to_string();
                         }
                     }
-                    MappingSave::Delete(before) => {
-                        self.mapping_undo = Some((before, Instant::now() + Duration::from_secs(8)));
-                    }
                     MappingSave::Change => {}
-                    MappingSave::Undo => {
-                        self.mapping_undo = None;
-                    }
                 }
             } else {
                 ui.mapping.saving = false;
@@ -459,14 +435,6 @@ impl Controller {
                 self.sync_mapping_draft(ui);
             }
         }
-        if self
-            .mapping_undo
-            .as_ref()
-            .is_some_and(|(_, until)| Instant::now() >= *until)
-        {
-            self.mapping_undo = None;
-        }
-        ui.mapping.can_undo = self.mapping_undo.is_some();
         ui.mapping.busy =
             self.runtime.edits_blocked() || self.runtime.stopped() || self.recording();
         let capture = self

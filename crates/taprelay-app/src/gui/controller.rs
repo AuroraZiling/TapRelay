@@ -51,7 +51,6 @@ pub(super) struct Controller {
         mappings::MappingSave,
     )>,
     mapping_navigation: Option<(Action, String)>,
-    mapping_undo: Option<(Vec<taprelay_core::mapping::CustomMapping>, Instant)>,
     last_mapping_capture: u64,
     #[cfg(windows)]
     pub(super) overlay: crate::gui::overlay::Overlay,
@@ -110,7 +109,6 @@ impl Controller {
             mapping_draft: None,
             pending_mappings: None,
             mapping_navigation: None,
-            mapping_undo: None,
             last_mapping_capture: 0,
             #[cfg(windows)]
             overlay: crate::gui::overlay::Overlay::default(),

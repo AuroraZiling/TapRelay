@@ -160,7 +160,6 @@ pub(super) struct Mapping {
     pub conflict_target: String,
     pub capture_text: String,
     pub capture_slot: i32,
-    pub can_undo: bool,
     pub leave_open: bool,
 }
 

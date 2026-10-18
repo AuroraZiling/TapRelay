@@ -461,7 +461,7 @@ fn edits_mapping_text_and_keeps_or_discards_the_draft(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn mapping_save_failure_keeps_draft_then_retry_delete_and_undo_persist(cx: &mut TestAppContext) {
+fn mapping_save_failure_keeps_draft_then_retry_and_delete_persist(cx: &mut TestAppContext) {
     let (handle, view, folder) = open(cx);
     cx.update_window(handle, |_, window, cx| {
         view.update(cx, |view, cx| {
@@ -549,16 +549,9 @@ fn mapping_save_failure_keeps_draft_then_retry_delete_and_undo_persist(cx: &mut 
     );
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
-        window.click("mapping-undo", cx);
+        assert!(window.try_find("mapping-undo").is_none());
     })
     .unwrap();
-    settle(cx, handle, &view);
-    assert_eq!(
-        Config::load(&folder.path().join("config.json"))
-            .unwrap()
-            .custom_mappings,
-        saved.custom_mappings
-    );
 }
 
 #[gpui_kit::test]

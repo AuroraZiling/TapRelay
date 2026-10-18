@@ -69,7 +69,6 @@
   "common.saving": "正在保存…",
   "common.shortcut": "快捷键",
   "common.skip": "跳过",
-  "common.undo": "撤销",
   "diagnostics.inputs": "检测到输入",
   "error.connection": "接收设备连接暂时不可用。请检查接收设备的蓝牙连接，TapRelay 会继续尝试恢复。",
   "error.operation": "操作未能完成，可查看日志了解原因。",

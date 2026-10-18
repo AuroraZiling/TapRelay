@@ -323,15 +323,6 @@ impl AppView {
                     cx,
                 ));
                 if !self.ui.mapping.editor {
-                    header = header.when(self.ui.mapping.can_undo, |header| {
-                        header.child(self.button(
-                            "mapping-undo",
-                            self.tr("common.undo"),
-                            Command::Mapping("undo", String::new()),
-                            self.ui.mapping.busy,
-                            cx,
-                        ))
-                    });
                     header = header.child(
                         self.button(
                             "mapping-create",

@@ -56,7 +56,7 @@ impl AppView {
             .child(
                 div()
                     .v_flex()
-                    .gap_3()
+                    .gap_2()
                     .child(self.caption(self.tr("receiver.current"), cx))
                     .child(self.heading(self.ui.device_name.clone()))
                     .child(

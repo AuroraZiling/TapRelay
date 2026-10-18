@@ -1,8 +1,6 @@
 use crate::gui::view::{AppView, Command};
 use gpui_kit::assets::IconName;
-use gpui_kit::component::{
-    ActiveTheme, Icon, StyledExt, button::ButtonVariants, dialog::Dialog, window_paddings,
-};
+use gpui_kit::component::{Icon, StyledExt, button::ButtonVariants, dialog::Dialog};
 use gpui_kit::{prelude::*, *};
 
 impl AppView {
@@ -56,28 +54,6 @@ impl AppView {
                 footer(),
             )
         };
-        let padding = window_paddings(window);
-        let viewport = window.viewport_size()
-            - size(padding.left + padding.right, padding.top + padding.bottom);
-        let width = px(448.).min(viewport.width - cx.theme().spacing_tokens().lg * 2.);
-        let dialog_content = content();
-        // GPUI Kit 0.7.3 only exposes a top offset, so measure the content before centering.
-        let height = div()
-            .w(width)
-            .border_1()
-            .p_4()
-            .child(content())
-            .into_any_element()
-            .layout_as_root(
-                size(AvailableSpace::Definite(width), AvailableSpace::MinContent),
-                window,
-                &mut *cx,
-            );
-        dialog
-            .w(width)
-            .p_4()
-            .margin_top((viewport.height - height.height) / 2.)
-            .close_button(false)
-            .child(dialog_content)
+        self.centered_dialog(dialog, content(), content(), window, cx)
     }
 }

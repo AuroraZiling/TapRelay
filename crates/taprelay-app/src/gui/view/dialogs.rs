@@ -1,10 +1,42 @@
 use super::{AppView, Command};
 use gpui_kit::base::TestSupportExt;
-use gpui_kit::component::StyledExt;
 use gpui_kit::component::WindowExt;
+use gpui_kit::component::{ActiveTheme, StyledExt, dialog::Dialog, window_paddings};
 use gpui_kit::{prelude::*, *};
 
 impl AppView {
+    pub(super) fn centered_dialog(
+        &self,
+        dialog: Dialog,
+        content: AnyElement,
+        measurement: AnyElement,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Dialog {
+        let padding = window_paddings(window);
+        let viewport = window.viewport_size()
+            - size(padding.left + padding.right, padding.top + padding.bottom);
+        let width =
+            (window.rem_size() * 28.).min(viewport.width - cx.theme().spacing_tokens().lg * 2.);
+        // GPUI Kit 0.7.3 only exposes a top offset, so measure the content before centering.
+        let height = div()
+            .w(width)
+            .border_1()
+            .p_4()
+            .child(measurement)
+            .into_any_element()
+            .layout_as_root(
+                size(AvailableSpace::Definite(width), AvailableSpace::MinContent),
+                window,
+                &mut *cx,
+            );
+        dialog
+            .w(width)
+            .p_4()
+            .margin_top((viewport.height - height.height) / 2.)
+            .child(content)
+    }
+
     pub(super) fn dialog_content(
         &self,
         id: &'static str,
@@ -71,7 +103,7 @@ impl AppView {
                 let dialog = if next == 1 {
                     this.mapping_leave_dialog(dialog, cancel.clone(), window, cx)
                 } else {
-                    this.group_delete_dialog(dialog, cancel.clone(), cx)
+                    this.group_delete_dialog(dialog, cancel.clone(), window, cx)
                 };
                 let weak = cx.entity().downgrade();
                 dialog

@@ -1,5 +1,6 @@
 use crate::gui::view::{AppView, Command};
 use gpui_kit::assets::IconName;
+use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::{
     Disableable, StyledExt,
     button::ButtonVariants,
@@ -52,13 +53,13 @@ impl AppView {
                 )
                 .child(
                     self.caption(self.tr("common.mapping"), cx)
-                        .flex_grow(3.)
+                        .flex_grow(2.)
                         .flex_basis(px(0.))
                         .min_w_0(),
                 )
                 .child(
                     self.caption(self.tr("common.effective_scope"), cx)
-                        .w(rems(7.75))
+                        .w(rems(10.))
                         .flex_shrink_0(),
                 )
                 .child(
@@ -99,7 +100,7 @@ impl AppView {
                     )
                     .child(
                         self.caption(format!("{} → {}", row.input, row.output), cx)
-                            .flex_grow(3.)
+                            .flex_grow(2.)
                             .flex_basis(px(0.))
                             .min_w_0(),
                     )
@@ -111,7 +112,8 @@ impl AppView {
                             )))
                             .role(Role::Label)
                             .aria_label(row.scope.clone())
-                            .w(rems(7.75))
+                            .text_size(rems(0.8125))
+                            .w(rems(10.))
                             .flex_shrink_0()
                             .text_ellipsis()
                             .tooltip({
@@ -121,7 +123,8 @@ impl AppView {
                                         .build(window, cx)
                                 }
                             })
-                            .child(row.scope.clone()),
+                            .child(row.scope.clone())
+                            .test_support(),
                     )
                     .child(
                         div()

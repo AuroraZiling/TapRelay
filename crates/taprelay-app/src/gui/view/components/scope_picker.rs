@@ -1,7 +1,7 @@
 use crate::gui::view::{AppView, Command};
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::{
-    Sizable, StyledExt,
+    StyledExt,
     combobox::{Combobox, ComboboxEvent, ComboboxState},
     searchable_list::SearchableListItem,
     tag::Tag,
@@ -62,7 +62,7 @@ impl ScopePicker {
                             .aria_label(item.name.clone())
                             .child(
                                 Tag::new()
-                                    .large()
+                                    .text_size(rems(0.8125))
                                     .border_0()
                                     .px_1p5()
                                     .min_w_0()
@@ -86,7 +86,13 @@ impl ScopePicker {
                             .flex_shrink_0()
                             .role(Role::Label)
                             .aria_label(label.clone())
-                            .child(Tag::new().large().border_0().px_1p5().child(label))
+                            .child(
+                                Tag::new()
+                                    .text_size(rems(0.8125))
+                                    .border_0()
+                                    .px_1p5()
+                                    .child(label),
+                            )
                             .test_support(),
                     );
                 }

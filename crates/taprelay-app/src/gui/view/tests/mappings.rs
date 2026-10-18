@@ -534,6 +534,23 @@ fn mapping_save_failure_keeps_draft_then_retry_and_delete_persist(cx: &mut TestA
     cx.update_window(handle, |_, window, cx| {
         assert!(!view.read(cx).ui.mapping.editor);
         window.render_frame(cx);
+        let scope = window
+            .find(gpui_kit::SharedString::from(format!(
+                "mapping-scope-label-{}",
+                saved.custom_mappings[0].id
+            )))
+            .bounds();
+        assert_eq!(scope.size.width, px(160.));
+        assert!(
+            scope.right()
+                < window
+                    .find(gpui_kit::SharedString::from(format!(
+                        "mapping-edit-{}",
+                        saved.custom_mappings[0].id
+                    )))
+                    .bounds()
+                    .left()
+        );
         window.click(
             gpui_kit::SharedString::from(format!("mapping-delete-{}", saved.custom_mappings[0].id)),
             cx,

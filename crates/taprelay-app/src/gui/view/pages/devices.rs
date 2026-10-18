@@ -40,7 +40,7 @@ impl AppView {
                                 div()
                                     .flex_1()
                                     .min_w_0()
-                                    .child(self.text(row.name.clone()).text_ellipsis()),
+                                    .child(self.text(row.name.clone()).text_sm().text_ellipsis()),
                             )
                             .child(
                                 div()

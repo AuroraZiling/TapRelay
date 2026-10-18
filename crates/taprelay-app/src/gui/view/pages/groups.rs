@@ -29,7 +29,7 @@ impl AppView {
                             .flex_1()
                             .min_w_0()
                             .gap(rems(0.3125))
-                            .child(self.text(row.name.clone()).text_ellipsis())
+                            .child(self.text(row.name.clone()).text_sm().text_ellipsis())
                             .child(
                                 self.caption(
                                     if row.summary.is_empty() {
@@ -39,6 +39,7 @@ impl AppView {
                                     },
                                     cx,
                                 )
+                                .text_xs()
                                 .text_ellipsis(),
                             ),
                     )

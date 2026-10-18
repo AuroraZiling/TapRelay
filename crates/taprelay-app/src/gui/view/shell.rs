@@ -290,7 +290,7 @@ impl AppView {
                 .child(self.heading(crumb).id(("breadcrumb", index)));
         }
         if self.ui.page == 2 {
-            header = header.child(self.bluetooth_status(cx));
+            header = header.child(self.bluetooth_status());
         }
         header = header.child(div().flex_1());
         match self.ui.page {
@@ -370,7 +370,7 @@ impl AppView {
         let description = match self.ui.page {
             1 if !self.ui.mapping.open => Some(self.tr("bindings.help")),
             1 if !self.ui.mapping.editor => Some(self.tr("mappings.help")),
-            2 => Some(self.ui.discovery_status.clone()),
+            2 => None,
             4 if !self.ui.groups.editor_open => Some(self.tr("groups.help")),
             _ => None,
         };
@@ -380,6 +380,13 @@ impl AppView {
             .gap_2()
             .flex_shrink_0()
             .child(header.test_support())
+            .when(self.ui.page == 2, |header| {
+                header.child(
+                    self.receiver_description(cx)
+                        .id("page-description")
+                        .test_support(),
+                )
+            })
             .when_some(description, |header, description| {
                 header.child(
                     self.caption(description, cx)

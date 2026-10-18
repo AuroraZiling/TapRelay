@@ -7,6 +7,42 @@ use gpui_kit::test::TestWindowExt;
 use gpui_kit::{AppContext, TestAppContext, px};
 
 #[gpui_kit::test]
+fn receiver_loading_status_preserves_text_with_and_without_reduced_motion(cx: &mut TestAppContext) {
+    let (handle, view, _folder) = open(cx);
+    settle(cx, handle, &view);
+    cx.update_window(handle, |_, window, cx| {
+        view.update(cx, |view, _| view._pump = gpui_kit::Task::ready(()));
+        for reduced_motion in [false, true] {
+            cx.set_reduce_motion(reduced_motion);
+            for scanning in [true, false] {
+                view.update(cx, |view, cx| {
+                    view.ui.page = 2;
+                    view.ui.scanning = scanning;
+                    view.ui.discovery_status = view.tr(if scanning {
+                        "receiver.scanning"
+                    } else {
+                        "receiver.help"
+                    });
+                    cx.notify();
+                });
+                window.render_frame(cx);
+                assert_eq!(view.read(cx).ui.scanning, scanning);
+                assert_eq!(
+                    window.find("page-description").label(),
+                    Some(view.read(cx).ui.discovery_status.as_str())
+                );
+                assert!(window.find("page-description").visible());
+                assert_eq!(
+                    window.find("page-description").role(),
+                    Some(gpui_kit::Role::Status)
+                );
+            }
+        }
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
 fn receivers_use_group_box_insets_with_actions_in_the_header(cx: &mut TestAppContext) {
     let (handle, view, _folder) = open(cx);
     cx.update_window(handle, |_, window, cx| {

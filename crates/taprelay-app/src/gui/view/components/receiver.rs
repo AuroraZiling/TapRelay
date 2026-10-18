@@ -4,33 +4,51 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     ActiveTheme, Icon, StyledExt,
     button::{Button, ButtonVariants},
+    shimmer::ShimmerText,
+    tag::Tag,
 };
 use gpui_kit::{prelude::*, *};
 
 impl AppView {
-    pub(in crate::gui::view) fn bluetooth_status(&self, cx: &App) -> Div {
+    pub(in crate::gui::view) fn bluetooth_status(&self) -> Tag {
+        let tag = if self.ui.bluetooth_available {
+            Tag::primary()
+        } else {
+            Tag::danger()
+        };
+        tag.child(
+            div()
+                .h_flex()
+                .gap_1()
+                .child(
+                    Icon::new(if self.ui.bluetooth_available {
+                        IconName::Bluetooth
+                    } else {
+                        IconName::BluetoothOff
+                    })
+                    .size_3(),
+                )
+                .child(self.text(self.ui.adapter_label.clone())),
+        )
+    }
+
+    pub(in crate::gui::view) fn receiver_description(&self, cx: &App) -> Stateful<Div> {
         div()
-            .h_flex()
-            .gap_1()
-            .h_6()
-            .px_2()
+            .id("receiver-discovery-status")
+            .role(Role::Status)
+            .aria_label(self.ui.discovery_status.clone())
             .text_sm()
-            .rounded_md()
-            .border_1()
-            .border_color(if self.ui.bluetooth_available {
-                cx.theme().success
-            } else {
-                cx.theme().danger
-            })
-            .child(
-                Icon::new(if self.ui.bluetooth_available {
-                    IconName::Bluetooth
+            .text_color(cx.theme().muted_foreground)
+            .map(|description| {
+                if self.ui.scanning {
+                    description.child(
+                        ShimmerText::new(self.ui.discovery_status.clone())
+                            .id("receiver-discovery-shimmer"),
+                    )
                 } else {
-                    IconName::BluetoothOff
-                })
-                .size(rems(0.875)),
-            )
-            .child(self.text(self.ui.adapter_label.clone()))
+                    description.child(self.ui.discovery_status.clone())
+                }
+            })
     }
 
     pub(in crate::gui::view) fn receiver_actions(&self, cx: &Context<Self>) -> [Button; 2] {

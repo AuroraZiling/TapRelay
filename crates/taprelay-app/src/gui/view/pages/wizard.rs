@@ -22,7 +22,7 @@ impl AppView {
             .child(self.heading(self.tr(key)));
         if step == 1 {
             header = header
-                .child(self.bluetooth_status(cx))
+                .child(self.bluetooth_status())
                 .child(div().flex_1())
                 .children(self.receiver_actions(cx));
         }
@@ -51,15 +51,11 @@ impl AppView {
                     .v_flex()
                     .gap_1()
                     .child(header)
-                    .when(step < 2, |header| {
-                        header.child(self.caption(
-                            if step == 0 {
-                                self.tr("bindings.help")
-                            } else {
-                                self.ui.discovery_status.clone()
-                            },
-                            cx,
-                        ))
+                    .when(step == 0, |header| {
+                        header.child(self.caption(self.tr("bindings.help"), cx))
+                    })
+                    .when(step == 1, |header| {
+                        header.child(self.receiver_description(cx))
                     }),
             );
         if step == 2 && !self.ui.elevated {

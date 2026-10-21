@@ -46,7 +46,14 @@ fn app_theme_text_boundaries_and_focus_meet_contrast_thresholds(cx: &mut TestApp
             let mut native = theme.clone();
             native.apply_config(&std::rc::Rc::new(config));
             assert_eq!(theme.input, native.input);
-            assert_eq!(theme.button, native.button);
+            assert_eq!(
+                theme.button,
+                if dark {
+                    native.button
+                } else {
+                    theme.background
+                }
+            );
             assert_eq!(theme.button_hover, native.button_hover);
             assert_eq!(theme.button_active, native.button_active);
             for surface in [

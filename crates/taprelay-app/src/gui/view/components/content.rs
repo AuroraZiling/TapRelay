@@ -10,7 +10,12 @@ use std::panic::Location;
 
 impl AppView {
     pub(in crate::gui::view) fn card_style(&self, cx: &App) -> StyleRefinement {
-        StyleRefinement::default().rounded(cx.theme().radius_lg)
+        let style = StyleRefinement::default().rounded(cx.theme().radius_lg);
+        if cx.theme().is_dark() {
+            style
+        } else {
+            style.border_1().border_color(cx.theme().border)
+        }
     }
 
     #[track_caller]

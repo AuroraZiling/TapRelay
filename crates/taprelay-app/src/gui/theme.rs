@@ -8,7 +8,20 @@ pub(super) fn init(cx: &mut App) {
     for config in &mut themes.themes {
         let shell_background = match config.name.as_ref() {
             "Catppuccin Latte" => {
-                config.colors.muted_foreground = Some("#5C5F73".into());
+                config.colors.background = Some("#EDF1F7".into());
+                config.colors.foreground = Some("#30384B".into());
+                config.colors.muted_foreground = Some("#5B6578".into());
+                config.colors.group_box = Some("#FFFFFF".into());
+                config.colors.popover = Some("#FFFFFF".into());
+                config.colors.popover_foreground = Some("#30384B".into());
+                config.colors.border = Some("#D5DCE7".into());
+                config.colors.muted = Some("#E5EAF2".into());
+                config.colors.secondary = Some("#E9EEF6".into());
+                config.colors.secondary_foreground = Some("#30384B".into());
+                config.colors.secondary_hover = Some("#DCE4F0".into());
+                config.colors.secondary_active = Some("#D0DAE9".into());
+                config.colors.accent = Some("#DEE5F2".into());
+                config.colors.accent_foreground = Some("#30384B".into());
                 config.colors.danger = Some("#AA2741".into());
                 config.colors.success = Some("#356E1A".into());
                 config.colors.info = Some("#176A77".into());
@@ -18,7 +31,7 @@ pub(super) fn init(cx: &mut App) {
                 config.colors.primary_active = Some("#334699".into());
                 config.colors.ring = Some("#435AC4".into());
                 config.colors.switch = Some("#777B8E".into());
-                "#EFF1F5"
+                "#F7F9FC"
             }
             "Catppuccin Macchiato" => {
                 config.colors.secondary_hover = Some("#494D64".into());

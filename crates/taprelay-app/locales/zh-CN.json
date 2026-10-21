@@ -156,7 +156,7 @@
   "receiver.empty": "暂无已配对设备。请先在系统蓝牙设置中完成配对。",
   "receiver.fault": "环境故障",
   "receiver.forwarding": "转发中",
-  "receiver.help": "仅显示已配对设备。添加设备请打开系统蓝牙设置。",
+  "receiver.help": "仅显示已配对设备。请打开系统蓝牙设置以添加设备。",
   "receiver.host.hint": "请在接收端的蓝牙设置中连接此电脑。TapRelay 会自动检测 HID 订阅。",
   "receiver.linked": "蓝牙已连接 · 会话未就绪",
   "receiver.listening_paused": "已停止监听",

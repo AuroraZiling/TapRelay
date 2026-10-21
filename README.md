@@ -1,18 +1,41 @@
-[前往中文版本 » ](README.zh-cn.md)
+<p align="center">
+  <img src="crates/taprelay-app/resources/taprelay-128.png" alt="TapRelay logo" width="96" height="96">
+</p>
 
-# TapRelay
+<h1 align="center">TapRelay</h1>
 
-Turn keyboard and mouse shortcuts on your computer into Bluetooth commands to control another device.
+<p align="center">Control nearby devices from the keyboard and mouse already in your hands.</p>
 
-This is a personal project, so it *works on my machine*.
+<p align="center">
+  <a href="https://github.com/AuroraZiling/TapRelay/releases/latest"><img src="https://img.shields.io/github/v/release/AuroraZiling/TapRelay?style=flat-square" alt="Latest release"></a>
+  <a href="https://github.com/AuroraZiling/TapRelay/releases"><img src="https://img.shields.io/badge/Windows-x64-0078D4?style=flat-square" alt="Windows x64"></a>
+  <a href="rust-toolchain.toml"><img src="https://img.shields.io/badge/Rust-nightly-CE422B?style=flat-square" alt="Rust nightly"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPL--3.0--only-green?style=flat-square" alt="License: GPL-3.0-only"></a>
+</p>
 
-## Requirements
+<p align="center">
+  English · <a href="README.zh-cn.md">简体中文</a>
+</p>
 
-- Windows x64 (*macOS support is not implemented yet*)
+## ⭐ Features
+
+- 🎵 Bluetooth media controls
+- ⌨️ Custom shortcuts and receiver-key mappings
+- 🗂️ Application scopes that follow the foreground app
+- 🖱️ Full keyboard and mouse passthrough
+
+## 📷 Screenshot
+
+<a href=".github/assets/overview-en.webp"><img src=".github/assets/overview-en.webp" alt="overview" width="640"></a>
+
+## 🖥️ Requirements
+
+- Windows x64 (*macOS is not supported yet*)
 - A Bluetooth adapter and driver that support Bluetooth Low Energy (BLE) peripheral mode.
 - A receiver that accepts media controls over BLE HID.
+- For custom mappings and passthrough, the receiver must also support the corresponding Bluetooth HID keyboard or mouse input.
 
-## Download and use
+## 🚀 Download and use
 
 *Only a portable version is currently available.*
 
@@ -22,50 +45,61 @@ This is a personal project, so it *works on my machine*.
 4. Pair and connect the receiver to the PC in system Bluetooth settings, then select it in TapRelay.
 5. Start playback on the receiver and use **Test Play/Pause**.
 
-## Settings and limitations
+## ⚙️ Settings and environment
 
-- TapRelay stores `config.json` and the `logs/` folder beside the executable.
-- Create foreground app allowlists on **App Groups**. Each function can select **All apps** or multiple groups on the Bindings page.
-- Use `TapRelay.exe --log-level debug` to choose the startup log level: `off`, `error`, `warn`, `info` (default), `debug`, or `trace`.
-- When passthrough is off, Shift, Ctrl, Alt and Win go directly to this computer. Matching shortcuts consume only their primary key or mouse button; modifier keys retain their normal behavior, including Alt/Win system actions.
-- A Bluetooth connection and a usable HID session are separate states. If the receiver is paired but the session is not ready, check its connection to the PC and the status shown in TapRelay.
-- Input hooks and Bluetooth behavior need testing on real hardware. Automated tests do not establish compatibility with a particular receiver, driver or game.
-- Native Bluetooth and input support is currently implemented only for Windows.
+- The folder you extract TapRelay to must be writable because `config.json` and the `logs/` folder are stored beside `TapRelay.exe`.
+- The default log level is `info`. To record more detail when troubleshooting, run `TapRelay.exe --log-level debug`. Available levels are `off`, `error`, `warn`, `info`, `debug`, and `trace`.
+- A device shown as paired or connected in system Bluetooth settings may not yet be able to receive TapRelay commands. If TapRelay reports that the session is not ready, connect to this PC from the receiver's Bluetooth settings, then check the status in TapRelay again.
 
-## Build
+## ⚠️ Limitations
 
-The desktop interface uses GPUI Kit 0.7.3. Build on Windows with Rust, CMake, the MSVC C++ build tools and a Windows SDK. The build script requires the SDK resource compiler (`rc.exe`).
+- With passthrough off, only the main key or mouse button of a matching shortcut is blocked; Shift, Ctrl, Alt and Win still reach the local application. For example, a `Ctrl+P` binding blocks `P`, not Ctrl. Alt or Win combinations may still open system menus or trigger other local system actions.
+- Test with your own receiver, Bluetooth adapter, driver and games to confirm compatibility.
 
-Local builds and releases use the Rust `nightly` channel, configured in `rust-toolchain.toml` and the release workflow.
+<a id="build"></a>
+
+## 🛠️ Build
+
+To build on Windows x64, install:
+
+- rustup to install and manage Rust toolchains.
+- Visual Studio Build Tools with the **Desktop development with C++** workload, including MSVC and a Windows SDK (providing `rc.exe` and `fxc.exe`).
+
+From the repository root, install the nightly toolchain specified in `rust-toolchain.toml` and run the app:
 
 ```powershell
+rustup toolchain install
 cargo run --locked -p taprelay-app
 ```
 
-Development builds retain source locations for project backtraces and omit dependency debug information. For breakpoints and variable inspection, use `cargo run --locked -p taprelay-app --profile debugging`.
+For full debug symbols, add `--profile debugging` to the run command.
 
-To build the release executable locally:
+Build the release executable with the same flags as the release workflow:
 
-```sh
+```powershell
 cargo rustc --release --locked -p taprelay-app -- -C target-feature=+crt-static
 ```
 
 The output is `target/release/taprelay.exe`.
 
-## Feedback and contributions
+## 💬 Feedback and contributions
 
 Submit bugs and feature requests to [Issues](https://github.com/AuroraZiling/TapRelay/issues).<br>
 Read the [Contributing guide](CONTRIBUTING.md) before submitting changes.<br>
 Follow the [Code of conduct](CODE_OF_CONDUCT.md) when participating in discussions.
 
-## Acknowledgements
+## 💖 Acknowledgements
 
 - The Genshin Impact team and guide video creators: thank you for the work that inspired TapRelay.
 - My computer: thank you for providing a reliable Windows test environment.
 - Tibo: thank you to the Chief Reset Officer for supporting my Codex usage quota.
 - [@DearVa](https://github.com/DearVa)
 
-## License
+## 🚨 Compatibility
+
+![Works on My Machine](.github/assets/works-on-my-machine.webp)
+
+## 📄 License
 
 TapRelay is licensed under [GPL-3.0-only](LICENSE).
 

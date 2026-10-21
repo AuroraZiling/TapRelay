@@ -1,5 +1,13 @@
-use gpui_kit::App;
-use gpui_kit::component::{Theme, ThemeRegistry, ThemeSet};
+use gpui_kit::component::{ActiveTheme, Theme, ThemeRegistry, ThemeSet};
+use gpui_kit::{App, Hsla, rgb};
+
+pub(super) fn warning_signal(cx: &App) -> Hsla {
+    if cx.theme().is_dark() {
+        cx.theme().warning
+    } else {
+        rgb(0xBC8A00).into()
+    }
+}
 
 pub(super) fn init(cx: &mut App) {
     let mut themes: ThemeSet =

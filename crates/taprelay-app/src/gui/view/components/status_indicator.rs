@@ -45,7 +45,7 @@ impl AppView {
         match self.ui.state_color {
             0 => cx.theme().success,
             1 => cx.theme().muted_foreground,
-            2 => cx.theme().warning,
+            2 => crate::gui::theme::warning_signal(cx),
             _ => cx.theme().danger,
         }
     }

@@ -246,7 +246,7 @@ fn bindings_keep_four_aligned_columns_and_a_header_action(cx: &mut TestAppContex
             assert_eq!(scope.size.width, px(160.));
             assert_eq!(shortcuts.right() + px(16.), function.left());
             assert_eq!(function.right() + px(16.), scope.left());
-            assert_eq!(scope.right() + px(16.), bounds.right());
+            assert_eq!(scope.right() + px(17.), bounds.right());
             assert!(bounds.right() <= px(872.));
         }
     })

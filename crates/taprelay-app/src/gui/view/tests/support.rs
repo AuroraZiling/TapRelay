@@ -51,10 +51,11 @@ pub(super) fn open_with_config(
     cx: &mut TestAppContext,
     width: f32,
     height: f32,
-    config: Config,
+    mut config: Config,
     transport: Option<Box<dyn crate::platform::Transport + Send>>,
 ) -> (AnyWindowHandle, Entity<AppView>, tempfile::TempDir) {
     cx.update(gpui_kit::init);
+    config.options.theme = crate::config::Theme::Light;
     let folder = tempfile::tempdir().unwrap();
     let runtime = RuntimeHandle::spawn(
         config,

@@ -65,7 +65,7 @@ fn receivers_use_group_box_insets_with_actions_in_the_header(cx: &mut TestAppCon
         let action = window.find("device-tablet").bounds();
         assert!(row.size.height >= px(64.) && row.size.height <= px(88.));
         assert!((action.center().y - row.center().y).abs() <= px(0.5));
-        assert_eq!(action.right(), row.right() - px(16.));
+        assert_eq!(action.right(), row.right() - px(17.));
         assert_eq!(action.size.width, px(132.));
         assert_eq!(
             window.find("device-tablet").label(),

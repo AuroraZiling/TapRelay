@@ -338,8 +338,14 @@ impl AppView {
         GroupBox::new()
             .id(key)
             .fill()
+            .text_sm()
             .content_style(self.card_style(cx))
-            .title(self.text(self.tr(key)).role(Role::Heading).aria_level(2))
+            .title(
+                self.text(self.tr(key))
+                    .role(Role::Heading)
+                    .aria_level(2)
+                    .font_weight(FontWeight::MEDIUM),
+            )
     }
 
     fn setting(
@@ -378,6 +384,6 @@ impl AppView {
             .v_flex()
             .gap_1()
             .child(self.text(self.tr(label)))
-            .child(self.caption(self.tr(hint), cx))
+            .child(self.caption(self.tr(hint), cx).text_size(rems(0.8125)))
     }
 }

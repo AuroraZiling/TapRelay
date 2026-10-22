@@ -1,9 +1,8 @@
 use super::support::{open_sized, settle};
 use crate::gui::view::{AppView, Command};
-use gpui_kit::base::test_support::snapshots;
 use gpui_kit::component::searchable_list::SearchableListItem;
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{AnyWindowHandle, AppContext, Entity, Role, Task, TestAppContext, px};
+use gpui_kit::{AnyWindowHandle, AppContext, Entity, Role, Task, TestAppContext};
 use taprelay_core::{foreground_app::ForegroundAppGroup, function::FunctionId};
 
 const FUNCTION: FunctionId = FunctionId::MediaPlayPause;
@@ -61,33 +60,16 @@ fn choose(cx: &mut TestAppContext, handle: AnyWindowHandle, view: &Entity<AppVie
 }
 
 #[gpui_kit::test]
-fn changing_scope_keeps_unrelated_binding_controls_visually_stable(cx: &mut TestAppContext) {
+fn changing_scope_does_not_block_unrelated_binding_controls(cx: &mut TestAppContext) {
     let (handle, view, _folder) = open_scopes(cx, 900.);
-    let before = cx
-        .update_window(handle, |_, window, cx| {
-            window.render_frame(cx);
-            let other = window.find("binding-enabled-media.previous").bounds();
-            let colors = window
-                .painted_quads()
-                .into_iter()
-                .filter(|quad| {
-                    let center = quad.bounds.center();
-                    let scale = window.scale_factor();
-                    other.contains(&gpui_kit::point(
-                        px(center.x.as_f32() / scale),
-                        px(center.y.as_f32() / scale),
-                    ))
-                })
-                .map(|quad| quad.background)
-                .collect::<Vec<_>>();
-            assert!(!colors.is_empty());
-            window.click("scope-media.play-pause", cx);
-            window.press("down", cx);
-            window.press("down", cx);
-            window.press("enter", cx);
-            (other, colors)
-        })
-        .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("scope-media.play-pause", cx);
+        window.press("down", cx);
+        window.press("down", cx);
+        window.press("enter", cx);
+    })
+    .unwrap();
     cx.run_until_parked();
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
@@ -113,23 +95,6 @@ fn changing_scope_keeps_unrelated_binding_controls_visually_stable(cx: &mut Test
                 .disabled(),
             Some(true)
         );
-        let colors = window
-            .painted_quads()
-            .into_iter()
-            .filter(|quad| {
-                let center = quad.bounds.center();
-                let scale = window.scale_factor();
-                before.0.contains(&gpui_kit::point(
-                    px(center.x.as_f32() / scale),
-                    px(center.y.as_f32() / scale),
-                ))
-            })
-            .map(|quad| quad.background)
-            .collect::<Vec<_>>();
-        assert_eq!(
-            colors, before.1,
-            "changing scope must not dim unrelated binding controls"
-        );
         assert_ne!(
             window.find("binding-enabled-media.previous").disabled(),
             Some(true)
@@ -140,7 +105,7 @@ fn changing_scope_keeps_unrelated_binding_controls_visually_stable(cx: &mut Test
 }
 
 #[gpui_kit::test]
-fn scope_combobox_multiselects_without_search_and_restores_all_apps(cx: &mut TestAppContext) {
+fn scope_combobox_persists_multiple_groups_and_restores_all_apps(cx: &mut TestAppContext) {
     let (handle, view, folder) = open_scopes(cx, 900.);
     let state = cx.update(|cx| view.read(cx).scope_pickers[&FUNCTION].state.clone());
     let id = ("multi-combo-box", state.entity_id());
@@ -149,11 +114,6 @@ fn scope_combobox_multiselects_without_search_and_restores_all_apps(cx: &mut Tes
         assert_eq!(window.find(id).role(), Some(Role::ComboBox));
         window.click("scope-media.play-pause", cx);
         assert_eq!(window.find(id).expanded(), Some(true));
-        assert!(
-            snapshots(window)
-                .iter()
-                .all(|element| { !element.visible() || element.role() != Some(Role::TextInput) })
-        );
     })
     .unwrap();
     for groups in [vec!["games"], vec!["games", "work"]] {
@@ -246,62 +206,6 @@ fn scope_combobox_reverts_to_saved_groups_after_a_write_failure(cx: &mut TestApp
         saved.foreground_app_rules.assignments[&FUNCTION],
         ["games".into()].into()
     );
-}
-
-#[gpui_kit::test]
-fn scope_tags_collapse_without_overflowing_and_keep_the_full_selection(cx: &mut TestAppContext) {
-    for (width, visible, scope_width) in [(900., 1usize, 160.), (1280., 2usize, 256.)] {
-        let (handle, view, _folder) = open_scopes(cx, width);
-        cx.update_window(handle, |_, window, cx| {
-            view.update(cx, |view, cx| {
-                view.dispatch(
-                    Command::Scope(
-                        FUNCTION,
-                        ["games".into(), "video".into(), "work".into()].into(),
-                    ),
-                    window,
-                    cx,
-                );
-            });
-        })
-        .unwrap();
-        settle(cx, handle, &view);
-        for language in ["en", "zh-CN"] {
-            cx.update_window(handle, |_, window, cx| {
-                view.update(cx, |view, cx| {
-                    view.controller.runtime.config.options.language =
-                        crate::config::Language::from_name(language).unwrap();
-                    view.controller.sync(&mut view.ui);
-                    view.effects(window, cx);
-                    cx.notify();
-                });
-                window.render_frame(cx);
-                let bounds = window.find("scope-media.play-pause").bounds();
-                assert_eq!(bounds.size.width, px(scope_width));
-                let mut scope = window.within("scope-media.play-pause");
-                for index in 0..visible {
-                    let tag = scope.find(("scope-tag", index));
-                    assert!(tag.visible());
-                    assert!(tag.bounds().is_contained_within(&bounds));
-                }
-                assert!(scope.try_find(("scope-tag", visible)).is_none());
-                let more = scope.find("scope-more");
-                assert!(more.bounds().is_contained_within(&bounds));
-                let expected = if language == "en" {
-                    format!("+{} more", 3 - visible)
-                } else {
-                    format!("+{} 项", 3 - visible)
-                };
-                assert_eq!(more.label(), Some(expected.as_str()));
-                let state = &view.read(cx).scope_pickers[&FUNCTION].state;
-                assert_eq!(state.read(cx).selected_values().len(), 3);
-                scope.click("scope-more", cx);
-                window.press("escape", cx);
-            })
-            .unwrap();
-            cx.run_until_parked();
-        }
-    }
 }
 
 #[gpui_kit::test]

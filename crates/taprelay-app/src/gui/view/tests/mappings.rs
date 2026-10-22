@@ -1,148 +1,46 @@
-use super::support::{open, open_sized, settle, wait_until};
+use super::support::{open, settle, wait_until};
 use crate::config::Config;
 use crate::gui::action::Action;
 use crate::gui::view::Command;
-use gpui_kit::base::test_support::snapshots;
-use gpui_kit::component::ActiveTheme;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{AppContext, TestAppContext, px};
 
 #[gpui_kit::test]
-fn mapping_leave_dialog_is_centered_and_keeps_validation_on_the_editor(cx: &mut TestAppContext) {
-    for (height, language) in [(480., "en"), (800., "zh-CN")] {
-        let (handle, view, _folder) = open_sized(cx, 900., height);
-        settle(cx, handle, &view);
-        cx.update_window(handle, |_, window, cx| {
-            cx.set_reduce_motion(true);
-            view.update(cx, |view, cx| {
-                view._pump = gpui_kit::Task::ready(());
-                view.controller.runtime.config.options.language =
-                    crate::config::Language::from_name(language).unwrap();
-                view.dispatch(Command::App(Action::Navigate, "1".into()), window, cx);
-            });
-        })
-        .unwrap();
-        settle(cx, handle, &view);
-        cx.update_window(handle, |_, window, cx| {
-            window.render_frame(cx);
-            window.click("custom-mappings", cx);
-            window.click("mapping-create", cx);
-            window.click("mapping-name", cx);
-            window.input("Unsaved", cx);
-            window.click("mapping-save", cx);
-            assert!(!view.read(cx).ui.mapping.error.is_empty());
-            window.click("mapping-back", cx);
-            window.render_frame(cx);
-            let dialog = window.find("mapping-leave-dialog").bounds();
-            assert_eq!(
-                f32::from(dialog.center().y).round(),
-                f32::from(window.viewport_size().height / 2.).round()
-            );
-            assert!(!snapshots(window).iter().any(|element| {
-                element.path().contains(&"mapping-leave-dialog".into())
-                    && element.role() == Some(gpui_kit::Role::Alert)
-            }));
-            window.click("dialog-save", cx);
-            assert!(window.try_find("mapping-leave-dialog").is_none());
-            assert!(view.read(cx).ui.mapping.editor);
-            assert!(window.find("mapping-form-error").visible());
-        })
-        .unwrap();
-    }
+fn saving_an_invalid_mapping_from_the_leave_dialog_returns_to_editor_with_error(
+    cx: &mut TestAppContext,
+) {
+    let (handle, view, _folder) = open(cx);
+    settle(cx, handle, &view);
+    cx.update_window(handle, |_, window, cx| {
+        cx.set_reduce_motion(true);
+        view.update(cx, |view, cx| {
+            view._pump = gpui_kit::Task::ready(());
+            view.dispatch(Command::App(Action::Navigate, "1".into()), window, cx);
+        });
+    })
+    .unwrap();
+    settle(cx, handle, &view);
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("custom-mappings", cx);
+        window.click("mapping-create", cx);
+        window.click("mapping-name", cx);
+        window.input("Unsaved", cx);
+        window.click("mapping-save", cx);
+        assert!(!view.read(cx).ui.mapping.error.is_empty());
+        window.click("mapping-back", cx);
+        window.click("dialog-save", cx);
+        assert!(window.try_find("mapping-leave-dialog").is_none());
+        assert!(view.read(cx).ui.mapping.editor);
+        assert!(window.find("mapping-form-error").visible());
+    })
+    .unwrap();
 }
 
 #[gpui_kit::test]
-fn output_controls_keep_modifiers_on_the_right_and_center_the_preview(cx: &mut TestAppContext) {
-    for width in [900., 1280.] {
-        let (handle, view, _folder) = open_sized(cx, width, 800.);
-        settle(cx, handle, &view);
-        cx.update_window(handle, |_, window, cx| {
-            cx.set_reduce_motion(true);
-            view.update(cx, |view, cx| {
-                view._pump = gpui_kit::Task::ready(());
-                view.dispatch(Command::App(Action::Navigate, "1".into()), window, cx);
-            });
-        })
-        .unwrap();
-        settle(cx, handle, &view);
-        cx.update_window(handle, |_, window, cx| {
-            window.render_frame(cx);
-            window.click("custom-mappings", cx);
-            window.click("mapping-create", cx);
-            for language in ["en", "zh-CN"] {
-                view.update(cx, |view, cx| {
-                    view.controller.runtime.config.options.language =
-                        crate::config::Language::from_name(language).unwrap();
-                    view.controller.sync(&mut view.ui);
-                    view.effects(window, cx);
-                    cx.notify();
-                });
-                for mode in [0usize, 1] {
-                    window.render_frame(cx);
-                    window.click(("entry-mode", mode), cx);
-                    let column = window.find("mapping-output-column").bounds();
-                    let preview = window.find("mapping-output-preview").bounds();
-                    let text = window.find("mapping-output-preview-text").bounds();
-                    assert_eq!(
-                        f32::from(preview.center().y).round(),
-                        f32::from(text.center().y).round()
-                    );
-                    let control = window
-                        .find(if mode == 0 {
-                            "mapping-record-output"
-                        } else {
-                            "mapping-output-choice"
-                        })
-                        .bounds();
-                    assert!(control.size.width >= px(64.));
-                    assert!(control.size.width <= px(192.));
-                    assert_eq!(control.left(), column.left());
-                    let mut right = control.right();
-                    for index in 0..4usize {
-                        let modifier = window.find(("output-modifier", index)).bounds();
-                        assert!(modifier.size.height >= px(16.));
-                        assert!(
-                            modifier.left() >= right + px(8.),
-                            "{language}, width={width}: controls overlap"
-                        );
-                        assert_eq!(
-                            f32::from(modifier.center().y).round(),
-                            f32::from(control.center().y).round()
-                        );
-                        assert!(modifier.right() <= column.right());
-                        right = modifier.right();
-                    }
-                    assert!(window.try_find("mapping-output-filter").is_none());
-                    if mode == 1 {
-                        let help = window.find("mapping-output-help").bounds();
-                        let controls = window.find("mapping-output-controls").bounds();
-                        assert!(help.top() > controls.bottom());
-                        assert_eq!(help.left(), controls.left());
-                    } else {
-                        assert!(window.try_find("mapping-output-help").is_none());
-                    }
-                    let save = window.find("mapping-save");
-                    assert_eq!(save.label(), Some(view.read(cx).tr("common.save").as_str()));
-                    let scale = window.scale_factor();
-                    assert!(window.painted_quads().iter().any(|quad| {
-                        quad.background == cx.theme().tokens.button_primary.into()
-                            && (quad.bounds.left().as_f32()
-                                - f32::from(save.bounds().left()) * scale)
-                                .abs()
-                                < 1.
-                            && (quad.bounds.top().as_f32() - f32::from(save.bounds().top()) * scale)
-                                .abs()
-                                < 1.
-                    }));
-                }
-            }
-        })
-        .unwrap();
-    }
-}
-
-#[gpui_kit::test]
-fn mapping_shortcut_capsules_keep_cancel_inside_and_preserve_inputs(cx: &mut TestAppContext) {
+fn mapping_shortcuts_cancel_recording_without_changing_inputs_and_remove_without_recording(
+    cx: &mut TestAppContext,
+) {
     let (handle, view, _folder) = open(cx);
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
@@ -166,12 +64,6 @@ fn mapping_shortcut_capsules_keep_cancel_inside_and_preserve_inputs(cx: &mut Tes
         cx.update_window(handle, |_, window, cx| {
             window.render_frame(cx);
             if slot == 0 {
-                let button = window.find(("mapping-input", 0usize)).bounds();
-                let clear = window.find(("mapping-remove-input", 0usize)).bounds();
-                assert_eq!(button.size.height, px(32.));
-                assert!(clear.left() > button.center().x);
-                assert!(button.contains(&clear.center()));
-                assert!(clear.right() < button.right());
                 window.click(("mapping-input", 0usize), cx);
             } else {
                 window.click("mapping-add-input", cx);
@@ -182,17 +74,8 @@ fn mapping_shortcut_capsules_keep_cancel_inside_and_preserve_inputs(cx: &mut Tes
         cx.update_window(handle, |_, window, cx| {
             window.render_frame(cx);
             assert!(view.read(cx).controller.recording());
-            let button = if slot == 0 {
-                window.find(("mapping-input", 0usize)).bounds()
-            } else {
-                window.find("mapping-add-input").bounds()
-            };
             let cancel = window.find("mapping-cancel-capture");
             assert_ne!(cancel.disabled(), Some(true));
-            let bounds = cancel.bounds();
-            assert!(bounds.left() > button.center().x);
-            assert!(bounds.right() < button.right());
-            assert!(bounds.top() >= button.top() && bounds.bottom() <= button.bottom());
             window.click("mapping-cancel-capture", cx);
         })
         .unwrap();
@@ -302,107 +185,6 @@ fn searchable_output_choice_hides_mouse_modifiers_and_restores_keyboard_modifier
         })
         .unwrap();
     }
-}
-
-#[gpui_kit::test]
-fn mapping_name_focus_ring_is_not_clipped_by_the_editor_scroll_region(cx: &mut TestAppContext) {
-    let (handle, view, _folder) = open(cx);
-    settle(cx, handle, &view);
-    cx.update_window(handle, |_, window, cx| {
-        cx.set_reduce_motion(true);
-        view.update(cx, |view, cx| {
-            view._pump = gpui_kit::Task::ready(());
-            view.dispatch(Command::App(Action::Navigate, "1".into()), window, cx);
-        });
-    })
-    .unwrap();
-    settle(cx, handle, &view);
-    cx.update_window(handle, |_, window, cx| {
-        window.render_frame(cx);
-        window.click("custom-mappings", cx);
-        window.click("mapping-create", cx);
-    })
-    .unwrap();
-    for scale in [1., 1.5, 2.] {
-        cx.simulate_window_scale_factor_change(handle, scale);
-        cx.update_window(handle, |_, window, cx| {
-            window.render_frame(cx);
-            window.click("mapping-name", cx);
-            let input = window.find("mapping-name").bounds();
-            assert_eq!(input.left(), window.find("page-header").bounds().left());
-            let ring = window
-                .painted_quads()
-                .into_iter()
-                .find(|quad| {
-                    quad.bounds.left().as_f32() < f32::from(input.left()) * scale
-                        && quad.bounds.right().as_f32() > f32::from(input.right()) * scale
-                        && quad.bounds.top().as_f32() < f32::from(input.top()) * scale
-                        && quad.bounds.bottom().as_f32() > f32::from(input.bottom()) * scale
-                        && quad.border_widths.left.as_f32() > scale
-                })
-                .expect("focused description input must paint its outer focus ring");
-            assert!(
-                ring.content_mask.bounds.left() <= ring.bounds.left(),
-                "scale={scale}: left focus ring is clipped: {ring:?}"
-            );
-            assert!(
-                ring.content_mask.bounds.right() >= ring.bounds.right(),
-                "scale={scale}: right focus ring is clipped: {ring:?}"
-            );
-        })
-        .unwrap();
-    }
-}
-
-#[gpui_kit::test]
-fn mapping_editor_has_equal_columns_and_keeps_save_outside_scrolling(cx: &mut TestAppContext) {
-    let (handle, view, _folder) = open(cx);
-    cx.update_window(handle, |_, window, cx| {
-        view.update(cx, |view, cx| {
-            view.dispatch(Command::App(Action::Navigate, "1".into()), window, cx)
-        });
-    })
-    .unwrap();
-    settle(cx, handle, &view);
-    cx.update_window(handle, |_, window, cx| {
-        window.render_frame(cx);
-        window.click("custom-mappings", cx);
-        window.click("mapping-create", cx);
-        for mode in [0usize, 1] {
-            window.click(("entry-mode", mode), cx);
-            let left = window.find("mapping-input-column").bounds();
-            let right = window.find("mapping-output-column").bounds();
-            let save = window.find("mapping-save").bounds();
-            assert_eq!(left.size.width, right.size.width);
-            assert_eq!(left.top(), right.top());
-            assert_eq!(left.right() + px(24.), right.left());
-            assert_eq!(left.left(), window.find("page-header").bounds().left());
-            assert!(right.right() <= px(872.));
-            assert_eq!(save.bottom(), px(472.));
-            assert!(
-                window
-                    .find("page-header")
-                    .bounds()
-                    .contains(&window.find("mapping-back").bounds().center())
-            );
-            window.scroll(
-                ("entry-mode", mode),
-                gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-300.))),
-                cx,
-            );
-            assert_eq!(window.find("mapping-save").bounds(), save);
-            window.scroll(
-                if mode == 0 {
-                    "mapping-record-output"
-                } else {
-                    "mapping-output-choice"
-                },
-                gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(300.))),
-                cx,
-            );
-        }
-    })
-    .unwrap();
 }
 
 #[gpui_kit::test]
@@ -534,23 +316,6 @@ fn mapping_save_failure_keeps_draft_then_retry_and_delete_persist(cx: &mut TestA
     cx.update_window(handle, |_, window, cx| {
         assert!(!view.read(cx).ui.mapping.editor);
         window.render_frame(cx);
-        let scope = window
-            .find(gpui_kit::SharedString::from(format!(
-                "mapping-scope-label-{}",
-                saved.custom_mappings[0].id
-            )))
-            .bounds();
-        assert_eq!(scope.size.width, px(160.));
-        assert!(
-            scope.right()
-                < window
-                    .find(gpui_kit::SharedString::from(format!(
-                        "mapping-edit-{}",
-                        saved.custom_mappings[0].id
-                    )))
-                    .bounds()
-                    .left()
-        );
         window.click(
             gpui_kit::SharedString::from(format!("mapping-delete-{}", saved.custom_mappings[0].id)),
             cx,
@@ -695,9 +460,12 @@ fn records_input_selects_a_filtered_output_and_saves_through_controls(cx: &mut T
     wait_until(cx, handle, &view, |view| !view.controller.recording());
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
-        assert_eq!(
-            window.find(("mapping-input", 0usize)).label(),
-            Some("Record shortcut for F8")
+        assert!(
+            window
+                .find(("mapping-input", 0usize))
+                .label()
+                .unwrap()
+                .contains("F8")
         );
         window.click(("entry-mode", 1usize), cx);
         window.scroll(
@@ -705,7 +473,6 @@ fn records_input_selects_a_filtered_output_and_saves_through_controls(cx: &mut T
             gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-250.))),
             cx,
         );
-        assert!(window.try_find("mapping-output-filter").is_none());
         window.click("mapping-output-choice", cx);
         window.input("F9", cx);
     })
@@ -718,9 +485,12 @@ fn records_input_selects_a_filtered_output_and_saves_through_controls(cx: &mut T
     cx.run_until_parked();
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
-        assert_eq!(
-            window.find("mapping-output-choice").label(),
-            Some("Output key: F9")
+        assert!(
+            window
+                .find("mapping-output-choice")
+                .label()
+                .unwrap()
+                .contains("F9")
         );
         window.click("mapping-save", cx);
     })

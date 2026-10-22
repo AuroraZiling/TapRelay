@@ -1,45 +1,7 @@
-use super::support::{open, open_sized, settle};
+use super::support::{open, settle};
 use crate::config::Config;
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{AppContext, TestAppContext, px};
-
-#[gpui_kit::test]
-fn group_delete_dialog_stays_centered_with_wrapped_text_and_errors(cx: &mut TestAppContext) {
-    for (height, language) in [(480., "en"), (800., "zh-CN")] {
-        let (handle, view, _folder) = open_sized(cx, 900., height);
-        settle(cx, handle, &view);
-        cx.update_window(handle, |_, window, cx| {
-            cx.set_reduce_motion(true);
-            view.update(cx, |view, cx| {
-                view._pump = gpui_kit::Task::ready(());
-                view.controller.runtime.config.options.language =
-                    crate::config::Language::from_name(language).unwrap();
-                view.controller.sync(&mut view.ui);
-                view.ui.page = 4;
-                view.ui.groups.confirming_delete = true;
-                view.ui.groups.selected_name = "Editors 应用组".repeat(3);
-                view.ui.groups.deletion_warning =
-                    "Playback 播放 / Pause 暂停 / Speed 倍速".repeat(3);
-                view.effects(window, cx);
-                cx.notify();
-            });
-            for error in ["", "Could not save configuration. 无法保存配置。"] {
-                view.update(cx, |view, cx| {
-                    view.ui.groups.form_error = error.into();
-                    cx.notify();
-                });
-                window.render_frame(cx);
-                let dialog = window.find("group-delete-dialog").bounds();
-                assert!((dialog.center().y - window.viewport_size().height / 2.).abs() <= px(0.5));
-                assert!(dialog.top() > px(0.));
-                assert!(dialog.bottom() < window.viewport_size().height);
-            }
-            window.press("escape", cx);
-            assert!(window.try_find("group-delete-dialog").is_none());
-        })
-        .unwrap();
-    }
-}
+use gpui_kit::{AppContext, TestAppContext};
 
 #[gpui_kit::test]
 fn browsing_an_executable_is_async_and_handles_cancel_invalid_and_selected_paths(

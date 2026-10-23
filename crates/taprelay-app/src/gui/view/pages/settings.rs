@@ -6,6 +6,7 @@ use crate::gui::{
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::{
     Selectable, StyledExt,
+    button::ButtonVariants,
     combobox::Combobox,
     group_box::{GroupBox, GroupBoxVariants},
     searchable_list::SearchableListItem,
@@ -155,16 +156,73 @@ impl AppView {
                 Action::SetPassthroughReverseScroll,
                 cx,
             ));
+        let autostart_status = self
+            .ui
+            .capabilities
+            .login_approval
+            .then_some(self.ui.auto_start_status)
+            .flatten()
+            .filter(|status| {
+                matches!(
+                    *status,
+                    "settings.autostart.mac.approval"
+                        | "settings.autostart.mac.not_found"
+                        | "common.status_unavailable"
+                )
+            });
+        let autostart_description = self
+            .caption(
+                self.tr(autostart_status.unwrap_or("settings.autostart.hint")),
+                cx,
+            )
+            .text_size(rems(0.8125));
+        let autostart_description = if autostart_status.is_some() {
+            autostart_description
+                .id("autostart-status")
+                .role(Role::Status)
+                .test_support()
+                .into_any_element()
+        } else {
+            autostart_description.into_any_element()
+        };
+        let mut autostart_controls =
+            div()
+                .h_flex()
+                .gap_2()
+                .flex_shrink_0()
+                .child(self.setting_switch(
+                    "autostart",
+                    "settings.autostart",
+                    self.ui.auto_start,
+                    Action::SetAutostart,
+                    cx,
+                ));
+        if self.ui.capabilities.login_approval {
+            autostart_controls = autostart_controls.child(
+                self.icon_button(
+                    "login-settings",
+                    IconName::Settings,
+                    self.tr("settings.autostart.mac.settings"),
+                    Command::App(Action::LoginSettings, String::new()),
+                    false,
+                    cx,
+                )
+                .ghost(),
+            );
+        }
         let startup = self
             .section("settings.startup", cx)
-            .child(self.setting(
-                "autostart",
-                "settings.autostart",
-                "settings.autostart.hint",
-                self.ui.auto_start,
-                Action::SetAutostart,
-                cx,
-            ))
+            .child(
+                self.setting_row(
+                    "autostart",
+                    div()
+                        .v_flex()
+                        .gap_1()
+                        .child(self.text(self.tr("settings.autostart")))
+                        .child(autostart_description),
+                    autostart_controls,
+                ),
+            )
             .child(self.setting(
                 "start-hidden",
                 "settings.hidden",
@@ -189,33 +247,6 @@ impl AppView {
                 Action::SetCloseToTray,
                 cx,
             ));
-        let startup = if self.ui.capabilities.login_approval {
-            startup
-                .child(
-                    self.caption(
-                        self.tr(self
-                            .ui
-                            .auto_start_status
-                            .unwrap_or("common.status_unavailable")),
-                        cx,
-                    )
-                    .id("autostart-status")
-                    .role(Role::Status)
-                    .test_support(),
-                )
-                .child(self.reveal_focus(
-                    "login-settings-action",
-                    self.app_button(
-                        "login-settings",
-                        "common.open_settings",
-                        Action::LoginSettings,
-                        false,
-                        cx,
-                    ),
-                ))
-        } else {
-            startup
-        };
         let (permission_tag, permission_icon, permission_label) = if self.ui.elevated {
             (
                 Tag::success(),
@@ -267,9 +298,9 @@ impl AppView {
             let input = self.ui.input_permissions;
             let allowed = |allowed| {
                 if allowed {
-                    "permissions.mac.allowed"
+                    ("permissions.mac.allowed", Tag::success())
                 } else {
-                    "permissions.mac.required"
+                    ("permissions.mac.required", Tag::warning())
                 }
             };
             let rows = [
@@ -295,50 +326,117 @@ impl AppView {
                     "bluetooth",
                     "permissions.mac.bluetooth",
                     match self.ui.bluetooth_permission {
-                        BluetoothPermission::Allowed => "permissions.mac.allowed",
-                        BluetoothPermission::NotDetermined => "permissions.mac.not_determined",
-                        BluetoothPermission::Restricted => "permissions.mac.restricted",
-                        BluetoothPermission::Denied => "permissions.mac.denied",
-                        BluetoothPermission::Unknown => "common.status_unavailable",
+                        BluetoothPermission::Allowed => allowed(true),
+                        BluetoothPermission::NotDetermined => {
+                            ("permissions.mac.not_determined", Tag::warning())
+                        }
+                        BluetoothPermission::Restricted => {
+                            ("permissions.mac.restricted", Tag::danger())
+                        }
+                        BluetoothPermission::Denied => ("permissions.mac.denied", Tag::danger()),
+                        BluetoothPermission::Unknown => {
+                            ("common.status_unavailable", Tag::secondary())
+                        }
                     },
                     Action::BluetoothPermissions,
                 ),
             ];
             let mut section = self.section("settings.app.permissions", cx);
-            for (id, title, state, action) in rows {
+            for (id, title, (state, tag), action) in rows {
                 section = section.child(
                     self.reveal_focus(
                         (ElementId::from("permission"), id),
                         div()
                             .h_flex()
                             .gap_4()
+                            .child(self.text(self.tr(title)).flex_1().min_w_0())
                             .child(
                                 div()
-                                    .v_flex()
-                                    .flex_1()
-                                    .gap_1()
-                                    .child(self.text(self.tr(title)))
+                                    .h_flex()
+                                    .min_w_0()
+                                    .gap_2()
                                     .child(
-                                        self.caption(self.tr(state), cx)
-                                            .id((ElementId::from("permission-status"), id))
-                                            .role(Role::Status)
-                                            .test_support(),
+                                        tag.outline().max_w_full().child(
+                                            self.text(self.tr(state))
+                                                .id((ElementId::from("permission-status"), id))
+                                                .min_w_0()
+                                                .role(Role::Status)
+                                                .test_support(),
+                                        ),
+                                    )
+                                    .child(
+                                        self.icon_button(
+                                            (ElementId::from("permission-open"), id),
+                                            IconName::Settings,
+                                            self.tr("common.open_settings"),
+                                            Command::App(action, String::new()),
+                                            false,
+                                            cx,
+                                        )
+                                        .ghost()
+                                        .flex_shrink_0(),
                                     ),
-                            )
-                            .child(self.button(
-                                (ElementId::from("permission-open"), id),
-                                self.tr("common.open_settings"),
-                                Command::App(action, String::new()),
-                                false,
-                                cx,
-                            )),
+                            ),
                     ),
                 );
             }
             section.child(self.caption(self.tr("permissions.mac.hint"), cx))
         };
+        let mut notification_controls = div().h_flex().gap_2().flex_shrink_0();
+        if self.ui.capabilities.notification_permission {
+            use crate::platform::desktop::NotificationPermission;
+            let (status, tag) = match self.ui.notification_permission {
+                NotificationPermission::Unknown => ("common.status_unavailable", Tag::secondary()),
+                NotificationPermission::NotDetermined => {
+                    ("settings.notifications.mac.not_determined", Tag::warning())
+                }
+                NotificationPermission::Denied => ("permissions.mac.denied", Tag::danger()),
+                NotificationPermission::Allowed => ("permissions.mac.allowed", Tag::success()),
+                NotificationPermission::Quiet => ("settings.notifications.mac.quiet", Tag::info()),
+                NotificationPermission::Unavailable => {
+                    ("settings.notifications.mac.unavailable", Tag::secondary())
+                }
+            };
+            notification_controls = notification_controls.child(
+                tag.outline().child(
+                    self.text(self.tr(status))
+                        .id("notification-permission")
+                        .role(Role::Status)
+                        .test_support(),
+                ),
+            );
+        }
+        notification_controls = notification_controls.child(self.setting_switch(
+            "notifications",
+            "settings.notifications.toggle",
+            self.ui.notifications,
+            Action::SetNotifications,
+            cx,
+        ));
+        if self.ui.capabilities.notification_permission {
+            notification_controls = notification_controls.child(
+                self.icon_button(
+                    "notification-settings",
+                    IconName::Settings,
+                    self.tr("settings.notifications.mac.settings"),
+                    Command::App(Action::NotificationSettings, String::new()),
+                    false,
+                    cx,
+                )
+                .ghost(),
+            );
+        }
         let notifications = self
             .section("settings.notifications", cx)
+            .child(self.setting_row(
+                "notifications",
+                self.setting_text(
+                    "settings.notifications.toggle",
+                    "settings.notifications.hint",
+                    cx,
+                ),
+                notification_controls,
+            ))
             .child(self.setting(
                 "wait-warning",
                 "settings.connection.wait.warning",
@@ -346,61 +444,7 @@ impl AppView {
                 self.ui.connection_wait_warning,
                 Action::SetConnectionWaitWarning,
                 cx,
-            ))
-            .child(self.setting(
-                "notifications",
-                "settings.notifications.toggle",
-                "settings.notifications.hint",
-                self.ui.notifications,
-                Action::SetNotifications,
-                cx,
             ));
-        let notifications = if self.ui.capabilities.notification_permission {
-            use crate::platform::desktop::NotificationPermission;
-            let status = match self.ui.notification_permission {
-                NotificationPermission::Unknown => "common.status_unavailable",
-                NotificationPermission::NotDetermined => {
-                    "settings.notifications.mac.not_determined"
-                }
-                NotificationPermission::Denied => "permissions.mac.denied",
-                NotificationPermission::Allowed => "permissions.mac.allowed",
-                NotificationPermission::Quiet => "settings.notifications.mac.quiet",
-                NotificationPermission::Unavailable => "settings.notifications.mac.unavailable",
-            };
-            notifications
-                .child(
-                    self.caption(self.tr(status), cx)
-                        .id("notification-permission")
-                        .role(Role::Status)
-                        .test_support(),
-                )
-                .child(self.caption(self.tr("settings.notifications.mac.hint"), cx))
-                .child(
-                    self.reveal_focus(
-                        "notification-actions",
-                        div()
-                            .h_flex()
-                            .gap_2()
-                            .flex_wrap()
-                            .child(self.app_button(
-                                "notification-settings",
-                                "common.open_settings",
-                                Action::NotificationSettings,
-                                false,
-                                cx,
-                            ))
-                            .child(self.app_button(
-                                "test-notification",
-                                "settings.notifications.mac.test",
-                                Action::TestNotification,
-                                !self.ui.notifications,
-                                cx,
-                            )),
-                    ),
-                )
-        } else {
-            notifications
-        };
         let licensing = self
             .section("settings.licensing", cx)
             .child(self.text("GPL-3.0-only"))
@@ -505,26 +549,43 @@ impl AppView {
         action: Action,
         cx: &Context<Self>,
     ) -> AnyElement {
+        self.setting_row(
+            id,
+            self.setting_text(label, hint, cx),
+            self.setting_switch(id, label, value, action, cx),
+        )
+    }
+
+    fn setting_row(&self, id: &'static str, text: Div, controls: impl IntoElement) -> AnyElement {
         self.reveal_focus(
             (ElementId::from(id), "row"),
             div()
                 .h_flex()
                 .gap_4()
-                .child(self.setting_text(label, hint, cx).flex_1().min_w_0())
-                .child(
-                    Switch::new(id)
-                        .accessibility_label(self.tr(label))
-                        .checked(value)
-                        .on_change(cx.listener(move |this, checked: &bool, window, cx| {
-                            this.dispatch(
-                                Command::App(action, if *checked { "1" } else { "0" }.into()),
-                                window,
-                                cx,
-                            )
-                        })),
-                ),
+                .child(text.flex_1().min_w_0())
+                .child(controls),
         )
         .into_any_element()
+    }
+
+    fn setting_switch(
+        &self,
+        id: &'static str,
+        label: &str,
+        value: bool,
+        action: Action,
+        cx: &Context<Self>,
+    ) -> Switch {
+        Switch::new(id)
+            .accessibility_label(self.tr(label))
+            .checked(value)
+            .on_change(cx.listener(move |this, checked: &bool, window, cx| {
+                this.dispatch(
+                    Command::App(action, if *checked { "1" } else { "0" }.into()),
+                    window,
+                    cx,
+                )
+            }))
     }
 
     fn setting_text(&self, label: &str, hint: &str, cx: &Context<Self>) -> Div {

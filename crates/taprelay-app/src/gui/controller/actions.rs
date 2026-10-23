@@ -121,16 +121,6 @@ impl Controller {
             }
             Action::BluetoothSettings => self.desktop.bluetooth_settings()?,
             Action::NotificationSettings => self.desktop.notification_settings()?,
-            Action::TestNotification => {
-                anyhow::ensure!(
-                    desktop::CAPABILITIES.notification_permission,
-                    "Notification testing is a macOS setting"
-                );
-                if self.runtime.config.options.notifications {
-                    self.desktop
-                        .notify("TapRelay", &self.tr("settings.notifications.mac.test_body"));
-                }
-            }
             Action::LoginSettings => self.desktop.login_settings()?,
             Action::InputMonitoringSettings | Action::BluetoothPermissions => {
                 desktop::open_settings(if name == Action::InputMonitoringSettings {

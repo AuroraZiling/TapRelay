@@ -69,44 +69,14 @@ fn notification_authorization_is_separate_from_the_preference_and_can_recover(
                 ..
             }
         ));
-        if let Shell::Headless { notifications, .. } = &view.read(cx).controller.desktop {
-            notifications.borrow_mut().clear();
-        }
-        window.click("test-notification", cx);
-        let count = |cx: &gpui_kit::App| {
-            let Shell::Headless { notifications, .. } = &view.read(cx).controller.desktop else {
-                unreachable!()
-            };
-            notifications.borrow().len()
-        };
-        assert_eq!(count(cx), 1);
-        if let Shell::Headless { notifications, .. } = &view.read(cx).controller.desktop {
-            assert_eq!(
-                notifications.borrow()[0].1,
-                view.read(cx).tr("settings.notifications.mac.test_body")
-            );
-        }
         window.click("notifications", cx);
         window.render_frame(cx);
         assert_eq!(window.find("notifications").checked(), Some(false));
-        window.click("test-notification", cx);
-        assert_eq!(count(cx), 1);
-        // The controller also protects against a stale enabled button.
-        view.update(cx, |view, _| {
-            view.controller
-                .action(
-                    &mut view.ui,
-                    crate::gui::action::Action::TestNotification,
-                    "",
-                )
-                .unwrap();
-        });
-        assert_eq!(count(cx), 1);
         window.click(("language", 2usize), cx);
         window.render_frame(cx);
         assert_eq!(
             window.find("notification-permission").label(),
-            Some("系统通知需要从 TapRelay 应用包运行。")
+            Some("不可用")
         );
     })
     .unwrap();
@@ -175,11 +145,15 @@ fn login_approval_refreshes_from_the_os_and_pending_registration_can_be_cancelle
             });
             window.render_frame(cx);
             assert_eq!(window.find("autostart").checked(), Some(checked));
-            assert_eq!(window.find("autostart-status").role(), Some(Role::Status));
-            assert_eq!(
-                window.find("autostart-status").label(),
-                Some(view.read(cx).tr(key).as_str())
-            );
+            if matches!(status, LoginStatus::Disabled | LoginStatus::Enabled) {
+                assert!(window.try_find("autostart-status").is_none());
+            } else {
+                assert_eq!(window.find("autostart-status").role(), Some(Role::Status));
+                assert_eq!(
+                    window.find("autostart-status").label(),
+                    Some(view.read(cx).tr(key).as_str())
+                );
+            }
             let saved = crate::config::Config::load(&folder.path().join("config.json")).unwrap();
             assert_eq!(saved.options.autostart, saved_enabled);
         }
@@ -202,10 +176,7 @@ fn login_approval_refreshes_from_the_os_and_pending_registration_can_be_cancelle
         assert!(!saved.options.autostart);
         window.click(("language", 2usize), cx);
         window.render_frame(cx);
-        assert_eq!(
-            window.find("autostart-status").label(),
-            Some("登录时启动已关闭。")
-        );
+        assert!(window.try_find("autostart-status").is_none());
     })
     .unwrap();
 }
@@ -420,7 +391,6 @@ fn windows_capabilities_preserve_settings_controls_and_hide_mac_approval(cx: &mu
             "login-settings",
             "notification-settings",
             "notification-permission",
-            "test-notification",
         ] {
             assert!(
                 window.try_find(id).is_none(),

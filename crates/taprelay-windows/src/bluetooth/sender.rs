@@ -11,7 +11,7 @@ use std::{
 use taprelay_core::{
     command::{CommandPhase, MediaCommand},
     hid::{self, ConsumerState, InputReports, ReportKind},
-    passthrough::{Event, InputLink, KeyUsage, Packet, ReportSchedule},
+    passthrough::{Event, InputLink, Packet, ReportSchedule},
     ports::BackendError,
 };
 use windows::Devices::Bluetooth::GenericAttributeProfile::{
@@ -522,134 +522,28 @@ impl Worker {
         }
     }
 
-    fn media(&mut self, action: MediaCommand, down: bool) -> Result<(), BackendError> {
-        // Rapid volume taps may arrive inside the 40 ms pulse. Send
-        // an intervening release so the host sees distinct volume presses.
-        if down && release_volume_pulses(&mut self.consumer, &mut self.pulses, action) {
-            self.send_report(ReportKind::Consumer, &self.consumer.report())?;
+    fn session(&mut self) -> hid::session::Session<'_> {
+        hid::session::Session {
+            keyboard: &mut self.reports,
+            owners: &mut self.owners,
+            consumer: &mut self.consumer,
+            pulses: &mut self.pulses,
+            next_owner: &mut self.next_owner,
         }
-        let owner = u64::from(action.usage());
-        if !down {
-            self.consumer.release(owner, action);
-        } else if matches!(action, MediaCommand::Rewind | MediaCommand::FastForward) {
-            self.consumer.press(owner, action);
-        } else {
-            self.next_owner = self.next_owner.wrapping_add(1).max(1);
-            let owner = self.next_owner | (1 << 63);
-            self.consumer.press(owner, action);
-            self.pulses
-                .push((Instant::now() + Duration::from_millis(40), owner, action));
-        }
-        self.send_report(ReportKind::Consumer, &self.consumer.report())
     }
-
+    fn media(&mut self, action: MediaCommand, down: bool) -> Result<(), BackendError> {
+        if let Some(release) = self.session().prepare_media(action, down) {
+            self.send_report(ReportKind::Consumer, &release)?;
+        }
+        let bytes = self.session().media(action, down, Instant::now())?;
+        self.send_report(ReportKind::Consumer, &bytes)
+    }
     fn event(&mut self, event: Event) -> Result<(), BackendError> {
-        let report = match event {
-            Event::ReleasePhysical => {
-                self.owners.clear_physical();
-                let (keys, buttons) = self.owners.state();
-                let keyboard = self
-                    .reports
-                    .owned_keyboard(keys, buttons)
-                    .map_err(|error| BackendError::Unavailable(error.into()))?;
-                self.consumer.clear();
-                self.pulses.clear();
-                self.send_report(ReportKind::Keyboard, &keyboard)?;
-                self.send_report(ReportKind::Mouse, &self.reports.mouse_neutral())?;
-                self.send_report(ReportKind::Consumer, &self.consumer.report())?;
-                return Ok(());
-            }
-            Event::Mapping {
-                output,
-                token,
-                down,
-            } => {
-                let (keys, buttons) = self.owners.update(token | (1 << 63), output, down);
-                let keyboard = self
-                    .reports
-                    .owned_keyboard(keys, buttons)
-                    .map_err(|error| BackendError::Unavailable(error.into()))?;
-                Some(match output {
-                    taprelay_core::mapping::MappingOutput::Keyboard { .. } => {
-                        (ReportKind::Keyboard, keyboard)
-                    }
-                    taprelay_core::mapping::MappingOutput::Mouse { .. } => {
-                        (ReportKind::Mouse, self.reports.mouse_neutral())
-                    }
-                })
-            }
-            Event::Key {
-                usage: KeyUsage::Keyboard(usage),
-                down,
-            } => {
-                let (keys, buttons) = self.owners.update(
-                    u64::from(usage),
-                    taprelay_core::mapping::MappingOutput::Keyboard {
-                        usage,
-                        modifiers: 0,
-                    },
-                    down,
-                );
-                Some((
-                    ReportKind::Keyboard,
-                    self.reports
-                        .owned_keyboard(keys, buttons)
-                        .map_err(|e| BackendError::Unavailable(e.into()))?,
-                ))
-            }
-            Event::Key {
-                usage: KeyUsage::Consumer(usage),
-                down,
-            } => {
-                let owner = 0x10000 + u64::from(usage);
-                if down {
-                    self.consumer.press_usage(owner, usage);
-                } else {
-                    self.consumer.release_usage(owner, usage);
-                }
-                Some((ReportKind::Consumer, self.consumer.report()))
-            }
-            Event::Button { button, down } => {
-                let (keys, buttons) = self.owners.update(
-                    0x1000 + button as u64,
-                    taprelay_core::mapping::MappingOutput::Mouse { button },
-                    down,
-                );
-                self.reports
-                    .owned_keyboard(keys, buttons)
-                    .map_err(|e| BackendError::Unavailable(e.into()))?;
-                Some((ReportKind::Mouse, self.reports.mouse_neutral()))
-            }
-            Event::Motion { dx, dy } => Some((
-                ReportKind::Mouse,
-                self.reports
-                    .motion(dx, dy)
-                    .map_err(|e| BackendError::Unavailable(e.into()))?,
-            )),
-            Event::Wheel {
-                vertical,
-                horizontal,
-            } => self
-                .reports
-                .wheel_with_direction(vertical, horizontal, self.link.reverse_scroll())
-                .map_err(|e| BackendError::Unavailable(e.into()))?
-                .map(|bytes| (ReportKind::Mouse, bytes)),
-            Event::Media { action, down } => {
-                return self.media(action, down);
-            }
-            Event::Pointer {
-                dx,
-                dy,
-                vertical,
-                horizontal,
-            } => Some((
-                ReportKind::Mouse,
-                self.reports
-                    .pointer(dx, dy, vertical, horizontal, self.link.reverse_scroll())
-                    .map_err(|e| BackendError::Unavailable(e.into()))?,
-            )),
-        };
-        if let Some((kind, bytes)) = report {
+        if let Event::Media { action, down } = event {
+            return self.media(action, down);
+        }
+        let reverse_scroll = self.link.reverse_scroll();
+        for (kind, bytes) in self.session().event(event, reverse_scroll)? {
             self.send_report(kind, &bytes)?;
         }
         Ok(())
@@ -789,30 +683,10 @@ fn delivery_wait_error(error: mpsc::RecvTimeoutError) -> BackendError {
     }
 }
 
-fn release_volume_pulses(
-    consumer: &mut ConsumerState,
-    pulses: &mut Vec<(Instant, u64, MediaCommand)>,
-    action: MediaCommand,
-) -> bool {
-    if !matches!(action, MediaCommand::VolumeUp | MediaCommand::VolumeDown) {
-        return false;
-    }
-    let mut released = false;
-    pulses.retain(|(_, owner, previous)| {
-        if matches!(previous, MediaCommand::VolumeUp | MediaCommand::VolumeDown) {
-            consumer.release(*owner, *previous);
-            released = true;
-            false
-        } else {
-            true
-        }
-    });
-    released
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use taprelay_core::hid::session::release_volume_pulses;
 
     #[test]
     fn retired_session_report_is_silent_and_does_not_revoke_a_new_session() {

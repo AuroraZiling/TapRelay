@@ -9,7 +9,7 @@ fn selected_level_filters_app_and_worker_logs_without_changing_severity() {
         let requested = std::env::var(LEVEL).unwrap();
         configure_level(parse_level(&requested).unwrap()).unwrap();
         assert_eq!(arguments(), ["--log-level".to_owned(), requested]);
-        let (_, guard) = init(&Path::new(&dir).join("config.json")).unwrap();
+        let (_, guard) = init_in(Path::new(&dir).join("logs")).unwrap();
         tracing::error!("app error");
         tracing::warn!("app warn");
         tracing::info!("app info");
@@ -113,7 +113,7 @@ fn panic_is_written_without_a_tracing_subscriber() {
 fn retention_limits_app_and_panic_logs_without_blocking_logging() {
     const CHILD: &str = "TAPRELAY_RETENTION_TEST_DIR";
     if let Some(dir) = std::env::var_os(CHILD) {
-        let (_, guard) = init(&Path::new(&dir).join("config.json")).unwrap();
+        let (_, guard) = init_in(Path::new(&dir).join("logs")).unwrap();
         tracing::info!("logging after retention");
         drop(guard);
         return;
@@ -197,7 +197,7 @@ fn jsonl_preserves_fields_and_flushes_on_shutdown() {
     const CHILD: &str = "TAPRELAY_JSONL_TEST_DIR";
     const MESSAGE: &str = "中文 \"quoted\" \\ path\nsecond line";
     if let Some(dir) = std::env::var_os(CHILD) {
-        let (counter, guard) = init(&Path::new(&dir).join("config.json")).unwrap();
+        let (counter, guard) = init_in(Path::new(&dir).join("logs")).unwrap();
         {
             let span = tracing::info_span!("operation", device = "tablet");
             let _entered = span.enter();

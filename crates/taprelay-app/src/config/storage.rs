@@ -46,6 +46,13 @@ impl Config {
 }
 
 pub fn path() -> Result<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        let dir = taprelay_macos::paths::application_support()?;
+        std::fs::create_dir_all(&dir)?;
+        Ok(dir.join("config.json"))
+    }
+    #[cfg(windows)]
     // Installer mode disabled: installed Windows builds use %LOCALAPPDATA%/TapRelay/config.json.
     Ok(std::env::current_exe()?
         .parent()

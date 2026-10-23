@@ -1,4 +1,3 @@
-#[cfg(any(windows, test))]
 use std::time::Duration;
 use taprelay_core::state::{Snapshot, Target};
 
@@ -16,7 +15,6 @@ pub struct Notice {
 }
 
 impl Notice {
-    #[cfg(any(windows, test))]
     pub fn duration(&self) -> Duration {
         Duration::from_secs(if self.status == Status::Disconnected {
             5

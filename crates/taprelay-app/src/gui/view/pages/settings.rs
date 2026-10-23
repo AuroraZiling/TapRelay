@@ -3,16 +3,16 @@ use crate::gui::{
     presentation::ChoiceOption,
     view::{AppView, Command},
 };
-use gpui_kit::assets::IconName;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::{
-    Icon, Selectable, StyledExt,
+    Selectable, StyledExt,
     combobox::Combobox,
     group_box::{GroupBox, GroupBoxVariants},
     searchable_list::SearchableListItem,
     switch::Switch,
     tag::Tag,
 };
+use gpui_kit::{assets::IconName, component::Icon};
 use gpui_kit::{prelude::*, *};
 
 impl SearchableListItem for ChoiceOption {
@@ -189,6 +189,33 @@ impl AppView {
                 Action::SetCloseToTray,
                 cx,
             ));
+        let startup = if self.ui.capabilities.login_approval {
+            startup
+                .child(
+                    self.caption(
+                        self.tr(self
+                            .ui
+                            .auto_start_status
+                            .unwrap_or("common.status_unavailable")),
+                        cx,
+                    )
+                    .id("autostart-status")
+                    .role(Role::Status)
+                    .test_support(),
+                )
+                .child(self.reveal_focus(
+                    "login-settings-action",
+                    self.app_button(
+                        "login-settings",
+                        "common.open_settings",
+                        Action::LoginSettings,
+                        false,
+                        cx,
+                    ),
+                ))
+        } else {
+            startup
+        };
         let (permission_tag, permission_icon, permission_label) = if self.ui.elevated {
             (
                 Tag::success(),
@@ -198,43 +225,118 @@ impl AppView {
         } else {
             (Tag::info(), IconName::UserRound, "permissions.badge.user")
         };
-        let permissions = self
-            .section("settings.app.permissions", cx)
-            .child(
-                self.reveal_focus(
-                    "admin-action",
-                    div()
-                        .h_flex()
-                        .justify_between()
-                        .gap_3()
-                        .flex_wrap()
-                        .child(
-                            permission_tag
-                                .gap_1()
-                                .flex_shrink_0()
-                                .child(Icon::new(permission_icon).size_3p5())
-                                .child(self.text(self.tr(permission_label))),
-                        )
-                        .child(
-                            self.app_button(
-                                "settings-elevate",
-                                "permissions.restart",
-                                Action::Elevate,
-                                self.ui.elevated,
-                                cx,
+        let permissions = if self.ui.capabilities.elevation {
+            self.section("settings.app.permissions", cx)
+                .child(
+                    self.reveal_focus(
+                        "admin-action",
+                        div()
+                            .h_flex()
+                            .justify_between()
+                            .gap_3()
+                            .flex_wrap()
+                            .child(
+                                permission_tag
+                                    .gap_1()
+                                    .flex_shrink_0()
+                                    .child(Icon::new(permission_icon).size_3p5())
+                                    .child(self.text(self.tr(permission_label))),
                             )
-                            .flex_shrink_0(),
-                        ),
+                            .child(
+                                self.app_button(
+                                    "settings-elevate",
+                                    "permissions.restart",
+                                    Action::Elevate,
+                                    self.ui.elevated,
+                                    cx,
+                                )
+                                .flex_shrink_0(),
+                            ),
+                    ),
+                )
+                .child(self.setting(
+                    "always-admin",
+                    "settings.always.admin",
+                    "settings.always.admin.hint",
+                    self.ui.always_admin,
+                    Action::SetAlwaysAdmin,
+                    cx,
+                ))
+        } else {
+            use crate::platform::desktop::BluetoothPermission;
+            let input = self.ui.input_permissions;
+            let allowed = |allowed| {
+                if allowed {
+                    "permissions.mac.allowed"
+                } else {
+                    "permissions.mac.required"
+                }
+            };
+            let rows = [
+                (
+                    "accessibility",
+                    "permissions.mac.accessibility",
+                    allowed(input.accessibility),
+                    Action::Elevate,
                 ),
-            )
-            .child(self.setting(
-                "always-admin",
-                "settings.always.admin",
-                "settings.always.admin.hint",
-                self.ui.always_admin,
-                Action::SetAlwaysAdmin,
-                cx,
-            ));
+                (
+                    "monitoring",
+                    "permissions.mac.monitoring",
+                    allowed(input.monitoring),
+                    Action::InputMonitoringSettings,
+                ),
+                (
+                    "posting",
+                    "permissions.mac.posting",
+                    allowed(input.posting),
+                    Action::Elevate,
+                ),
+                (
+                    "bluetooth",
+                    "permissions.mac.bluetooth",
+                    match self.ui.bluetooth_permission {
+                        BluetoothPermission::Allowed => "permissions.mac.allowed",
+                        BluetoothPermission::NotDetermined => "permissions.mac.not_determined",
+                        BluetoothPermission::Restricted => "permissions.mac.restricted",
+                        BluetoothPermission::Denied => "permissions.mac.denied",
+                        BluetoothPermission::Unknown => "common.status_unavailable",
+                    },
+                    Action::BluetoothPermissions,
+                ),
+            ];
+            let mut section = self.section("settings.app.permissions", cx);
+            for (id, title, state, action) in rows {
+                section = section.child(
+                    self.reveal_focus(
+                        (ElementId::from("permission"), id),
+                        div()
+                            .h_flex()
+                            .gap_4()
+                            .child(
+                                div()
+                                    .v_flex()
+                                    .flex_1()
+                                    .gap_1()
+                                    .child(self.text(self.tr(title)))
+                                    .child(
+                                        self.caption(self.tr(state), cx)
+                                            .id((ElementId::from("permission-status"), id))
+                                            .role(Role::Status)
+                                            .test_support(),
+                                    ),
+                            )
+                            .child(self.button(
+                                (ElementId::from("permission-open"), id),
+                                self.tr("common.open_settings"),
+                                Command::App(action, String::new()),
+                                false,
+                                cx,
+                            )),
+                    ),
+                );
+            }
+            section.child(self.caption(self.tr("permissions.mac.hint"), cx))
+        };
         let notifications = self
             .section("settings.notifications", cx)
             .child(self.setting(
@@ -253,6 +355,52 @@ impl AppView {
                 Action::SetNotifications,
                 cx,
             ));
+        let notifications = if self.ui.capabilities.notification_permission {
+            use crate::platform::desktop::NotificationPermission;
+            let status = match self.ui.notification_permission {
+                NotificationPermission::Unknown => "common.status_unavailable",
+                NotificationPermission::NotDetermined => {
+                    "settings.notifications.mac.not_determined"
+                }
+                NotificationPermission::Denied => "permissions.mac.denied",
+                NotificationPermission::Allowed => "permissions.mac.allowed",
+                NotificationPermission::Quiet => "settings.notifications.mac.quiet",
+                NotificationPermission::Unavailable => "settings.notifications.mac.unavailable",
+            };
+            notifications
+                .child(
+                    self.caption(self.tr(status), cx)
+                        .id("notification-permission")
+                        .role(Role::Status)
+                        .test_support(),
+                )
+                .child(self.caption(self.tr("settings.notifications.mac.hint"), cx))
+                .child(
+                    self.reveal_focus(
+                        "notification-actions",
+                        div()
+                            .h_flex()
+                            .gap_2()
+                            .flex_wrap()
+                            .child(self.app_button(
+                                "notification-settings",
+                                "common.open_settings",
+                                Action::NotificationSettings,
+                                false,
+                                cx,
+                            ))
+                            .child(self.app_button(
+                                "test-notification",
+                                "settings.notifications.mac.test",
+                                Action::TestNotification,
+                                !self.ui.notifications,
+                                cx,
+                            )),
+                    ),
+                )
+        } else {
+            notifications
+        };
         let licensing = self
             .section("settings.licensing", cx)
             .child(self.text("GPL-3.0-only"))

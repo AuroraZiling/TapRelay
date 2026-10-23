@@ -316,3 +316,11 @@ fn legacy_config_only_gains_the_app_function_and_round_trips() {
     std::fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
     assert!(Config::load(&path).is_err());
 }
+
+#[test]
+fn typed_foreground_identity_keeps_windows_config_bytes_unchanged() {
+    use taprelay_core::foreground_app::ForegroundAppGroup;
+    let original = r#"{"name":"Games","foreground_apps":["C:\\Apps\\GAME.EXE"]}"#;
+    let group: ForegroundAppGroup = serde_json::from_str(original).unwrap();
+    assert_eq!(serde_json::to_string(&group).unwrap(), original);
+}

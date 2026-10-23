@@ -5,6 +5,7 @@
 //! as values so the adapter can enqueue it without making the hook wait for
 //! Bluetooth, disk, or UI work.
 
+use crate::foreground_app::AppIdentity;
 use crate::{
     binding::{BindingIndex, BindingKey},
     function::{FunctionAction, FunctionConfigs, FunctionId, function_definition},
@@ -113,11 +114,11 @@ struct ActiveToken {
 pub struct InputRouter {
     mappings: Vec<crate::mapping::CustomMapping>,
     mapping_candidates: BTreeMap<InputCode, Vec<usize>>,
-    mapping_paths: BTreeMap<u64, BTreeSet<String>>,
+    mapping_paths: BTreeMap<u64, BTreeSet<AppIdentity>>,
     mapping_active: BTreeMap<InputCode, (crate::mapping::CustomMapping, u64)>,
     mapping_rules: crate::foreground_app::ForegroundAppRules,
     foreground_app_scopes: crate::foreground_app::ScopeIndex,
-    foreground: Option<String>,
+    foreground: Option<AppIdentity>,
     index: BindingIndex,
     revision: u64,
     listening: bool,
@@ -172,10 +173,10 @@ impl InputRouter {
     pub fn set_foreground(&mut self, executable: Option<&str>) -> RouteResult {
         // Native discovery caches canonical identities; the common unchanged
         // foreground path needs neither allocation nor another scope lookup.
-        if self.foreground.as_deref() == executable {
+        if self.foreground.as_ref().map(AppIdentity::as_str) == executable {
             return self.stamp(RouteResult::default());
         }
-        let foreground = executable.map(crate::foreground_app::executable_identity);
+        let foreground = executable.and_then(AppIdentity::parse);
         if self.foreground == foreground {
             return self.stamp(RouteResult::default());
         }
@@ -190,7 +191,7 @@ impl InputRouter {
             .filter_map(|(&code, active)| {
                 (!self
                     .foreground_app_scopes
-                    .allows(active.binding.function, self.foreground.as_deref()))
+                    .allows(active.binding.function, self.foreground.as_ref()))
                 .then_some(code)
             })
             .collect();
@@ -355,7 +356,10 @@ impl InputRouter {
             if !mapping.groups.is_empty() {
                 self.mapping_paths.insert(
                     mapping.id,
-                    crate::mapping::scope_paths(&self.mapping_rules, &mapping.groups),
+                    crate::mapping::scope_paths(&self.mapping_rules, &mapping.groups)
+                        .iter()
+                        .filter_map(|path| AppIdentity::parse(path))
+                        .collect(),
                 );
             }
         }
@@ -612,7 +616,7 @@ impl InputRouter {
                 .index
                 .best_match_where(event.code, &self.physical, |id| {
                     self.foreground_app_scopes
-                        .allows(id, self.foreground.as_deref())
+                        .allows(id, self.foreground.as_ref())
                         && (self.listening
                             || self.passthrough
                             || matches!(

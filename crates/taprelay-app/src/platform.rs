@@ -1,8 +1,13 @@
 pub(crate) mod administrator;
 pub(crate) mod bluetooth_worker;
 pub(crate) mod capture_key;
+pub(crate) mod desktop;
 
 use anyhow::Result;
+pub use native::{
+    InstanceLock, foreground_apps,
+    input::{key_name, keyboard_layout},
+};
 use taprelay_core::{
     command::QueuedCommand,
     function::FunctionConfigs,
@@ -10,13 +15,14 @@ use taprelay_core::{
     ports::BackendError,
     state::Snapshot,
 };
-pub use taprelay_windows::{
-    InstanceLock, desktop, foreground_apps,
-    input::{key_name, keyboard_layout},
-};
+#[cfg(target_os = "macos")]
+pub use taprelay_macos as native;
+#[cfg(windows)]
+pub use taprelay_windows as native;
 use tokio::sync::{mpsc, oneshot};
 
 pub trait InputSource {
+    fn set_transport_ready(&self, _ready: bool) {}
     fn attach_passthrough(&self, _link: Option<taprelay_core::passthrough::InputLink>) {}
     fn passthrough_error(&self) -> Option<String> {
         None
@@ -57,7 +63,11 @@ pub trait Transport {
     fn invalidate(&self);
     fn send(&self, command: QueuedCommand) -> Result<oneshot::Receiver<Result<(), BackendError>>>;
 }
-impl InputSource for taprelay_windows::input::InputHandle {
+impl InputSource for native::input::InputHandle {
+    #[cfg(target_os = "macos")]
+    fn set_transport_ready(&self, ready: bool) {
+        self.set_transport_ready(ready);
+    }
     fn attach_passthrough(&self, link: Option<taprelay_core::passthrough::InputLink>) {
         self.attach_passthrough(link);
     }
@@ -90,9 +100,7 @@ impl InputSource for taprelay_windows::input::InputHandle {
 }
 
 pub fn input(sender: mpsc::Sender<RoutedInput>) -> Result<Box<dyn InputSource>> {
-    Ok(Box::new(taprelay_windows::input::InputHandle::start(
-        sender,
-    )?))
+    Ok(Box::new(native::input::InputHandle::start(sender)?))
 }
 pub fn transport(remembered: Option<taprelay_core::state::Target>) -> Result<Box<dyn Transport>> {
     Ok(Box::new(bluetooth_worker::Handle::start(remembered)?))

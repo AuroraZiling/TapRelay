@@ -53,6 +53,8 @@ struct ScriptState {
     workers: Vec<ScriptWorker>,
     calls: Vec<Call>,
     fail_start: bool,
+    #[cfg(target_os = "macos")]
+    live_profile: bool,
 }
 
 struct Script {
@@ -68,6 +70,11 @@ struct ScriptProcess {
 
 impl Execution for Script {
     type Worker = ScriptProcess;
+
+    #[cfg(target_os = "macos")]
+    fn live_profile_switch(&self) -> bool {
+        self.state.lock().unwrap().live_profile
+    }
 
     fn start(&mut self, initial: Command) -> Result<ScriptProcess> {
         let mut state = self.state.lock().unwrap();
@@ -151,6 +158,8 @@ impl Harness {
             workers: vec![],
             calls: vec![],
             fail_start,
+            #[cfg(target_os = "macos")]
+            live_profile: false,
         }));
         let (arrived_tx, arrived) = mpsc::sync_channel(1);
         let (resume, resume_rx) = mpsc::sync_channel(1);
@@ -289,6 +298,11 @@ impl Drop for Harness {
 fn status(generation: u64, endpoint: &str, input_available: bool) -> Message {
     Message::Status {
         state: Box::new(Snapshot {
+            hid_profile: if input_available {
+                Profile::Full
+            } else {
+                Profile::MediaOnly
+            },
             generation,
             ready: true,
             service: true,
@@ -1214,4 +1228,83 @@ fn a_full_control_queue_rejects_a_request_without_sending_it_later() {
     );
     h.step();
     assert!(accepted.try_recv().unwrap().is_ok());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn stable_schema_changes_routing_without_restarting_and_rejects_old_generation() {
+    let h = Harness::new();
+    h.connected();
+    h.state.lock().unwrap().live_profile = true;
+    let process = h.current();
+    let mut receipt = h.send();
+    h.step();
+    assert!(h.handle.link.request_profile());
+    h.step();
+    assert_eq!(h.current(), process);
+    assert!(!h.snapshot().ready);
+    assert!(matches!(
+        receipt.try_recv().unwrap(),
+        Err(BackendError::Stale)
+    ));
+    h.status(3, "phone", true); // stale, pre-switch generation cannot arm
+    assert!(!h.snapshot().ready);
+    h.status(4, "phone", true);
+    h.message(
+        process,
+        Message::Armed {
+            generation: 4,
+            accepted: true,
+        },
+    );
+    h.step();
+    assert!(h.handle.link.begin());
+    h.handle.link.end();
+    h.step();
+    assert_eq!(h.current(), process);
+    h.status(5, "phone", false);
+    assert!(h.snapshot().ready);
+    assert_eq!(h.snapshot().hid_profile, Profile::MediaOnly);
+    let state = h.state.lock().unwrap();
+    assert_eq!(
+        state
+            .calls
+            .iter()
+            .filter(|call| matches!(call, Call::Send(id, Command::SetProfile(_)) if *id == process))
+            .count(),
+        2
+    );
+    assert!(
+        !state
+            .calls
+            .iter()
+            .any(|call| matches!(call, Call::Stop(id) if *id == process))
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn cancelled_live_switch_does_not_accept_late_status_for_previous_mode() {
+    let h = Harness::new();
+    h.connected();
+    h.state.lock().unwrap().live_profile = true;
+    let process = h.current();
+    assert!(h.handle.link.request_profile());
+    h.step();
+    h.handle.link.end();
+    h.step();
+    h.status(4, "phone", true); // Full status arrives after cancellation.
+    assert!(!h.snapshot().ready);
+    assert!(!h.handle.link.begin());
+    h.status(5, "phone", false);
+    assert!(h.snapshot().ready);
+    assert_eq!(h.current(), process);
+    assert!(
+        !h.state
+            .lock()
+            .unwrap()
+            .calls
+            .iter()
+            .any(|call| matches!(call, Call::Send(_, Command::Arm { generation: 4 })))
+    );
 }

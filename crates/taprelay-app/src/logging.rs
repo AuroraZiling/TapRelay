@@ -28,7 +28,6 @@ fn level() -> LogLevel {
     LEVEL.get().copied().unwrap_or(LogLevel::INFO)
 }
 
-#[cfg(windows)]
 pub fn arguments() -> [String; 2] {
     [
         "--log-level".into(),
@@ -42,7 +41,15 @@ pub fn init(
     tracing_appender::non_blocking::ErrorCounter,
     tracing_appender::non_blocking::WorkerGuard,
 )> {
-    let dir = path.parent().unwrap_or(Path::new(".")).join("logs");
+    init_in(log_directory(path)?)
+}
+
+fn init_in(
+    dir: std::path::PathBuf,
+) -> anyhow::Result<(
+    tracing_appender::non_blocking::ErrorCounter,
+    tracing_appender::non_blocking::WorkerGuard,
+)> {
     std::fs::create_dir_all(&dir)?;
     let file = tracing_appender::rolling::Builder::new()
         .rotation(tracing_appender::rolling::Rotation::DAILY)
@@ -66,7 +73,6 @@ pub fn init(
     Ok((counter, guard))
 }
 
-#[cfg(windows)]
 pub fn init_worker(args: &[String]) -> anyhow::Result<()> {
     let requested = match args {
         [] => LogLevel::INFO,
@@ -85,7 +91,6 @@ pub fn init_worker(args: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(windows)]
 pub fn forward_worker_line(line: &str) {
     let level = serde_json::from_str::<serde_json::Value>(line)
         .ok()
@@ -103,10 +108,10 @@ pub fn forward_worker_line(line: &str) {
 }
 
 pub fn install_panic_handler() {
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(parent) = exe.parent()
+    if let Ok(path) = crate::config::path()
+        && let Ok(dir) = log_directory(&path)
     {
-        panic_handler_in(parent.join("logs"));
+        panic_handler_in(dir);
     }
 }
 fn panic_handler_in(dir: std::path::PathBuf) {
@@ -150,3 +155,13 @@ fn panic_handler_in(dir: std::path::PathBuf) {
 }
 #[cfg(test)]
 mod tests;
+
+pub(crate) fn log_directory(path: &Path) -> anyhow::Result<std::path::PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = path;
+        Ok(taprelay_macos::paths::logs()?)
+    }
+    #[cfg(windows)]
+    Ok(path.parent().unwrap_or(Path::new(".")).join("logs"))
+}

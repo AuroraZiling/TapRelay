@@ -57,3 +57,16 @@ pub fn tray_labels(locale: &str) -> [String; 4] {
 
 #[cfg(test)]
 mod tests;
+
+pub fn platform_key(key: &str) -> &str {
+    if cfg!(target_os = "macos") {
+        match key {
+            "receiver.help" => "receiver.mac.help",
+            "receiver.empty" => "receiver.mac.empty",
+            "receiver.host.hint" => "receiver.mac.host.hint",
+            _ => key,
+        }
+    } else {
+        key
+    }
+}

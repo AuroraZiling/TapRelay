@@ -8,10 +8,83 @@ pub(in crate::gui) enum Shell {
         running_apps: Vec<String>,
         notifications: std::cell::RefCell<Vec<(String, String)>>,
         bluetooth_settings_opened: bool,
+        login_status: Option<desktop::LoginStatus>,
+        login_settings_opened: bool,
+        notification_permission: desktop::NotificationPermission,
+        notification_settings_opened: bool,
     },
 }
 
 impl Shell {
+    pub(in crate::gui) fn notification_permission(&self) -> desktop::NotificationPermission {
+        match self {
+            Self::Native(desktop) => desktop.notification_permission(),
+            #[cfg(test)]
+            Self::Headless {
+                notification_permission,
+                ..
+            } => *notification_permission,
+        }
+    }
+
+    pub(in crate::gui) fn notification_settings(&mut self) -> Result<()> {
+        match self {
+            Self::Native(_) => desktop::open_settings(desktop::SettingsTarget::Notifications),
+            #[cfg(test)]
+            Self::Headless {
+                notification_settings_opened,
+                ..
+            } => {
+                *notification_settings_opened = true;
+                Ok(())
+            }
+        }
+    }
+    pub(in crate::gui) fn permission_status(
+        &self,
+    ) -> (desktop::InputPermissions, desktop::BluetoothPermission) {
+        match self {
+            Self::Native(_) => desktop::permission_status(),
+            #[cfg(test)]
+            Self::Headless { .. } => (
+                desktop::InputPermissions {
+                    accessibility: true,
+                    monitoring: true,
+                    posting: true,
+                },
+                desktop::BluetoothPermission::Allowed,
+            ),
+        }
+    }
+    pub(in crate::gui) fn login_status(&self) -> desktop::LoginStatus {
+        match self {
+            Self::Native(_) => desktop::login_status(),
+            #[cfg(test)]
+            Self::Headless {
+                autostart,
+                login_status,
+                ..
+            } => login_status.unwrap_or(if *autostart {
+                desktop::LoginStatus::Enabled
+            } else {
+                desktop::LoginStatus::Disabled
+            }),
+        }
+    }
+
+    pub(in crate::gui) fn login_settings(&mut self) -> Result<()> {
+        match self {
+            Self::Native(_) => desktop::open_settings(desktop::SettingsTarget::LoginItems),
+            #[cfg(test)]
+            Self::Headless {
+                login_settings_opened,
+                ..
+            } => {
+                *login_settings_opened = true;
+                Ok(())
+            }
+        }
+    }
     pub(in crate::gui) fn update(
         &mut self,
         state: u8,
@@ -45,7 +118,7 @@ impl Shell {
 
     pub(in crate::gui) fn bluetooth_settings(&mut self) -> Result<()> {
         match self {
-            Self::Native(_) => Ok(desktop::open("ms-settings:bluetooth")?),
+            Self::Native(_) => desktop::open_settings(desktop::SettingsTarget::Bluetooth),
             #[cfg(test)]
             Self::Headless {
                 bluetooth_settings_opened,
@@ -64,9 +137,22 @@ impl Shell {
                 Ok(desktop::autostart_enabled())
             }
             #[cfg(test)]
-            Self::Headless { autostart, .. } => {
+            Self::Headless {
+                autostart,
+                login_status,
+                ..
+            } => {
                 *autostart = enabled;
-                Ok(*autostart)
+                {
+                    if !enabled {
+                        *login_status = None;
+                    }
+                    Ok(login_status.unwrap_or(if enabled {
+                        desktop::LoginStatus::Enabled
+                    } else {
+                        desktop::LoginStatus::Disabled
+                    }) == desktop::LoginStatus::Enabled)
+                }
             }
         }
     }

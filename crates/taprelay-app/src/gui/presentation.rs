@@ -178,6 +178,7 @@ pub(super) enum WindowCommand {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct Presentation {
+    pub capabilities: crate::platform::desktop::Capabilities,
     pub mode: i32,
     pub page: i32,
     pub wizard_page: i32,
@@ -193,6 +194,9 @@ pub(super) struct Presentation {
     pub bluetooth_available: bool,
     pub busy: bool,
     pub elevated: bool,
+    pub input_permissions_ready: bool,
+    pub input_permissions: crate::platform::desktop::InputPermissions,
+    pub bluetooth_permission: crate::platform::desktop::BluetoothPermission,
     pub device_name: String,
     pub device_selected: bool,
     pub stage: String,
@@ -211,10 +215,12 @@ pub(super) struct Presentation {
     pub passthrough_reverse_scroll: bool,
     pub passthrough_mouse_report_rate: i32,
     pub auto_start: bool,
+    pub auto_start_status: Option<&'static str>,
     pub start_hidden: bool,
     pub close_to_tray: bool,
     pub always_admin: bool,
     pub notifications: bool,
+    pub notification_permission: crate::platform::desktop::NotificationPermission,
     pub connection_wait_warning: bool,
     pub theme_choice: i32,
     pub language_choice: i32,

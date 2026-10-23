@@ -2,11 +2,41 @@ use super::*;
 use crate::gui::presentation::input;
 
 impl Controller {
+    pub(in crate::gui) fn sync_autostart(&mut self, ui: &mut Presentation) {
+        use desktop::LoginStatus;
+        let status = self.desktop.login_status();
+        ui.auto_start_status = Some(match status {
+            LoginStatus::Disabled => "settings.autostart.mac.disabled",
+            LoginStatus::Enabled => "settings.autostart.mac.enabled",
+            LoginStatus::RequiresApproval => "settings.autostart.mac.approval",
+            LoginStatus::NotFound => "settings.autostart.mac.not_found",
+            LoginStatus::Unknown => "common.status_unavailable",
+        });
+        if status != LoginStatus::Unknown {
+            // A pending registration stays cancellable through the switch,
+            // while persistence records only actual OS-enabled startup.
+            ui.auto_start = matches!(status, LoginStatus::Enabled | LoginStatus::RequiresApproval);
+            let enabled = status == LoginStatus::Enabled;
+            if self.runtime.config.options.autostart != enabled {
+                self.runtime.config.options.autostart = enabled;
+                self.save_pending = true;
+            }
+        } else {
+            ui.auto_start = self.runtime.config.options.autostart;
+        }
+    }
+
     pub(in crate::gui) fn sync(&mut self, ui: &mut Presentation) {
         if self.last_system_poll.elapsed() >= Duration::from_secs(1) {
             self.system_theme = desktop::system_dark();
             self.system_language = desktop::system_locale_id();
+            if ui.capabilities.login_approval {
+                self.sync_autostart(ui);
+            }
             self.last_system_poll = Instant::now();
+        }
+        if ui.capabilities.login_approval && ui.auto_start_status.is_none() {
+            self.sync_autostart(ui);
         }
         let locale = self.locale();
         ui.locale = locale.to_owned();
@@ -39,7 +69,9 @@ impl Controller {
                     .unwrap_or_default() as i32
             }
         };
-        ui.auto_start = o.autostart;
+        if !ui.capabilities.login_approval {
+            ui.auto_start = o.autostart;
+        }
         ui.auto_listen = o.auto_listen;
         ui.passthrough_overlay = o.passthrough_overlay;
         ui.passthrough_reverse_scroll = o.passthrough_reverse_scroll;
@@ -50,6 +82,20 @@ impl Controller {
         ui.notifications = o.notifications;
         ui.connection_wait_warning = o.connection_wait_warning;
         ui.elevated = self.status.elevated;
+        if ui.capabilities.privacy_permissions {
+            (ui.input_permissions, ui.bluetooth_permission) = self.desktop.permission_status();
+            ui.notification_permission = self.desktop.notification_permission();
+            let ready = ui.input_permissions.ready();
+            if ready
+                && !ui.input_permissions_ready
+                && self.passed
+                && !self.runtime.state.input
+                && let Err(error) = self.runtime.resume()
+            {
+                self.command_error(&error);
+            }
+            ui.input_permissions_ready = ready;
+        }
         ui.app_version = crate::constants::VERSION.into();
         ui.data_directory = self
             .path
@@ -317,7 +363,7 @@ impl Controller {
                 .collect();
             ui.paired_devices = rows
                 .iter()
-                .filter(|r| r.paired)
+                .filter(|r| ui.capabilities.subscription_receivers || r.paired)
                 .cloned()
                 .collect::<Vec<_>>();
         }

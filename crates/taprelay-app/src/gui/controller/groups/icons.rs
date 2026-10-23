@@ -32,7 +32,10 @@ impl IconCache {
             icon: crate::platform::foreground_apps::executable_icon(path),
             name: crate::platform::foreground_apps::executable_name(path),
             // File status may block on a disconnected share; keep it off the UI thread.
+            #[cfg(windows)]
             missing: !std::path::Path::new(path).is_file(),
+            #[cfg(target_os = "macos")]
+            missing: !crate::platform::foreground_apps::exists(path),
         })
     }
 

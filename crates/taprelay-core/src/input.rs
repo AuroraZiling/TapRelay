@@ -4,6 +4,29 @@ use crate::function::{ModifierSet, PrimaryInput, Shortcut};
 use serde::{Deserialize, Serialize};
 use std::{fmt, time::Instant};
 
+/// Stable physical position identifier
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PhysicalKey(u8);
+impl PhysicalKey {
+    pub const fn from_legacy_code(code: u8) -> Self {
+        Self(code)
+    }
+    pub const fn legacy_code(self) -> u8 {
+        self.0
+    }
+}
+/// USB keyboard page (0x07) usage, deliberately distinct from PhysicalKey.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct KeyboardUsage(u8);
+impl KeyboardUsage {
+    pub const fn new(usage: u8) -> Self {
+        Self(usage)
+    }
+    pub const fn get(self) -> u8 {
+        self.0
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[repr(u8)]
 #[serde(rename_all = "lowercase")]

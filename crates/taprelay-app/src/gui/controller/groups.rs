@@ -184,6 +184,9 @@ impl Controller {
             }
             "show-selected" => ui.groups.choosing_running = false,
             "picked" | "add" => {
+                #[cfg(target_os = "macos")]
+                let path = crate::platform::foreground_apps::identity_for_selection(value)?;
+                #[cfg(windows)]
                 let path = value.to_string();
                 anyhow::ensure!(
                     taprelay_core::foreground_app::valid_executable(&path),

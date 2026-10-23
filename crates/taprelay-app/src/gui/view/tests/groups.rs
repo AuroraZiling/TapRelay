@@ -106,7 +106,14 @@ fn invalid_group_name_stays_in_editor_and_save_persists(cx: &mut TestAppContext)
         window.render_frame(cx);
         window.click("group-create", cx);
         window.click("group-name", cx);
-        window.press("ctrl-a", cx);
+        window.press(
+            if cfg!(target_os = "macos") {
+                "cmd-a"
+            } else {
+                "ctrl-a"
+            },
+            cx,
+        );
         window.input("Games", cx);
         window.click("group-save", cx);
     })
@@ -120,7 +127,14 @@ fn invalid_group_name_stays_in_editor_and_save_persists(cx: &mut TestAppContext)
         window.render_frame(cx);
         window.click(edit.clone(), cx);
         window.click("group-name", cx);
-        window.press("ctrl-a", cx);
+        window.press(
+            if cfg!(target_os = "macos") {
+                "cmd-a"
+            } else {
+                "ctrl-a"
+            },
+            cx,
+        );
         window.press("backspace", cx);
         window.press("enter", cx);
     })
@@ -173,7 +187,14 @@ fn creates_selects_removes_and_deletes_an_application_group_through_controls(
         window.render_frame(cx);
         window.click("group-create", cx);
         window.click("group-name", cx);
-        window.press("ctrl-a", cx);
+        window.press(
+            if cfg!(target_os = "macos") {
+                "cmd-a"
+            } else {
+                "ctrl-a"
+            },
+            cx,
+        );
         window.input("Editors 中文", cx);
         let add = gpui_kit::SharedString::from(format!("group-app-{app}"));
         assert!(window.find(add.clone()).visible());

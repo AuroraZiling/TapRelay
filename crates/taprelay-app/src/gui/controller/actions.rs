@@ -120,6 +120,25 @@ impl Controller {
                 self.last_error.clear();
             }
             Action::BluetoothSettings => self.desktop.bluetooth_settings()?,
+            Action::NotificationSettings => self.desktop.notification_settings()?,
+            Action::TestNotification => {
+                anyhow::ensure!(
+                    desktop::CAPABILITIES.notification_permission,
+                    "Notification testing is a macOS setting"
+                );
+                if self.runtime.config.options.notifications {
+                    self.desktop
+                        .notify("TapRelay", &self.tr("settings.notifications.mac.test_body"));
+                }
+            }
+            Action::LoginSettings => self.desktop.login_settings()?,
+            Action::InputMonitoringSettings | Action::BluetoothPermissions => {
+                desktop::open_settings(if name == Action::InputMonitoringSettings {
+                    desktop::SettingsTarget::InputMonitoring
+                } else {
+                    desktop::SettingsTarget::BluetoothPermission
+                })?;
+            }
             Action::Repository => desktop::open("https://github.com/AuroraZiling/TapRelay")?,
             Action::License => {
                 desktop::open("https://github.com/AuroraZiling/TapRelay/blob/main/LICENSE")?
@@ -135,7 +154,7 @@ impl Controller {
                     .to_string_lossy(),
             )?,
             Action::LogsFolder => {
-                desktop::open(&self.path.parent().unwrap().join("logs").to_string_lossy())?
+                desktop::open(&crate::logging::log_directory(&self.path)?.to_string_lossy())?
             }
             Action::Device | Action::PairDevice => {
                 if let Some(target) = self
@@ -240,11 +259,21 @@ impl Controller {
                 // Read back what the OS accepted instead of trusting the request.
                 self.runtime.config.options.autostart =
                     self.desktop.set_autostart(action::toggle(value)?)?;
+                if ui.capabilities.login_approval {
+                    self.sync_autostart(ui);
+                }
                 self.save_pending = true;
             }
             Action::Elevate => {
                 self.cancel_capture()?;
-                self.exit = Some(ExitIntent::Elevate);
+                #[cfg(windows)]
+                {
+                    self.exit = Some(ExitIntent::Elevate);
+                }
+                #[cfg(target_os = "macos")]
+                {
+                    desktop::open_settings(desktop::SettingsTarget::Accessibility)?;
+                }
             }
         }
         self.sync(ui);

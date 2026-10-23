@@ -5,7 +5,6 @@ use super::{
 use anyhow::{Context, Result, bail};
 use std::{
     io::BufReader,
-    os::windows::process::CommandExt,
     process::{Child, Stdio},
     sync::{
         Arc,
@@ -20,6 +19,11 @@ pub(super) struct Native;
 
 impl Execution for Native {
     type Worker = Worker;
+
+    #[cfg(target_os = "macos")]
+    fn live_profile_switch(&self) -> bool {
+        true
+    }
 
     fn start(&mut self, initial: Command) -> Result<Worker> {
         Worker::start(initial)
@@ -54,8 +58,12 @@ impl Worker {
     }
 
     fn start_command(command: &mut std::process::Command, initial: Command) -> Result<Self> {
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000);
+        }
         let child = command
-            .creation_flags(0x08000000)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -275,6 +283,7 @@ mod tests {
         assert!(protocol::read::<Command>(&mut reader).unwrap().is_none());
     }
 
+    #[cfg(windows)]
     fn probe(script: &str) -> Worker {
         let mut command = std::process::Command::new("powershell.exe");
         command.args([
@@ -294,6 +303,7 @@ mod tests {
         worker
     }
 
+    #[cfg(windows)]
     #[test]
     fn native_process_exchanges_frames_and_exits_normally_while_status_queue_is_full() {
         let mut worker = probe(
@@ -319,6 +329,7 @@ mod tests {
         assert!(worker.send(Command::Refresh).is_err());
     }
 
+    #[cfg(windows)]
     #[test]
     fn native_process_that_ignores_shutdown_is_killed_and_reaped() {
         let mut worker = probe(
@@ -328,6 +339,42 @@ mod tests {
             Start-Sleep -Seconds 60
             exit 0
         "#,
+        );
+        worker.stop().unwrap();
+        assert!(worker.exited);
+        assert!(!worker.child.try_wait().unwrap().unwrap().success());
+        assert!(worker.check().is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    fn probe_sh(script: &str) -> Worker {
+        let mut command = std::process::Command::new("/bin/sh");
+        command.args(["-c", script]);
+        let worker = Worker::start_command(&mut command, Command::Refresh).unwrap();
+        let message = worker
+            .incoming
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .unwrap();
+        assert!(matches!(message,Message::Failure(message) if message=="probe-ready"));
+        worker
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_worker_drains_full_status_queue_and_reaps_normal_exit() {
+        let mut worker = probe_sh(
+            r#"read -r line; printf '%s\n' '{"Failure":"probe-ready"}'; while read -r line; do if [ "$line" = '"Shutdown"' ]; then i=0; while [ "$i" -lt 512 ]; do printf '%s\n' '{"Failure":"final-status"}'; i=$((i+1)); done; exit 0; fi; done; exit 1"#,
+        );
+        worker.check().unwrap();
+        worker.stop().unwrap();
+        assert!(worker.exited);
+        assert!(worker.child.try_wait().unwrap().unwrap().success());
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_worker_that_ignores_shutdown_is_killed_and_reaped() {
+        let mut worker = probe_sh(
+            r#"read -r line; printf '%s\n' '{"Failure":"probe-ready"}'; exec /bin/sleep 60"#,
         );
         worker.stop().unwrap();
         assert!(worker.exited);

@@ -2,6 +2,7 @@
 members = [
     "crates/taprelay-core",
     "crates/taprelay-windows",
+    "crates/taprelay-macos",
     "crates/taprelay-app",
 ]
 exclude = ["vendor/gpui-pre-windows"]

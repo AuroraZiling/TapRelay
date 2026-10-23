@@ -59,6 +59,8 @@ pub(super) struct AppView {
     group_focus_request: i32,
     mapping_focus_request: i32,
     last_progress_message: String,
+    #[cfg(target_os = "macos")]
+    menu_locale: String,
     last_tick: Instant,
     _subscriptions: Vec<Subscription>,
     _pump: Task<()>,
@@ -152,7 +154,6 @@ impl AppView {
         let pump = cx.spawn_in(window, async move |this, cx| {
             loop {
                 let delay = this.update_in(cx, |this, window, cx| {
-                    #[cfg(windows)]
                     this.controller.overlay.tick();
                     if this.last_tick.elapsed() >= Duration::from_millis(50) {
                         this.pull_inputs(cx);
@@ -163,6 +164,14 @@ impl AppView {
                                 DesktopEvent::Toggle => Action::Listen,
                                 DesktopEvent::Quit => Action::Quit,
                                 DesktopEvent::Resume => Action::Resume,
+                                #[cfg(target_os = "macos")]
+                                DesktopEvent::Close => Action::Close,
+                                #[cfg(target_os = "macos")]
+                                DesktopEvent::Settings => {
+                                    this.ui.mode = 2;
+                                    this.ui.page = 3;
+                                    Action::Show
+                                }
                             };
                             if let Err(error) = this.controller.action(&mut this.ui, action, "") {
                                 this.controller.command_error(&error);
@@ -175,7 +184,6 @@ impl AppView {
                             cx.notify();
                         }
                     }
-                    #[cfg(windows)]
                     if this.controller.overlay.is_visible() {
                         return Duration::from_millis(16);
                     }
@@ -214,6 +222,8 @@ impl AppView {
             group_focus_request: 0,
             mapping_focus_request: 0,
             last_progress_message: String::new(),
+            #[cfg(target_os = "macos")]
+            menu_locale: String::new(),
             last_tick: Instant::now() - Duration::from_millis(50),
             _subscriptions: subscriptions,
             _pump: pump,

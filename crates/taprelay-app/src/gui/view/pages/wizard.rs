@@ -58,7 +58,10 @@ impl AppView {
                         header.child(self.receiver_description(cx))
                     }),
             );
-        if step == 2 && !self.ui.elevated {
+        if step == 2
+            && ((cfg!(windows) && !self.ui.elevated)
+                || (cfg!(target_os = "macos") && !self.ui.input_permissions_ready))
+        {
             body = body.child(self.admin_alert(cx));
         }
         body = body.child(match step {

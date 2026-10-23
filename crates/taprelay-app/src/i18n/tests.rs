@@ -31,8 +31,17 @@ fn every_catalog_key_is_loaded_by_the_shared_backend() {
                 );
             }
         }
-        for (key, value) in catalog {
-            assert_eq!(t!(&key, locale = id), value.as_str().unwrap(), "{id}/{key}");
+        for (key, value) in &catalog {
+            assert_eq!(
+                t!(key.as_str(), locale = id),
+                value.as_str().unwrap(),
+                "{id}/{key}"
+            );
+            let platform_key = platform_key(key);
+            assert!(
+                catalog.contains_key(platform_key),
+                "Missing platform translation: {id}/{key} -> {platform_key}"
+            );
         }
     }
 }

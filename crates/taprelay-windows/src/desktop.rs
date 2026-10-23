@@ -257,7 +257,7 @@ fn truncate_utf16(value: &str, units: usize) -> String {
 
 /// App artwork, plus lower-right state dot. Colors: green/gray/amber/red.
 pub fn icon_rgba(state: u8) -> Vec<u8> {
-    let mut rgba = include_bytes!("../resources/taprelay-32.rgba").to_vec();
+    let mut rgba = include_bytes!("../../../resources/taprelay-32.rgba").to_vec();
     let dot = match state {
         0 => [46, 180, 112, 255],
         1 => [139, 145, 154, 255],

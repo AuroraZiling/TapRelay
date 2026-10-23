@@ -123,10 +123,11 @@ pub fn page_status_key(state: &Snapshot) -> &'static str {
         DiscoveryState::Failed => keys::RECEIVER_SCAN_FAILED,
         DiscoveryState::Scanning => keys::RECEIVER_SCANNING,
         DiscoveryState::ResultsAvailable
-            if !state
-                .targets
-                .iter()
-                .any(|target| target.pairing == Knowledge::Yes) =>
+            if !state.targets.iter().any(|target| {
+                target.pairing == Knowledge::Yes
+                    || (crate::platform::desktop::CAPABILITIES.subscription_receivers
+                        && target.subscribed == Knowledge::Yes)
+            }) =>
         {
             keys::RECEIVER_EMPTY
         }

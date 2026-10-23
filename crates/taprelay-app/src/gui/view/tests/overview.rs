@@ -93,6 +93,7 @@ fn overview_scrolls_to_last_shortcut_and_opens_binding_settings(cx: &mut TestApp
     cx.update_window(handle, |_, window, cx| {
         view.update(cx, |view, cx| {
             view.ui.elevated = true;
+            view.ui.input_permissions_ready = true;
             view.ui.bindings = (0..60)
                 .map(|index| crate::gui::presentation::BindingRow {
                     text: format!("Ctrl + Shift + Shortcut {index}"),

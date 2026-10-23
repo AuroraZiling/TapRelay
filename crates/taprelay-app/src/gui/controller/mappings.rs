@@ -575,13 +575,12 @@ impl Controller {
                     .iter()
                     .find_map(|(key, value)| (*value == usage).then_some(*key))
                     .unwrap_or(0);
-                let mut parts = ModifierSet {
+                let mut parts = input::modifier_labels(ModifierSet {
                     ctrl: modifiers & 1 != 0,
                     shift: modifiers & 2 != 0,
                     alt: modifiers & 4 != 0,
                     win: modifiers & 8 != 0,
-                }
-                .labels();
+                });
                 for part in &mut parts {
                     if part == "Win" {
                         *part = "Win / Command".into();

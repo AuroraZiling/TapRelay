@@ -34,7 +34,9 @@ impl AppView {
                 ),
             );
         }
-        if !self.ui.elevated {
+        if (cfg!(windows) && !self.ui.elevated)
+            || (cfg!(target_os = "macos") && !self.ui.input_permissions_ready)
+        {
             content = content.child(self.admin_alert(cx));
         }
         content = content.child(

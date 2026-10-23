@@ -77,6 +77,11 @@ impl AppView {
             Theme::change(mode, Some(window), cx);
         }
         gpui_kit::component::set_locale(&self.ui.locale);
+        #[cfg(target_os = "macos")]
+        if self.menu_locale != self.ui.locale {
+            crate::gui::bootstrap::update_macos_menu(&self.ui.locale, cx);
+            self.menu_locale = self.ui.locale.clone();
+        }
         self.sync_report_rate(window, cx);
         self.sync_scope_pickers(window, cx);
         self.sync_output_choice(window, cx);
@@ -164,6 +169,8 @@ impl AppView {
                     if let Some(handle) = native_handle(window) {
                         desktop::set_window_visible(handle, command == WindowCommand::Show);
                     }
+                    #[cfg(target_os = "macos")]
+                    desktop::set_app_window_visible(command == WindowCommand::Show);
                     if command == WindowCommand::Show {
                         window.activate_window();
                     }
@@ -202,6 +209,7 @@ impl AppView {
             }
             return;
         }
+        #[cfg(windows)]
         if desktop::ui_input_is_injected() {
             return;
         }

@@ -212,6 +212,7 @@ impl Runtime {
             link.set_reverse_scroll(self.passthrough_reverse_scroll);
         }
         if let Some(input) = &self.input {
+            input.set_transport_ready(self.state.ready);
             input.attach_passthrough(link);
             if let Some(error) = input.passthrough_error() {
                 input_error = Some(error);
@@ -594,7 +595,7 @@ impl Runtime {
                         self.delivered += 1;
                         tracing::info!(
                             action = ?receipt.action,
-                            "Windows accepted HID notification; receiver execution is not acknowledged"
+                            "Native backend accepted HID notification; receiver execution is not acknowledged"
                         );
                     }
                     Err(BackendError::Stale | BackendError::TimedOut) => {}

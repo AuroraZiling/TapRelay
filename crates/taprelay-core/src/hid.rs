@@ -7,6 +7,7 @@
 use crate::{command::MediaCommand, ports::BackendError};
 use std::collections::{BTreeMap, BTreeSet};
 mod input;
+pub mod session;
 pub use input::{InputReports, keyboard_usage};
 
 pub const CONSUMER_REPORT_ID: u8 = 1;

@@ -26,7 +26,6 @@ impl Controller {
         {
             self.passthrough_feedback(notice);
         }
-        #[cfg(windows)]
         {
             self.overlay.update(
                 passthrough_notice,
@@ -36,8 +35,6 @@ impl Controller {
                 ui.overlay_foreground,
             );
         }
-        #[cfg(not(windows))]
-        let _ = passthrough_notice;
         if self.exit.is_some() {
             if let Err(error) = self.finish_exit(ui) {
                 self.command_error(&error);
@@ -47,7 +44,11 @@ impl Controller {
             return;
         }
         let state = &self.runtime.state;
-        let passed = state.adapter && state.peripheral && state.service && state.broadcasting;
+        // macOS permissions may be denied or awaiting a system prompt. Keep
+        // configuration accessible while reporting transport readiness in the
+        // receiver page
+        let passed = cfg!(target_os = "macos")
+            || (state.adapter && state.peripheral && state.service && state.broadcasting);
         if passed || state.last_error.is_some() {
             self.recovering = false;
         }
@@ -55,7 +56,7 @@ impl Controller {
             && passed
             && self.fatal.is_none()
             && !self.runtime.stopped()
-            && state.last_error.is_none()
+            && (cfg!(target_os = "macos") || state.last_error.is_none())
         {
             self.passed = true;
             ui.mode = if self.runtime.config.wizard.dismissed {
@@ -209,6 +210,7 @@ impl Controller {
                 self.shutdown = true;
                 ui.window_command = Some(WindowCommand::Quit);
             }
+            #[cfg(windows)]
             Some(ExitIntent::Elevate) if !self.runtime.busy() => {
                 self.save_geometry(ui);
                 self.runtime.config.save(&self.path)?;

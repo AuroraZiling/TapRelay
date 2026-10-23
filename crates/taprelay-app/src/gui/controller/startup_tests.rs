@@ -30,6 +30,10 @@ fn controller(state: Snapshot) -> (Controller, tempfile::TempDir) {
             running_apps: Vec::new(),
             notifications: Default::default(),
             bluetooth_settings_opened: false,
+            login_status: None,
+            login_settings_opened: false,
+            notification_permission: Default::default(),
+            notification_settings_opened: false,
         },
         Default::default(),
         None,
@@ -70,6 +74,7 @@ fn bluetooth_settings_open_without_transport_after_startup_failure() {
 }
 
 #[test]
+#[cfg(windows)]
 fn incomplete_checks_keep_startup_pending_without_a_presentation_delay() {
     for completed in 0..4 {
         let (mut controller, _folder) = controller(Snapshot {
@@ -130,7 +135,7 @@ fn startup_errors_show_the_window_even_when_start_hidden_is_enabled() {
         let mut ui = Presentation::default();
         controller.tick(&mut ui);
         assert_eq!(controller.startup_state(), StartupState::Failed);
-        assert!(!controller.passed);
+        assert_eq!(controller.passed, cfg!(target_os = "macos") && !fatal);
         assert!(!controller.hidden);
         assert!(!controller.startup_pending);
         assert_eq!(ui.window_command, Some(WindowCommand::Show));
@@ -152,6 +157,7 @@ fn failure_takes_priority_over_previously_passed_checks() {
 }
 
 #[test]
+#[cfg(windows)]
 fn startup_timeout_is_a_failure_instead_of_a_presentation_delay() {
     let (mut controller, _folder) = controller(Snapshot::default());
     controller.started = Instant::now() - Duration::from_secs(31);
@@ -162,6 +168,25 @@ fn startup_timeout_is_a_failure_instead_of_a_presentation_delay() {
     assert_eq!(ui.window_command, Some(WindowCommand::Show));
     assert!(!ui.busy);
     assert!(ui.checks.iter().any(|row| row.state == 3));
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn denied_or_pending_bluetooth_permissions_leave_configuration_accessible() {
+    for error in [None, Some("Bluetooth permission denied".into())] {
+        let (mut controller, _folder) = controller(Snapshot {
+            last_error: error,
+            ..Default::default()
+        });
+        let mut ui = Presentation::default();
+        controller.tick(&mut ui);
+        assert_eq!(ui.mode, 2);
+        assert!(!controller.hidden);
+        assert!(!ui.ready);
+        assert!(!ui.busy);
+        assert!(!ui.bluetooth_available);
+        assert_eq!(ui.window_command, Some(WindowCommand::Show));
+    }
 }
 
 #[test]

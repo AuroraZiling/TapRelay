@@ -202,6 +202,10 @@ trait WorkerProcess: Send {
 
 trait Execution: Send + 'static {
     type Worker: WorkerProcess;
+    #[cfg(target_os = "macos")]
+    fn live_profile_switch(&self) -> bool {
+        false
+    }
     fn start(&mut self, initial: Command) -> Result<Self::Worker>;
     fn now(&self) -> Instant;
     fn wait(&mut self, duration: Duration);
@@ -350,6 +354,35 @@ impl<E: Execution> Supervisor<E> {
         Ok(())
     }
 
+    fn change_profile(&mut self, profile: Profile) -> Result<()> {
+        #[cfg(target_os = "macos")]
+        if self.execution.live_profile_switch() && self.native_generation.is_some() {
+            // macOS keeps one Full service schema. Only retire input admission
+            // and re-arm a fresh generation; keep advertising and subscriptions.
+            self.link.suspend();
+            self.link.set_profile_available(false);
+            self.revision.fetch_add(1, Ordering::AcqRel);
+            self.blocked_native = self.native_generation;
+            self.profile = profile;
+            self.capture_request = if profile == Profile::Full {
+                self.link.profile_request()
+            } else {
+                0
+            };
+            self.arm = None;
+            self.armed = false;
+            self.snapshot.ready = false;
+            self.switching_since = Some(self.execution.now());
+            for (_, pending) in std::mem::take(&mut self.pending) {
+                let _ = pending.reply.send(Err(BackendError::Stale));
+            }
+            self.worker()?.send(Command::SetProfile(profile))?;
+            self.publish_snapshot();
+            return Ok(());
+        }
+        self.replace_worker(profile, self.publish)
+    }
+
     fn initial_command(&self, profile: Profile, publish: bool) -> Command {
         let target = publish
             .then(|| {
@@ -413,7 +446,7 @@ impl<E: Execution> Supervisor<E> {
         if desired != self.profile
             || (desired == Profile::Full && self.capture_request != self.link.profile_request())
         {
-            self.replace_worker(desired, self.publish)?;
+            self.change_profile(desired)?;
         }
         for _ in 0..128 {
             let Some(message) = self.worker()?.receive()? else {
@@ -609,6 +642,13 @@ impl<E: Execution> Supervisor<E> {
                 mut state,
                 input_available,
             } => {
+                // A cancelled in-place switch may still have a newer status
+                // in flight for the previous routing mode. Do not arm it or
+                // publish it as readiness for the current request.
+                #[cfg(target_os = "macos")]
+                if self.execution.live_profile_switch() && state.hid_profile != self.profile {
+                    return Ok(());
+                }
                 let generation = state.generation;
                 if self
                     .native_generation

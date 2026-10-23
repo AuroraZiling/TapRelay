@@ -2,7 +2,7 @@ use crate::runtime::passthrough::Notice;
 
 #[derive(Default)]
 pub struct Overlay {
-    native: Option<taprelay_windows::overlay::Overlay>,
+    native: Option<crate::platform::desktop::Overlay>,
     notice: Option<Notice>,
     appearance: Option<(String, [u8; 3], [u8; 3])>,
 }
@@ -36,7 +36,7 @@ impl Overlay {
                 && let Some(notice) = &self.notice
             {
                 if native.is_none() {
-                    *native = Some(taprelay_windows::overlay::Overlay::new()?);
+                    *native = Some(crate::platform::desktop::Overlay::new()?);
                 }
                 let (prefix, device, suffix) = notice.text_parts(locale);
                 native.as_mut().unwrap().update(

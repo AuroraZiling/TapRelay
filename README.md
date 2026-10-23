@@ -30,14 +30,14 @@
 
 ## 🖥️ Requirements
 
-- Windows x64 (*macOS is not supported yet*)
+- Windows x64, or a Mac running macOS 13 or later.
 - A Bluetooth adapter and driver that support Bluetooth Low Energy (BLE) peripheral mode.
 - A receiver that accepts media controls over BLE HID.
 - For custom mappings and passthrough, the receiver must also support the corresponding Bluetooth HID keyboard or mouse input.
 
 ## 🚀 Download and use
 
-*Only a portable version is currently available.*
+### Windows
 
 1. Download `TapRelay_<version>_Windows_x64.zip` from [Releases](https://github.com/AuroraZiling/TapRelay/releases) and extract it to a writable folder.
 2. Run `TapRelay.exe`. TapRelay requests administrator access by default. If you cancel the request, it continues without elevation, but shortcuts may not work in applications running as administrator.
@@ -45,15 +45,31 @@
 4. Pair and connect the receiver to the PC in system Bluetooth settings, then select it in TapRelay.
 5. Start playback on the receiver and use **Test Play/Pause**.
 
+### macOS
+
+The macOS port is [still in progress](docs/migration-progress.md).
+
+1. Download the macOS ZIP from [Releases](https://github.com/AuroraZiling/TapRelay/releases) and choose:
+  - `arm64` for Apple Silicon (M-series) chips
+  - `x64` for Intel
+2. Extract it and move `TapRelay.app` to Applications.
+3. Open TapRelay and follow the prompts to allow Bluetooth, Accessibility and Input Monitoring.
+4. In the setup wizard, enable the functions you need and assign shortcuts.
+5. In the receiver's Bluetooth settings, pair and connect it to the Mac, then select it in TapRelay.
+6. Start playback on the receiver and use **Test Play/Pause**.
+
+To update on macOS, quit TapRelay and replace the app in Applications.
+
 ## ⚙️ Settings and environment
 
-- The folder you extract TapRelay to must be writable because `config.json` and the `logs/` folder are stored beside `TapRelay.exe`.
+- On Windows, the folder you extract TapRelay to must be writable because `config.json` and the `logs/` folder are stored beside `TapRelay.exe`.
+- On macOS, open their folders from Settings.
 - The default log level is `info`. To record more detail when troubleshooting, run `TapRelay.exe --log-level debug`. Available levels are `off`, `error`, `warn`, `info`, `debug`, and `trace`.
-- A device shown as paired or connected in system Bluetooth settings may not yet be able to receive TapRelay commands. If TapRelay reports that the session is not ready, connect to this PC from the receiver's Bluetooth settings, then check the status in TapRelay again.
+- A device shown as paired or connected in system Bluetooth settings may not yet be able to receive TapRelay commands. If TapRelay reports that the session is not ready, connect to your computer from the receiver's Bluetooth settings, then check the status in TapRelay again.
 
 ## ⚠️ Limitations
 
-- With passthrough off, only the main key or mouse button of a matching shortcut is blocked; Shift, Ctrl, Alt and Win still reach the local application. For example, a `Ctrl+P` binding blocks `P`, not Ctrl. Alt or Win combinations may still open system menus or trigger other local system actions.
+- With passthrough off, only the main key or mouse button of a matching shortcut is blocked; modifiers (Shift, Ctrl, Alt and Win on Windows; Shift, Control, Option and Command on Mac) still reach the local application. For example, a `Ctrl+P` binding blocks `P`, not Ctrl. Alt or Win combinations may still open system menus or trigger other local system actions.
 - Test with your own receiver, Bluetooth adapter, driver and games to confirm compatibility.
 
 <a id="build"></a>
@@ -81,6 +97,8 @@ cargo rustc --release --locked -p taprelay-app -- -C target-feature=+crt-static
 ```
 
 The output is `target/release/taprelay.exe`.
+
+For macOS, see the [build guide](docs/macos.md).
 
 ## 💬 Feedback and contributions
 

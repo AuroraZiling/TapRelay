@@ -1,0 +1,332 @@
+name: Desktop Release
+
+on:
+  push:
+    tags: ['v*']
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  check:
+    name: Check
+    runs-on: windows-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: nightly-2026-09-20
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          shared-key: windows-check
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+
+  build:
+    name: Build
+    runs-on: windows-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      artifact-id: ${{ steps.artifact.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: nightly-2026-09-20
+      - name: Set release version from tag
+        id: version
+        shell: python
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          import os, re, subprocess
+          from pathlib import Path
+
+          tag = os.environ["TAG_NAME"]
+          if not re.fullmatch(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", tag):
+              raise SystemExit("Release tags must use vX.Y.Z.")
+          version = tag[1:]
+          manifest = Path("Cargo.toml")
+          content, count = re.subn(
+              r'(\[workspace\.package\]\s*version\s*=\s*")[^"]+(")',
+              lambda m: f'{m[1]}{version}{m[2]}',
+              manifest.read_text(encoding="utf-8"),
+          )
+          if count != 1:
+              raise SystemExit("Expected one workspace.package.version in Cargo.toml.")
+          manifest.write_text(content, encoding="utf-8")
+          subprocess.run(["cargo", "update", "--workspace"], check=True)
+          for target, value in [("GITHUB_OUTPUT", f"version={version}"), ("GITHUB_ENV", f"TAPRELAY_VERSION={version}")]:
+              with open(os.environ[target], "a", encoding="utf-8") as output:
+                  output.write(value + "\n")
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          shared-key: windows-release
+      - run: cargo rustc --release --locked -p taprelay-app -- -C target-feature=+crt-static
+      - name: Package portable ZIP
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Path release-assets -Force | Out-Null
+          New-Item -ItemType Directory -Path release-package -Force | Out-Null
+          Copy-Item -LiteralPath target/release/taprelay.exe -Destination release-package/TapRelay.exe
+          Copy-Item -LiteralPath LICENSE -Destination release-package/LICENSE
+          Copy-Item -LiteralPath THIRD_PARTY_NOTICES.md -Destination release-package/THIRD_PARTY_NOTICES.md
+          $files = @('release-package/TapRelay.exe', 'release-package/LICENSE', 'release-package/THIRD_PARTY_NOTICES.md')
+          Compress-Archive -LiteralPath $files -DestinationPath "release-assets/TapRelay_$($env:VERSION)_Windows_x64.zip" -Force
+      - name: Upload release package
+        if: startsWith(github.ref, 'refs/tags/')
+        id: artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: windows-release
+          path: release-assets/TapRelay_${{ steps.version.outputs.version }}_Windows_x64.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+          overwrite: true
+
+  macos:
+    name: macOS ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-apple-darwin
+            runner: macos-26
+          - arch: x64
+            target: x86_64-apple-darwin
+            runner: macos-26-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '13.0'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: nightly-2026-09-20
+          components: rustfmt, clippy
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          shared-key: macos-${{ matrix.arch }}
+      - run: cargo fmt --all -- --check
+      - run: cargo build --workspace --locked
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - name: Set release version from tag
+        shell: python
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          import os, re, subprocess
+          from pathlib import Path
+          tag = os.environ["TAG_NAME"]
+          if not re.fullmatch(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", tag):
+              raise SystemExit("Release tags must use vX.Y.Z.")
+          version = tag[1:]
+          manifest = Path("Cargo.toml")
+          content, count = re.subn(
+              r'(\[workspace\.package\]\s*version\s*=\s*")[^"]+(")',
+              lambda m: f'{m[1]}{version}{m[2]}', manifest.read_text(encoding="utf-8"),
+          )
+          if count != 1:
+              raise SystemExit("Expected one workspace.package.version.")
+          manifest.write_text(content, encoding="utf-8")
+          subprocess.run(["cargo", "update", "--workspace"], check=True)
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as out:
+              out.write(f"TAPRELAY_VERSION={version}\n")
+      - name: Build release
+        run: cargo build --release --locked -p taprelay-app --target "${{ matrix.target }}"
+      - name: Sign, notarize and package
+        id: signing
+        shell: bash
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          NOTARY_KEY_BASE64: ${{ secrets.MACOS_NOTARY_KEY_BASE64 }}
+          NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.MACOS_NOTARY_ISSUER }}
+          TAPRELAY_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          TAPRELAY_TARGET: ${{ matrix.target }}
+        run: |
+          set +x
+          set -euo pipefail
+          : "${CERTIFICATE_BASE64:?Missing Developer ID certificate}"
+          : "${CERTIFICATE_PASSWORD:?Missing certificate password}"
+          : "${NOTARY_KEY_BASE64:?Missing notary API key}"
+          : "${NOTARY_KEY_ID:?Missing notary key ID}"
+          : "${NOTARY_ISSUER:?Missing notary issuer}"
+          : "${TAPRELAY_SIGN_IDENTITY:?Missing Developer ID signing identity}"
+          umask 077
+          signing_dir=$(mktemp -d "$RUNNER_TEMP/taprelay-signing.XXXXXX")
+          keychain="$signing_dir/taprelay.keychain-db"
+          cleanup() {
+            security delete-keychain "$keychain" >/dev/null 2>&1 || true
+            rm -rf "$signing_dir"
+          }
+          trap cleanup EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          printf 'signing_dir=%s\n' "$signing_dir" >> "$GITHUB_OUTPUT"
+          printf '%s' "$CERTIFICATE_BASE64" | base64 --decode > "$signing_dir/certificate.p12"
+          printf '%s' "$NOTARY_KEY_BASE64" | base64 --decode > "$signing_dir/notary.p8"
+          unset CERTIFICATE_BASE64 NOTARY_KEY_BASE64
+          # GitHub masks the stored Base64 secret, not its decoded PEM lines.
+          while IFS= read -r line || [[ -n "$line" ]]; do
+            [[ -z "$line" ]] || printf '::add-mask::%s\n' "$line"
+          done < "$signing_dir/notary.p8"
+          unset line
+          keychain_password=$(openssl rand -hex 32)
+          printf '::add-mask::%s\n' "$keychain_password"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$signing_dir/certificate.p12" -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security -t cert -f pkcs12 -k "$keychain"
+          unset CERTIFICATE_PASSWORD
+          rm -f "$signing_dir/certificate.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" > /dev/null
+          unset keychain_password
+          export TAPRELAY_SIGN_KEYCHAIN="$keychain"
+          export TAPRELAY_NOTARY_KEYCHAIN="$keychain"
+          export TAPRELAY_NOTARY_PROFILE=taprelay-ci
+          xcrun notarytool store-credentials "$TAPRELAY_NOTARY_PROFILE" --keychain "$keychain" \
+            --key "$signing_dir/notary.p8" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER"
+          unset NOTARY_KEY_ID NOTARY_ISSUER
+          rm -f "$signing_dir/notary.p8"
+          scripts/package-macos.sh --target "$TAPRELAY_TARGET" --release --notarize --skip-build
+      - name: Remove signing credentials
+        if: ${{ always() && steps.signing.outputs.signing_dir != '' }}
+        shell: bash
+        env:
+          SIGNING_DIR: ${{ steps.signing.outputs.signing_dir }}
+        run: |
+          set -euo pipefail
+          # EXIT handles normal failures; this also runs after step cancellation.
+          if [[ ${SIGNING_DIR%/*} != "$RUNNER_TEMP" || ${SIGNING_DIR##*/} != taprelay-signing.* ]]; then
+            echo "Unexpected signing directory" >&2
+            exit 1
+          fi
+          security delete-keychain "$SIGNING_DIR/taprelay.keychain-db" >/dev/null 2>&1 || true
+          rm -rf "$SIGNING_DIR"
+      - name: Upload release package
+        id: artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: macos-${{ matrix.arch }}-release
+          path: artifacts/TapRelay_${{ env.TAPRELAY_VERSION }}_macOS_${{ matrix.arch }}.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  release:
+    name: Publish
+    needs: [check, build, macos]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          path: release-assets
+          merge-multiple: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: macos-arm64-release
+          path: release-assets
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: macos-x64-release
+          path: release-assets
+      - name: Publish GitHub Release
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+          VERSION: ${{ needs.build.outputs.version }}
+        with:
+          script: |
+            const fs = require('node:fs');
+            const repo = context.repo;
+            const tag = process.env.TAG_NAME;
+            // Never recreate a tag removed while the build was running.
+            let { data: ref } = await github.rest.git.getRef({ ...repo, ref: `tags/${tag}` });
+            let object = ref.object;
+            while (object.type === 'tag') {
+              const { data } = await github.rest.git.getTag({ ...repo, tag_sha: object.sha });
+              object = data.object;
+            }
+            if (object.type !== 'commit' || object.sha !== context.sha) {
+              throw new Error('The tag no longer points to the commit that was built.');
+            }
+            const names = [
+              `TapRelay_${process.env.VERSION}_Windows_x64.zip`,
+              `TapRelay_${process.env.VERSION}_macOS_arm64.zip`,
+              `TapRelay_${process.env.VERSION}_macOS_x64.zip`,
+            ];
+            const packages = names.map(name => ({ name, asset: fs.readFileSync(`release-assets/${name}`) }));
+            if (packages.some(p => !p.asset.length)) throw new Error('Release ZIP is empty.');
+            let release;
+            try {
+              ({ data: release } = await github.rest.repos.getReleaseByTag({ ...repo, tag }));
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              // The tag endpoint only promises published releases. Resume a draft
+              // left by a failed upload before attempting to create another one.
+              const releases = await github.paginate(github.rest.repos.listReleases, {
+                ...repo, per_page: 100,
+              });
+              release = releases.find(item => item.draft && item.tag_name === tag);
+              if (!release) {
+                ({ data: release } = await github.rest.repos.createRelease({
+                  ...repo, tag_name: tag, name: `TapRelay ${tag}`,
+                  draft: true, prerelease: false, generate_release_notes: true,
+                }));
+              }
+            }
+            const assets = await github.paginate(github.rest.repos.listReleaseAssets, {
+              ...repo, release_id: release.id, per_page: 100,
+            });
+            for (const { name, asset } of packages) {
+              for (const existing of assets.filter(asset => asset.name === name)) {
+                await github.rest.repos.deleteReleaseAsset({ ...repo, asset_id: existing.id });
+              }
+              await github.rest.repos.uploadReleaseAsset({
+                ...repo, release_id: release.id, name,
+                headers: { 'content-type': 'application/zip', 'content-length': asset.length },
+                data: asset,
+              });
+              core.info(`Uploaded ${name} to ${release.html_url}`);
+            }
+            if (release.draft) {
+              await github.rest.repos.updateRelease({ ...repo, release_id: release.id, draft: false });
+            }

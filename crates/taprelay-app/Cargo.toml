@@ -41,3 +41,6 @@ time = { version = "0.3.55", features = ["macros"] }
 [target.'cfg(windows)'.dependencies]
 raw-window-handle = "0.6.2"
 taprelay-windows = { path = "../taprelay-windows" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+taprelay-macos = { path = "../taprelay-macos" }

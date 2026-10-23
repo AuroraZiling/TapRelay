@@ -16,6 +16,11 @@ actions! {
     EditMapping => "edit-mapping",
     Listen => "listen", Test => "test", Refresh => "refresh", Retry => "retry",
     Resume => "resume", BluetoothSettings => "bluetooth-settings",
+    LoginSettings => "login-settings",
+    InputMonitoringSettings => "input-monitoring-settings",
+    BluetoothPermissions => "bluetooth-permissions",
+    NotificationSettings => "notification-settings",
+    TestNotification => "test-notification",
     DataFolder => "data-folder", LogsFolder => "logs-folder",
     Repository => "repository", License => "license", ThirdPartyNotices => "third-party-notices",
     // Payload: the device id the row was built from.

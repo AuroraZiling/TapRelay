@@ -4541,6 +4541,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-core-bluetooth"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "79b30b9eacc37434a61377866f68b27acef9fa5496f25cc9ca8b2549032e0394"
+dependencies = [
+ "bitflags 2.13.1",
+ "dispatch2",
+ "objc2 0.6.4",
+ "objc2-core-foundation",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
 name = "objc2-core-data"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4604,6 +4617,16 @@ name = "objc2-core-image"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5d563b38d2b97209f8e861173de434bd0214cf020e3423a52624cd1d989f006"
+dependencies = [
+ "objc2 0.6.4",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
+name = "objc2-core-location"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ca347214e24bc973fc025fd0d36ebb179ff30536ed1f80252706db19ee452009"
 dependencies = [
  "objc2 0.6.4",
  "objc2-foundation 0.3.2",
@@ -4745,6 +4768,7 @@ dependencies = [
  "bitflags 2.13.1",
  "block2 0.6.2",
  "objc2 0.6.4",
+ "objc2-core-location",
  "objc2-foundation 0.3.2",
 ]
 
@@ -6734,6 +6758,7 @@ dependencies = [
  "serde",
  "serde_json",
  "taprelay-core",
+ "taprelay-macos",
  "taprelay-windows",
  "tempfile",
  "time",
@@ -6749,6 +6774,26 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "taprelay-macos"
+version = "0.1.0"
+dependencies = [
+ "block2 0.6.2",
+ "core-foundation 0.10.1",
+ "image",
+ "libc",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-core-bluetooth",
+ "objc2-core-graphics",
+ "objc2-foundation 0.3.2",
+ "objc2-user-notifications",
+ "taprelay-core",
+ "tokio",
+ "tracing",
+ "tray-icon",
 ]
 
 [[package]]

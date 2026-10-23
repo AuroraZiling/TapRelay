@@ -9,7 +9,6 @@ mod platform;
 mod runtime;
 
 fn main() {
-    #[cfg(windows)]
     if std::env::args().nth(1).as_deref() == Some("--bluetooth-worker") {
         let args: Vec<_> = std::env::args().skip(2).collect();
         if let Err(error) = logging::init_worker(&args) {

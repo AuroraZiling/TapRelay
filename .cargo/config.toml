@@ -1,0 +1,3 @@
+[env]
+# SMAppService is the baseline for macOS login startup and approval state.
+MACOSX_DEPLOYMENT_TARGET = "13.0"

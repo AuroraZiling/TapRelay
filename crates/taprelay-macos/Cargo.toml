@@ -1,0 +1,24 @@
+[package]
+name = "taprelay-macos"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+taprelay-core.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+tracing.workspace = true
+tokio.workspace = true
+block2 = "0.6.2"
+objc2 = "0.6.4"
+objc2-foundation = "0.3.2"
+objc2-core-bluetooth = "0.3.2"
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["CGEventTypes"] }
+objc2-app-kit = "0.3.2"
+objc2-user-notifications = "0.3.2"
+core-foundation = "0.10.1"
+libc = "0.2"
+image = { version = "0.25", default-features = false, features = ["png"] }
+tray-icon = { version = "=0.25.1", default-features = false }

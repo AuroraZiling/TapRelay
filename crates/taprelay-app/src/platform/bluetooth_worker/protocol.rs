@@ -18,6 +18,8 @@ pub enum Command {
         remembered: Option<Target>,
         selected: Option<String>,
     },
+    #[cfg(target_os = "macos")]
+    SetProfile(Profile),
     Pair(String),
     Refresh,
     Invalidate,
@@ -111,12 +113,12 @@ pub fn write(value: &impl Serialize, writer: &mut impl Write) -> Result<()> {
 }
 
 pub fn captured_ms(captured: std::time::Instant) -> u64 {
-    taprelay_windows::monotonic_millis()
+    crate::platform::native::monotonic_millis()
         .saturating_sub(captured.elapsed().as_millis().min(u64::MAX as u128) as u64)
 }
 
 pub fn age(captured_ms: u64) -> Option<std::time::Duration> {
-    taprelay_windows::monotonic_millis()
+    crate::platform::native::monotonic_millis()
         .checked_sub(captured_ms)
         .map(std::time::Duration::from_millis)
 }

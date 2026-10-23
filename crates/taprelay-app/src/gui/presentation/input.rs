@@ -4,18 +4,39 @@ use taprelay_core::{
     input::{InputCode, MouseButton, modifier},
 };
 
+/// Key names belong to presentation; persisted modifier bits remain portable.
+pub fn modifier_labels(modifiers: ModifierSet) -> Vec<String> {
+    let names = if cfg!(target_os = "macos") {
+        ["Control", "Shift", "Option", "Command"]
+    } else {
+        ["Ctrl", "Shift", "Alt", "Win"]
+    };
+    [
+        modifiers.ctrl,
+        modifiers.shift,
+        modifiers.alt,
+        modifiers.win,
+    ]
+    .into_iter()
+    .zip(names)
+    .filter(|(held, _)| *held)
+    .map(|(_, label)| label.to_owned())
+    .collect()
+}
+
 pub fn shortcut_labels(locale: &str, shortcut: &Shortcut) -> Vec<String> {
-    let mut labels = shortcut.modifiers.labels();
+    let mut labels = modifier_labels(shortcut.modifiers);
     labels.push(input_label(locale, shortcut.primary_code()));
     labels
 }
 
 pub fn capture_preview(locale: &str, capture: &CaptureSession) -> String {
-    let mut labels = ModifierSet::from_keys(capture.preview.iter().filter_map(|code| match code {
-        InputCode::Key(key) => Some(*key),
-        InputCode::Mouse(_) => None,
-    }))
-    .labels();
+    let mut labels = modifier_labels(ModifierSet::from_keys(capture.preview.iter().filter_map(
+        |code| match code {
+            InputCode::Key(key) => Some(*key),
+            InputCode::Mouse(_) => None,
+        },
+    )));
     labels.extend(
         capture
             .preview

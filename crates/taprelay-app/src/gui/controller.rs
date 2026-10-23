@@ -41,6 +41,7 @@ pub(super) use desktop_shell::Shell;
 
 enum ExitIntent {
     Quit,
+    #[cfg(windows)]
     Elevate,
 }
 
@@ -52,7 +53,6 @@ pub(super) struct Controller {
     )>,
     mapping_navigation: Option<(Action, String)>,
     last_mapping_capture: u64,
-    #[cfg(windows)]
     pub(super) overlay: crate::gui::overlay::Overlay,
     pub(super) foreground_app_icons: Rc<RefCell<groups::IconCache>>,
     group_draft: Option<groups::GroupDraft>,
@@ -110,7 +110,6 @@ impl Controller {
             pending_mappings: None,
             mapping_navigation: None,
             last_mapping_capture: 0,
-            #[cfg(windows)]
             overlay: crate::gui::overlay::Overlay::default(),
             group_draft: None,
             foreground_app_icons: Rc::new(RefCell::new(groups::IconCache::new())),
@@ -162,7 +161,7 @@ impl Controller {
     }
 
     pub(super) fn tr(&self, key: &str) -> String {
-        rust_i18n::t!(key, locale = self.locale()).into_owned()
+        rust_i18n::t!(crate::i18n::platform_key(key), locale = self.locale()).into_owned()
     }
 
     pub(super) fn say(&mut self, message: String) {

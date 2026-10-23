@@ -3,6 +3,36 @@ use crate::function::{CategoryId, FunctionConfigs, FunctionId, function_definiti
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Validated runtime identity
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum AppIdentity {
+    WindowsExecutable(String),
+    MacBundle(String),
+    MacExecutable(String),
+}
+impl AppIdentity {
+    pub fn parse(value: &str) -> Option<Self> {
+        if !valid_executable(value) {
+            return None;
+        }
+        let value = executable_identity(value);
+        Some(if value.starts_with("bundle:") {
+            Self::MacBundle(value)
+        } else if value.starts_with("mac-path:") {
+            Self::MacExecutable(value)
+        } else {
+            Self::WindowsExecutable(value)
+        })
+    }
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::WindowsExecutable(value)
+            | Self::MacBundle(value)
+            | Self::MacExecutable(value) => value,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ForegroundAppGroup {
@@ -15,15 +45,14 @@ pub struct ForegroundAppGroup {
 #[serde(deny_unknown_fields)]
 pub struct ForegroundAppRules {
     pub groups: BTreeMap<String, ForegroundAppGroup>,
-    /// Absence means all applications. Control functions must never be scoped.
+    /// Absence means all applications.
     #[serde(deserialize_with = "deserialize_assignments")]
     pub assignments: BTreeMap<FunctionId, BTreeSet<String>>,
 }
 
-/// Revision-scoped lookup for the input hook. Paths are normalized once when
-/// publishing rules, so routing never scans groups or allocates per candidate.
+/// Revision-scoped lookup for the input hook
 #[derive(Default)]
-pub(crate) struct ScopeIndex(BTreeMap<FunctionId, BTreeSet<String>>);
+pub(crate) struct ScopeIndex(BTreeMap<FunctionId, BTreeSet<AppIdentity>>);
 
 impl ScopeIndex {
     pub fn new(rules: &ForegroundAppRules) -> Self {
@@ -36,7 +65,7 @@ impl ScopeIndex {
                         .iter()
                         .filter_map(|group| rules.groups.get(group))
                         .flat_map(|group| &group.foreground_apps)
-                        .map(|path| executable_identity(path))
+                        .filter_map(|path| AppIdentity::parse(path))
                         .collect();
                     (id, paths)
                 })
@@ -44,9 +73,8 @@ impl ScopeIndex {
         )
     }
 
-    /// `foreground` is already normalized by the router. Missing groups produce
-    /// an empty set, not a global scope; application control shortcuts stay global.
-    pub fn allows(&self, id: FunctionId, foreground: Option<&str>) -> bool {
+    /// `foreground` is already normalized by the router
+    pub fn allows(&self, id: FunctionId, foreground: Option<&AppIdentity>) -> bool {
         function_definition(id).category == CategoryId::App
             || self
                 .0
@@ -82,6 +110,9 @@ where
 
 /// Both native discovery and file selection supply absolute Win32 paths.
 pub fn executable_identity(path: &str) -> String {
+    if path.starts_with("bundle:") || path.starts_with("mac-path:") {
+        return path.to_owned();
+    }
     let path = path.replace('/', "\\").to_lowercase();
     if let Some(path) = path.strip_prefix(r"\\?\unc\") {
         format!(r"\\{path}")
@@ -91,6 +122,18 @@ pub fn executable_identity(path: &str) -> String {
 }
 
 pub fn valid_executable(path: &str) -> bool {
+    if let Some(id) = path.strip_prefix("bundle:") {
+        return id.contains('.')
+            && id.split('.').all(|part| {
+                !part.is_empty() && part.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
+            });
+    }
+    if let Some(path) = path.strip_prefix("mac-path:") {
+        return path.starts_with('/')
+            && path.len() > 1
+            && !path.chars().any(char::is_control)
+            && !path.split('/').any(|part| matches!(part, "." | ".."));
+    }
     let path = executable_identity(path);
     let bytes = path.as_bytes();
     !path.contains('\0')
@@ -384,5 +427,53 @@ mod tests {
             .foreground_apps
             .push("c:/games/A.EXE".into());
         assert!(!rules.valid());
+    }
+}
+
+#[cfg(test)]
+mod mac_identity_tests {
+    use super::*;
+    #[test]
+    fn typed_identity_preserves_legacy_dto_and_platform_comparison_rules() {
+        assert_eq!(
+            AppIdentity::parse(r"C:\Apps\GAME.EXE"),
+            AppIdentity::parse("c:/apps/game.exe")
+        );
+        assert!(matches!(
+            AppIdentity::parse("bundle:com.apple.Safari"),
+            Some(AppIdentity::MacBundle(_))
+        ));
+        assert!(matches!(
+            AppIdentity::parse("mac-path:/usr/local/bin/Game"),
+            Some(AppIdentity::MacExecutable(_))
+        ));
+        assert_ne!(
+            AppIdentity::parse("mac-path:/bin/Game"),
+            AppIdentity::parse("mac-path:/bin/game")
+        );
+        for value in [
+            "bundle:com..app",
+            "mac-path:relative",
+            "mac-path:/bin/../app",
+            "relative.exe",
+        ] {
+            assert!(AppIdentity::parse(value).is_none());
+        }
+    }
+    #[test]
+    fn mac_application_identities_are_tagged_and_paths_remain_case_sensitive() {
+        assert!(valid_executable("bundle:com.apple.Safari"));
+        assert!(valid_executable("mac-path:/usr/local/bin/Game"));
+        assert!(!valid_executable("bundle:com..Safari"));
+        assert!(!valid_executable("mac-path:relative"));
+        assert!(!valid_executable("mac-path:/Applications/../bin/App"));
+        assert_ne!(
+            executable_identity("mac-path:/bin/App"),
+            executable_identity("mac-path:/bin/app")
+        );
+        assert_eq!(
+            executable_identity(r"C:\Apps\GAME.EXE"),
+            r"c:\apps\game.exe"
+        );
     }
 }

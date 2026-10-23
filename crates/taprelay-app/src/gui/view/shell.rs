@@ -86,7 +86,6 @@ impl AppView {
         #[cfg(not(windows))]
         return TitleBar::new()
             .h(rems(CHROME_SIZE_REMS))
-            .pl_0()
             .bg(cx.theme().title_bar)
             .border_b_0()
             .child(brand)

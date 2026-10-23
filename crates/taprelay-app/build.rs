@@ -5,9 +5,25 @@ mod i18n;
 
 fn main() {
     assert!(
-        std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows"),
-        "taprelay-app only supports Windows targets"
+        matches!(
+            std::env::var("CARGO_CFG_TARGET_OS").as_deref(),
+            Ok("windows" | "macos")
+        ),
+        "taprelay-app supports Windows and macOS targets"
     );
+    println!("cargo:rerun-if-env-changed=MACOSX_DEPLOYMENT_TARGET");
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        let target = std::env::var("MACOSX_DEPLOYMENT_TARGET")
+            .expect("Build from the workspace with its macOS deployment target configuration");
+        assert!(
+            target
+                .split('.')
+                .next()
+                .and_then(|major| major.parse::<u32>().ok())
+                >= Some(13),
+            "TapRelay requires MACOSX_DEPLOYMENT_TARGET >= 13.0"
+        );
+    }
     let version = std::env::var("TAPRELAY_VERSION")
         .unwrap_or_else(|_| std::env::var("CARGO_PKG_VERSION").expect("Cargo package version"));
     let windows_version = windows_version(&version);
@@ -15,7 +31,9 @@ fn main() {
     println!("cargo:rustc-env=TAPRELAY_VERSION={version}");
 
     i18n::generate();
-    compile_windows_resources(&windows_version);
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        compile_windows_resources(&windows_version);
+    }
 }
 
 fn compile_windows_resources(windows_version: &str) {

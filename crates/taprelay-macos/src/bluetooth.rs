@@ -105,7 +105,7 @@ define_class!(
                 unsafe {
                     let keys = [CBAdvertisementDataLocalNameKey, CBAdvertisementDataServiceUUIDsKey];
                     let name = NSString::from_str("TapRelay");
-                    let services = NSArray::from_retained_slice(&[uuid(0x1812)]);
+                    let services = NSArray::from_retained_slice(&[service_uuid(0x1812)]);
                     let values: [&objc2::runtime::AnyObject; 2] = [&name, &services];
                     let advertisement = NSDictionary::from_slices(&keys, &values);
                     manager.startAdvertising(Some(&advertisement));
@@ -365,8 +365,12 @@ fn unavailable(message: impl Into<String>) -> BackendError {
     BackendError::Unavailable(message.into())
 }
 fn uuid(value: u16) -> Retained<CBUUID> {
-    // Full SIG base UUID is intentionally used: macOS filters short HID UUIDs
-    // in peripheral publication.
+    // Construct standard characteristics/descriptors in their assigned 16-bit form.
+    unsafe { CBUUID::UUIDWithString(&NSString::from_str(&format!("{value:04X}"))) }
+}
+fn service_uuid(value: u16) -> Retained<CBUUID> {
+    // macOS filters short HID service UUIDs in peripheral publication. Keep
+    // this workaround confined to the service, not its standard attributes.
     unsafe {
         CBUUID::UUIDWithString(&NSString::from_str(&format!(
             "0000{value:04X}-0000-1000-8000-00805F9B34FB"
@@ -534,7 +538,7 @@ impl Data {
         unsafe {
             let service = CBMutableService::initWithType_primary(
                 CBMutableService::alloc(),
-                &uuid(0x1812),
+                &service_uuid(0x1812),
                 true,
             );
             let read = CBCharacteristicProperties::Read;
@@ -966,6 +970,51 @@ unsafe fn characteristic(
 mod tests {
     use super::*;
     use taprelay_core::passthrough::KeyUsage;
+
+    #[test]
+    fn native_gatt_attributes_use_sig_widths_and_shared_report_references() {
+        // Build native objects only. Never create a manager, advertise or pair.
+        objc2::rc::autoreleasepool(|_| unsafe {
+            let mut data = Data::new(None, Profile::MediaOnly, false);
+            let service = data.service();
+            assert_eq!(
+                service.UUID().data().len(),
+                16,
+                "service workaround stays isolated"
+            );
+            let chars = service.characteristics().unwrap();
+            assert_eq!(chars.len(), 7);
+            for ch in &chars {
+                assert_eq!(
+                    ch.UUID().data().len(),
+                    2,
+                    "HID characteristic UUID must be short"
+                );
+            }
+            assert_eq!(
+                data.reports.len(),
+                3,
+                "media mode still publishes a stable full schema"
+            );
+            for (kind, ch) in &data.reports {
+                assert_eq!(ch.UUID(), uuid(0x2a4d));
+                assert!(ch.properties().contains(
+                    CBCharacteristicProperties::Read | CBCharacteristicProperties::Notify
+                ));
+                assert!(
+                    ch.permissions()
+                        .contains(CBAttributePermissions::ReadEncryptionRequired)
+                );
+                let descriptors = ch.descriptors().unwrap();
+                assert_eq!(descriptors.len(), 1);
+                let descriptor = descriptors.objectAtIndex(0);
+                assert_eq!(descriptor.UUID().data().to_vec(), [0x29, 0x08]);
+                let value = descriptor.value().unwrap().downcast::<NSData>().unwrap();
+                assert_eq!(value.to_vec(), kind.reference());
+                assert_eq!(hid::neutral(*kind).len(), kind.payload_len());
+            }
+        });
+    }
 
     #[test]
     fn selection_before_discovery_keeps_intent_without_authorizing_input() {

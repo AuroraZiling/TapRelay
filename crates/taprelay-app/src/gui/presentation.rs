@@ -44,7 +44,7 @@ pub(crate) struct ForegroundAppGroupRow {
     pub name: String,
     pub count: i32,
     pub count_label: String,
-    pub summary: String,
+    pub foreground_apps: Vec<ForegroundAppRow>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

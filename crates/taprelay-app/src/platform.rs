@@ -2,10 +2,11 @@ pub(crate) mod administrator;
 pub(crate) mod bluetooth_worker;
 pub(crate) mod capture_key;
 pub(crate) mod desktop;
+pub(crate) mod foreground_apps;
 
 use anyhow::Result;
 pub use native::{
-    InstanceLock, foreground_apps,
+    InstanceLock,
     input::{key_name, keyboard_layout},
 };
 use taprelay_core::{

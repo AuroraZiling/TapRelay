@@ -18,6 +18,21 @@ impl AppView {
         }
         let mut rows = div().v_flex().gap_2();
         for row in &group.groups {
+            let summary = {
+                let mut icons = self.controller.foreground_app_icons.borrow_mut();
+                row.foreground_apps
+                    .iter()
+                    .map(|app| {
+                        // A text summary must not queue native icon decoding.
+                        icons.request_name(&app.path);
+                        if let Some(name) = icons.name(&app.path) {
+                            return name.to_owned();
+                        }
+                        app.name.clone()
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" · ")
+            };
             rows = rows.child(
                 GroupBox::new()
                     .id(SharedString::from(format!("group-{}", row.id)))
@@ -32,10 +47,10 @@ impl AppView {
                             .child(self.text(row.name.clone()).text_sm().text_ellipsis())
                             .child(
                                 self.caption(
-                                    if row.summary.is_empty() {
+                                    if summary.is_empty() {
                                         self.tr("groups.list_empty")
                                     } else {
-                                        row.summary.clone()
+                                        summary
                                     },
                                     cx,
                                 )

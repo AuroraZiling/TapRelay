@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::platform::foreground_apps::RunningApp;
+
 pub(in crate::gui) enum Shell {
     Native(Desktop),
     #[cfg(test)]
@@ -108,11 +110,18 @@ impl Shell {
         }
     }
 
-    pub(in crate::gui) fn running_apps(&self) -> Result<Vec<String>> {
+    pub(in crate::gui) fn running_apps(&self) -> Result<Vec<RunningApp>> {
         match self {
             Self::Native(_) => Ok(crate::platform::foreground_apps::running()?),
             #[cfg(test)]
-            Self::Headless { running_apps, .. } => Ok(running_apps.clone()),
+            Self::Headless { running_apps, .. } => Ok(running_apps
+                .iter()
+                .map(|identity| RunningApp {
+                    identity: identity.clone(),
+                    name: None,
+                    path: None,
+                })
+                .collect()),
         }
     }
 

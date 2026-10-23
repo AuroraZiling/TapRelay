@@ -92,6 +92,9 @@ impl Controller {
         match command {
             "create" | "edit" => {
                 self.foreground_app_icons.borrow_mut().refresh();
+                if command == "edit" {
+                    self.running_app_paths()?;
+                }
                 let draft = if command == "create" {
                     GroupDraft::new(rules, &self.tr(keys::GROUPS_DEFAULT_NAME))
                 } else {
@@ -169,8 +172,7 @@ impl Controller {
                     .as_ref()
                     .context(self.tr(keys::GROUPS_INVALID))?;
                 let foreground_apps =
-                    self.desktop
-                        .running_apps()?
+                    self.running_app_paths()?
                         .into_iter()
                         .filter(|path| {
                             !draft.group.foreground_apps.iter().any(|other| {
@@ -184,10 +186,7 @@ impl Controller {
             }
             "show-selected" => ui.groups.choosing_running = false,
             "picked" | "add" => {
-                #[cfg(target_os = "macos")]
                 let path = crate::platform::foreground_apps::identity_for_selection(value)?;
-                #[cfg(windows)]
-                let path = value.to_string();
                 anyhow::ensure!(
                     taprelay_core::foreground_app::valid_executable(&path),
                     self.tr(keys::GROUPS_INVALID)
@@ -223,6 +222,21 @@ impl Controller {
             _ => bail!("Unknown application group command"),
         }
         Ok(())
+    }
+
+    fn running_app_paths(&self) -> Result<Vec<String>> {
+        let apps = self.desktop.running_apps()?;
+        let apps = {
+            let mut icons = self.foreground_app_icons.borrow_mut();
+            apps.into_iter()
+                .map(|app| {
+                    let identity = app.identity.clone();
+                    icons.seed(app);
+                    identity
+                })
+                .collect()
+        };
+        Ok(apps)
     }
 
     fn open_group_view(&self, ui: &mut Presentation, deleting: bool) {
@@ -306,12 +320,12 @@ impl Controller {
                     count = group.foreground_apps.len()
                 )
                 .into_owned(),
-                summary: group
+                foreground_apps: group
                     .foreground_apps
                     .iter()
-                    .map(|path| path.rsplit(['\\', '/']).next().unwrap_or(path))
-                    .collect::<Vec<_>>()
-                    .join(" · "),
+                    .cloned()
+                    .map(foreground_app_row)
+                    .collect(),
             })
             .collect::<Vec<_>>();
         ui.groups.groups = rows;

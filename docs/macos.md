@@ -43,7 +43,14 @@ Add these repository secrets under **Settings → Secrets and variables → Acti
 | --- | --- |
 | `MACOS_CERTIFICATE_BASE64` | Base64 of the Developer ID Application certificate and private key exported as `.p12`. |
 | `MACOS_CERTIFICATE_PASSWORD` | Password set when exporting the `.p12`. |
-| `MACOS_SIGN_IDENTITY` | Full certificate name: `Developer ID Application: YOUR NAME (TEAMID)`. |
 | `MACOS_NOTARY_KEY_BASE64` | Base64 of an App Store Connect team API key (`.p8`). |
 | `MACOS_NOTARY_KEY_ID` | The API key's Key ID. |
 | `MACOS_NOTARY_ISSUER` | The API key's Issuer ID. |
+
+CI resolves the signing identity from the imported P12 and signs with its SHA-1
+fingerprint. Export exactly one valid Developer ID Application identity, including
+its private key. `MACOS_SIGN_IDENTITY` is no longer needed.
+
+For local distribution packaging, `TAPRELAY_SIGN_IDENTITY` accepts an exact
+certificate name or SHA-1 fingerprint. If omitted, the keychain must contain
+exactly one valid Developer ID Application identity.

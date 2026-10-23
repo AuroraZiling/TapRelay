@@ -44,9 +44,10 @@ version=${TAPRELAY_VERSION:-$(sed -n '/\[workspace.package\]/,/^\[/s/^version = 
 [[ $version =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || { echo "Version must use X.Y.Z" >&2; exit 1; }
 if [[ $mode == distribution ]]; then
     [[ $profile == release && $notarize == true ]] || { echo "Distribution requires a release build and --notarize" >&2; exit 1; }
-    : "${TAPRELAY_SIGN_IDENTITY:?Set a Developer ID Application identity from Keychain}"
     : "${TAPRELAY_NOTARY_PROFILE:?Set a notarytool Keychain profile}"
-    [[ $TAPRELAY_SIGN_IDENTITY == 'Developer ID Application:'* ]] || { echo "Developer ID Application certificate required" >&2; exit 1; }
+    identity_args=(-v -p codesigning)
+    [[ -z ${TAPRELAY_SIGN_KEYCHAIN:-} ]] || identity_args+=("$TAPRELAY_SIGN_KEYCHAIN")
+    TAPRELAY_SIGN_IDENTITY=$(security find-identity "${identity_args[@]}" | /usr/bin/python3 scripts/macos-signing-identity.py "${TAPRELAY_SIGN_IDENTITY:-}")
 fi
 if $build; then
     args=(build --locked -p taprelay-app)

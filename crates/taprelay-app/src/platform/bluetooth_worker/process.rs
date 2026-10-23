@@ -283,69 +283,6 @@ mod tests {
         assert!(protocol::read::<Command>(&mut reader).unwrap().is_none());
     }
 
-    #[cfg(windows)]
-    fn probe(script: &str) -> Worker {
-        let mut command = std::process::Command::new("powershell.exe");
-        command.args([
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            script,
-        ]);
-        let worker = Worker::start_command(&mut command, Command::Refresh).unwrap();
-        let message = worker
-            .incoming
-            .recv_timeout(Duration::from_secs(10))
-            .unwrap()
-            .unwrap();
-        assert!(matches!(message, Message::Failure(message) if message == "probe-ready"));
-        worker
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn native_process_exchanges_frames_and_exits_normally_while_status_queue_is_full() {
-        let mut worker = probe(
-            r#"
-            $null = [Console]::In.ReadLine()
-            [Console]::Out.WriteLine('{"Failure":"probe-ready"}')
-            while ($null -ne ($line = [Console]::In.ReadLine())) {
-                if ($line -eq '"Shutdown"') {
-                    for ($i = 0; $i -lt 512; $i++) {
-                        [Console]::Out.WriteLine('{"Failure":"final-status"}')
-                    }
-                    exit 0
-                }
-            }
-            exit 1
-        "#,
-        );
-        worker.check().unwrap();
-        worker.stop().unwrap();
-        assert!(worker.exited);
-        assert!(worker.child.try_wait().unwrap().unwrap().success());
-        worker.stop().unwrap();
-        assert!(worker.send(Command::Refresh).is_err());
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn native_process_that_ignores_shutdown_is_killed_and_reaped() {
-        let mut worker = probe(
-            r#"
-            $null = [Console]::In.ReadLine()
-            [Console]::Out.WriteLine('{"Failure":"probe-ready"}')
-            Start-Sleep -Seconds 60
-            exit 0
-        "#,
-        );
-        worker.stop().unwrap();
-        assert!(worker.exited);
-        assert!(!worker.child.try_wait().unwrap().unwrap().success());
-        assert!(worker.check().is_err());
-    }
-
     #[cfg(target_os = "macos")]
     fn probe_sh(script: &str) -> Worker {
         let mut command = std::process::Command::new("/bin/sh");

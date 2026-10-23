@@ -34,7 +34,7 @@ jobs:
       - run: cargo test --workspace --locked
 
   build:
-    name: Build
+    name: Windows x64
     runs-on: windows-latest
     timeout-minutes: 90
     permissions:
@@ -174,7 +174,6 @@ jobs:
           NOTARY_KEY_BASE64: ${{ secrets.MACOS_NOTARY_KEY_BASE64 }}
           NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
           NOTARY_ISSUER: ${{ secrets.MACOS_NOTARY_ISSUER }}
-          TAPRELAY_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
           TAPRELAY_TARGET: ${{ matrix.target }}
         run: |
           set +x
@@ -184,7 +183,6 @@ jobs:
           : "${NOTARY_KEY_BASE64:?Missing notary API key}"
           : "${NOTARY_KEY_ID:?Missing notary key ID}"
           : "${NOTARY_ISSUER:?Missing notary issuer}"
-          : "${TAPRELAY_SIGN_IDENTITY:?Missing Developer ID signing identity}"
           umask 077
           signing_dir=$(mktemp -d "$RUNNER_TEMP/taprelay-signing.XXXXXX")
           keychain="$signing_dir/taprelay.keychain-db"
@@ -214,6 +212,11 @@ jobs:
           rm -f "$signing_dir/certificate.p12"
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" > /dev/null
           unset keychain_password
+          # codesign also uses the search list to build the certificate chain.
+          security list-keychains -d user -s "$keychain" "$HOME/Library/Keychains/login.keychain-db"
+          # Use the identity actually imported from the P12, not a second name secret.
+          TAPRELAY_SIGN_IDENTITY=$(security find-identity -v -p codesigning "$keychain" | /usr/bin/python3 scripts/macos-signing-identity.py)
+          export TAPRELAY_SIGN_IDENTITY
           export TAPRELAY_SIGN_KEYCHAIN="$keychain"
           export TAPRELAY_NOTARY_KEYCHAIN="$keychain"
           export TAPRELAY_NOTARY_PROFILE=taprelay-ci

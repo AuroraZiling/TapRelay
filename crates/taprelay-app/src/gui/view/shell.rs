@@ -13,7 +13,7 @@ use gpui_kit::component::{
 use gpui_kit::{prelude::*, *};
 use std::time::Duration;
 
-const CHROME_SIZE_REMS: f32 = 2.75;
+pub(super) const CHROME_SIZE_REMS: f32 = 2.75;
 const SIDEBAR_PADDING_REMS: f32 = 0.375;
 
 const TITLES: [&str; 5] = [
@@ -26,10 +26,6 @@ const TITLES: [&str; 5] = [
 
 impl AppView {
     pub(super) fn title_bar(&mut self, window: &Window, cx: &Context<Self>) -> AnyElement {
-        let icon = self.app_icon.image(window.rem_size() * 1.5, window);
-        let origin = f32::from(window.rem_size()) * (CHROME_SIZE_REMS - 1.5) * 0.5;
-        // A fractional device-pixel origin softens the raster even at its native size.
-        let offset = px((origin * window.scale_factor()).round() / window.scale_factor() - origin);
         let brand = div()
             .id("titlebar-brand")
             .h_flex()
@@ -64,23 +60,31 @@ impl AppView {
                         ),
                 )
             })
-            .child(
-                div()
-                    .w(rems(CHROME_SIZE_REMS))
-                    .flex_shrink_0()
-                    .h_flex()
-                    .justify_center()
+            .when(!cfg!(target_os = "macos"), |brand| {
+                let icon = self.app_icon.image(window.rem_size() * 1.5, window);
+                let origin = f32::from(window.rem_size()) * (CHROME_SIZE_REMS - 1.5) * 0.5;
+                // A fractional device-pixel origin softens the raster even at its native size.
+                let offset =
+                    px((origin * window.scale_factor()).round() / window.scale_factor() - origin);
+                brand
                     .child(
-                        img(icon)
-                            .id("titlebar-icon")
-                            .size_6()
-                            .relative()
-                            .left(offset)
-                            .top(offset)
-                            .test_support(),
-                    ),
-            )
-            .child(self.text("TapRelay").id("titlebar-title").test_support())
+                        div()
+                            .w(rems(CHROME_SIZE_REMS))
+                            .flex_shrink_0()
+                            .h_flex()
+                            .justify_center()
+                            .child(
+                                img(icon)
+                                    .id("titlebar-icon")
+                                    .size_6()
+                                    .relative()
+                                    .left(offset)
+                                    .top(offset)
+                                    .test_support(),
+                            ),
+                    )
+                    .child(self.text("TapRelay").id("titlebar-title").test_support())
+            })
             .test_support();
 
         #[cfg(not(windows))]

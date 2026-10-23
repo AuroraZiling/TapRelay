@@ -74,6 +74,12 @@ impl AppView {
         cx: &mut Context<Self>,
     ) -> Self {
         super::theme::init(cx);
+        #[cfg(target_os = "macos")]
+        // Center AppKit's 14-point traffic lights in the same row as the sidebar toggle.
+        window.set_traffic_light_position(point(
+            px(12.),
+            (cx.theme().font_size * shell::CHROME_SIZE_REMS - px(14.)) * 0.5,
+        ));
         let group_name = cx.new(|cx| InputState::new(window, cx));
         let mapping_name = cx.new(|cx| InputState::new(window, cx));
         let output_choice = cx.new(|cx| {

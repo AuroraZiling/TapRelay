@@ -1,6 +1,19 @@
 //! User-visible asynchronous states, independent of GUI widgets and wall-clock time.
 use std::time::{Duration, Instant};
 
+pub fn operation_error_key(message: &str) -> &'static str {
+    use crate::i18n::keys;
+    match message {
+        #[cfg(target_os = "macos")]
+        taprelay_macos::input::MISSING_PHYSICAL_KEYBOARD => {
+            keys::ERROR_PASSTHROUGH_KEYBOARD_MISSING
+        }
+        #[cfg(target_os = "macos")]
+        taprelay_macos::input::MISSING_RELATIVE_MOUSE => keys::ERROR_PASSTHROUGH_MOUSE_MISSING,
+        _ => keys::ERROR_OPERATION,
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ErrorScope {
     Connection,

@@ -73,6 +73,8 @@
   "diagnostics.inputs": "Inputs detected",
   "error.connection": "The receiver connection is unavailable. Check its Bluetooth connection; TapRelay will keep trying to recover.",
   "error.operation": "The action could not be completed. Check the logs for the cause.",
+  "error.passthrough.keyboard.missing": "No physical keyboard detected. Connect a keyboard to this Mac via USB or Bluetooth, then retry passthrough.",
+  "error.passthrough.mouse.missing": "No relative mouse detected. Connect a mouse to this Mac via USB or Bluetooth, then retry passthrough.",
   "error.save": "Settings not saved",
   "error.startup": "TapRelay could not start normally. Check the configuration or environment.",
   "function.app.togglelistening": "Toggle input listening",

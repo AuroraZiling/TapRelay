@@ -7,6 +7,11 @@ unsafe extern "C" {
     fn CFMachPortInvalidate(port: *mut c_void);
 }
 
+#[link(name = "ApplicationServices", kind = "framework")]
+unsafe extern "C" {
+    fn CGEventTapIsEnabled(tap: *mut c_void) -> bool;
+}
+
 pub(super) struct EventTap {
     port: std::ptr::NonNull<c_void>,
     source: std::ptr::NonNull<c_void>,
@@ -36,14 +41,16 @@ impl EventTap {
             .into_iter()
             .fold(0, |mask, kind| mask | (1u64 << kind.0));
             let port = std::ptr::NonNull::new(CGEventTapCreate(
-                CGEventTapLocation::SessionEventTap,
+                // Suppress physical input before it reaches the session/cursor,
+                // like Windows' low-level hook. Never activate a window to capture.
+                CGEventTapLocation::HIDEventTap,
                 CGEventTapPlacement::HeadInsertEventTap,
                 CGEventTapOptions::Default,
                 mask,
                 callback,
                 context,
             ))
-            .ok_or("CGEventTapCreate failed; check Accessibility and Input Monitoring")?;
+            .ok_or("Cannot install HID event tap; check Accessibility and Input Monitoring")?;
             let Some(source) = std::ptr::NonNull::new(
                 CFMachPortCreateRunLoopSource(ptr::null(), port.as_ptr(), 0).cast_mut(),
             ) else {
@@ -65,6 +72,10 @@ impl EventTap {
             CGEventTapEnable(port.as_ptr(), true);
             Ok(guard)
         }
+    }
+
+    pub fn enabled(&self) -> bool {
+        unsafe { CGEventTapIsEnabled(self.port.as_ptr()) }
     }
 }
 impl Drop for EventTap {

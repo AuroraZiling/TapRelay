@@ -1,6 +1,6 @@
-//! Physical relative motion supplements Quartz; it never routes keyboard,
-//! button or wheel edges. Quartz alone owns those edges, so delayed raw
-//! callbacks cannot repeat a tap.
+//! Physical relative motion owns the mouse stream. Quartz owns keyboard,
+//! button and wheel edges and suppresses local input without forwarding a
+//! second copy of mouse motion. Both sources live on the same run loop.
 use super::*;
 use core_foundation::{
     array::CFArray, base::TCFType, dictionary::CFDictionary, number::CFNumber, string::CFString,
@@ -42,6 +42,17 @@ unsafe extern "C" {
         callback: unsafe extern "C" fn(*mut c_void, i32, *mut c_void, *mut c_void),
         context: *mut c_void,
     );
+    fn IOHIDManagerRegisterDeviceMatchingCallback(
+        manager: *mut c_void,
+        callback: unsafe extern "C" fn(*mut c_void, i32, *mut c_void, *mut c_void),
+        context: *mut c_void,
+    );
+    fn IOHIDDeviceConformsTo(device: *mut c_void, page: u32, usage: u32) -> u8;
+    fn IOHIDDeviceCopyMatchingElements(
+        device: *mut c_void,
+        matches: *const c_void,
+        options: u32,
+    ) -> *mut c_void;
     fn IOHIDValueGetElement(value: *mut c_void) -> *mut c_void;
     fn IOHIDValueGetIntegerValue(value: *mut c_void) -> isize;
     fn IOHIDValueGetLength(value: *mut c_void) -> isize;
@@ -51,6 +62,39 @@ unsafe extern "C" {
     fn IOHIDElementGetDevice(element: *mut c_void) -> *mut c_void;
     fn IOHIDElementGetType(element: *mut c_void) -> u32;
     fn IOHIDElementIsRelative(element: *mut c_void) -> u8;
+}
+
+#[link(name = "CoreFoundation", kind = "framework")]
+unsafe extern "C" {
+    fn CFArrayGetCount(array: *const c_void) -> isize;
+    fn CFArrayGetValueAtIndex(array: *const c_void, index: isize) -> *mut c_void;
+}
+
+#[derive(Clone, Copy, Default)]
+struct Device {
+    keyboard: bool,
+    relative_mouse: bool,
+}
+
+#[derive(Default)]
+pub(super) struct Devices(std::collections::BTreeMap<usize, Device>);
+
+impl Devices {
+    pub fn counts(&self) -> (usize, usize) {
+        (
+            self.0.values().filter(|d| d.keyboard).count(),
+            self.0.values().filter(|d| d.relative_mouse).count(),
+        )
+    }
+    pub fn error(&self) -> Option<&'static str> {
+        if !self.0.values().any(|device| device.keyboard) {
+            Some(MISSING_PHYSICAL_KEYBOARD)
+        } else if !self.0.values().any(|device| device.relative_mouse) {
+            Some(MISSING_RELATIVE_MOUSE)
+        } else {
+            None
+        }
+    }
 }
 
 pub(super) struct Capture(*mut c_void);
@@ -70,6 +114,7 @@ impl Capture {
             }));
             IOHIDManagerSetDeviceMatchingMultiple(manager, matches.as_concrete_TypeRef().cast());
             IOHIDManagerRegisterInputValueCallback(manager, value_changed, context);
+            IOHIDManagerRegisterDeviceMatchingCallback(manager, device_added, context);
             IOHIDManagerRegisterDeviceRemovalCallback(manager, device_removed, context);
             IOHIDManagerScheduleWithRunLoop(
                 manager,
@@ -152,11 +197,18 @@ unsafe extern "C" fn value_changed(
         {
             return;
         }
+        let page = IOHIDElementGetUsagePage(element);
+        let usage = IOHIDElementGetUsage(element);
+        let relative = IOHIDElementIsRelative(element) != 0;
+        if policy.router.passthrough() && page == 1 && matches!(usage, 0x30 | 0x31) && !relative {
+            policy.fail_capture("Absolute mouse input is not supported by passthrough");
+            return;
+        }
         let Some(delta) = relative_motion(
-            IOHIDElementGetUsagePage(element),
-            IOHIDElementGetUsage(element),
+            page,
+            usage,
             IOHIDValueGetIntegerValue(value).clamp(i32::MIN as isize, i32::MAX as isize) as i32,
-            IOHIDElementIsRelative(element) != 0,
+            relative,
         ) else {
             return;
         };
@@ -176,7 +228,15 @@ unsafe extern "C" fn value_changed(
             return;
         }
         let device = IOHIDElementGetDevice(element) as usize;
-        if let Err(error) = policy.sources.raw(
+        if !policy
+            .devices
+            .0
+            .get(&device)
+            .is_some_and(|device| device.relative_mouse)
+        {
+            return;
+        }
+        if let Err(error) = policy.motion.push(
             device,
             timestamp_nanos(IOHIDValueGetTimeStamp(value)),
             captured,
@@ -185,6 +245,63 @@ unsafe extern "C" fn value_changed(
             policy.error = Some(error.into());
             policy.end_capture();
         }
+    }))
+    .is_err()
+    {
+        shared.stop_after_callback(CallbackFailure::RawPanicked);
+    }
+}
+
+unsafe extern "C" fn device_added(
+    context: *mut c_void,
+    result: i32,
+    _sender: *mut c_void,
+    device: *mut c_void,
+) {
+    let shared = unsafe { &*(context as *const Shared) };
+    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        let Ok(mut policy) = shared.policy.try_lock() else {
+            shared.stop_after_callback(CallbackFailure::RawReentered);
+            return;
+        };
+        if result != 0 {
+            policy.error = Some(format!("Physical HID device unavailable ({result:#x})"));
+            policy.end_capture();
+            return;
+        }
+        let keyboard = IOHIDDeviceConformsTo(device, 1, 6) != 0;
+        let mut axes = [false; 2];
+        if IOHIDDeviceConformsTo(device, 1, 2) != 0 {
+            let elements = IOHIDDeviceCopyMatchingElements(device, ptr::null(), 0);
+            if !elements.is_null() {
+                for index in 0..CFArrayGetCount(elements) {
+                    let element = CFArrayGetValueAtIndex(elements, index);
+                    if (1..=4).contains(&IOHIDElementGetType(element))
+                        && IOHIDElementGetUsagePage(element) == 1
+                        && IOHIDElementIsRelative(element) != 0
+                    {
+                        match IOHIDElementGetUsage(element) {
+                            0x30 => axes[0] = true,
+                            0x31 => axes[1] = true,
+                            _ => {}
+                        }
+                    }
+                }
+                CFRelease(elements);
+            }
+        }
+        policy.devices.0.insert(
+            device as usize,
+            Device {
+                keyboard,
+                relative_mouse: axes == [true, true],
+            },
+        );
+        tracing::debug!(
+            keyboard,
+            relative_mouse = axes == [true, true],
+            "Physical input device observed"
+        );
     }))
     .is_err()
     {
@@ -201,11 +318,15 @@ unsafe extern "C" fn device_removed(
     let shared = unsafe { &*(context as *const Shared) };
     if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if let Ok(mut policy) = shared.policy.try_lock() {
-            policy.sources.remove(device as usize);
-            if policy.router.passthrough() {
-                policy.error =
-                    Some("Physical keyboard or mouse disconnected; capture stopped".into());
-                policy.end_capture();
+            let removed = policy.devices.0.remove(&(device as usize));
+            if removed.is_some_and(|d| d.keyboard || d.relative_mouse)
+                && (policy.router.passthrough()
+                    || policy
+                        .link
+                        .as_ref()
+                        .is_some_and(InputLink::capture_requested))
+            {
+                policy.fail_capture("Physical keyboard or mouse disconnected; capture stopped");
             }
         } else {
             shared.stop_after_callback(CallbackFailure::RawReentered);
@@ -220,6 +341,37 @@ unsafe extern "C" fn device_removed(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn capture_requires_keyboard_and_relative_mouse_but_allows_composite_devices() {
+        let mut devices = Devices::default();
+        assert!(devices.error().is_some());
+        devices.0.insert(
+            1,
+            Device {
+                keyboard: true,
+                relative_mouse: false,
+            },
+        );
+        assert!(devices.error().is_some());
+        devices.0.insert(
+            2,
+            Device {
+                keyboard: false,
+                relative_mouse: true,
+            },
+        );
+        assert!(devices.error().is_none());
+        devices.0.remove(&1);
+        assert!(devices.error().is_some());
+        devices.0.insert(
+            2,
+            Device {
+                keyboard: true,
+                relative_mouse: true,
+            },
+        );
+        assert!(devices.error().is_none());
+    }
     #[test]
     fn raw_observation_only_supplies_relative_motion() {
         assert_eq!(relative_motion(1, 0x30, 1200, true), Some([1200, 0]));

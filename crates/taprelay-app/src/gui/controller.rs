@@ -189,8 +189,9 @@ impl Controller {
 
     pub(super) fn error(&mut self, message: &str) {
         tracing::error!("{message}");
-        self.say(self.tr(keys::ERROR_OPERATION));
-        self.notify_error(&self.tr(keys::ERROR_OPERATION));
+        let summary = self.tr(crate::gui::feedback::operation_error_key(message));
+        self.say(summary.clone());
+        self.notify_error(&summary);
     }
 
     pub(super) fn notify_error(&mut self, summary: &str) {

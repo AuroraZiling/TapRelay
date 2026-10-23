@@ -31,14 +31,18 @@ use taprelay_core::{
 };
 use tokio::sync::mpsc::Sender;
 mod capture;
-mod cursor;
 pub(super) mod keyboard;
 mod motion;
 mod raw;
-mod sources;
 mod tap;
 
 type NativeEvent = *mut c_void;
+
+// Stable reasons cross the runtime's string error channel and are localized by
+// the app. Keep unknown native diagnostics in the log rather than in a toast.
+pub const MISSING_PHYSICAL_KEYBOARD: &str =
+    "Passthrough requires a directly connected physical keyboard";
+pub const MISSING_RELATIVE_MOUSE: &str = "Passthrough requires a directly connected relative mouse";
 static SESSION_ACTIVE: AtomicBool = AtomicBool::new(true);
 pub fn set_session_active(active: bool) {
     SESSION_ACTIVE.store(active, Ordering::Release);
@@ -77,7 +81,6 @@ unsafe extern "C" {
     ) -> NativeEvent;
     fn CGEventCreate(source: *const c_void) -> NativeEvent;
     fn CGEventGetLocation(event: NativeEvent) -> Point;
-    fn CGEventGetTimestamp(event: NativeEvent) -> u64;
     fn CGEventSetIntegerValueField(event: NativeEvent, field: CGEventField, value: i64);
     fn CGEventPost(tap: CGEventTapLocation, event: NativeEvent);
     fn CGPreflightListenEventAccess() -> bool;
@@ -114,6 +117,37 @@ pub fn permission_status() -> Permissions {
 pub fn permissions() -> bool {
     permission_status().ready()
 }
+
+/// Bounded capability check for the signed app. No shortcuts are enabled,
+/// no InputLink is attached, and all input remains local. Prints only counts.
+pub fn diagnose() -> Result<String, BackendError> {
+    let (sender, mut events) = tokio::sync::mpsc::channel(256);
+    let handle = InputHandle::start(sender)?;
+    let until = Instant::now() + Duration::from_millis(250);
+    while Instant::now() < until {
+        while events.try_recv().is_ok() {}
+        thread::sleep(Duration::from_millis(5));
+    }
+    if let Some(error) = handle.failure() {
+        return Err(BackendError::Unavailable(error));
+    }
+    let policy = handle
+        .shared
+        .policy
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let (keyboards, relative_mice) = policy.devices.counts();
+    let result = format!(
+        "HID event tap: available\nPhysical keyboards: {keyboards}\nRelative mice: {relative_mice}\nCapture: {}",
+        policy
+            .devices
+            .error()
+            .unwrap_or("ready for physical-device testing")
+    );
+    drop(policy);
+    drop(handle);
+    Ok(result)
+}
 pub fn any_input_held() -> bool {
     unsafe {
         keys::KEYS
@@ -137,10 +171,10 @@ struct Policy {
     foreground: Option<String>,
     ours: bool,
     available: bool,
-    capture: capture::Session<cursor::Capture>,
+    capture: capture::Session,
     replay_pending: std::collections::VecDeque<PhysicalInput>,
     caps_lock: Option<bool>,
-    sources: sources::MotionSources,
+    devices: raw::Devices,
     motion: motion::Motion,
     error: Option<String>,
     revision: u64,
@@ -157,7 +191,7 @@ impl Policy {
             capture: capture::Session::default(),
             replay_pending: Default::default(),
             caps_lock: None,
-            sources: sources::MotionSources::default(),
+            devices: raw::Devices::default(),
             motion: motion::Motion::default(),
             error: None,
             revision: u64::MAX,
@@ -277,8 +311,7 @@ impl Policy {
             link.end();
         }
         self.capture.stop();
-        self.sources.clear();
-        self.motion = motion::Motion::default();
+        self.motion.clear();
     }
     fn end_capture(&mut self) {
         let result = self.router.set_passthrough(false);
@@ -286,10 +319,14 @@ impl Policy {
         self.stop_capture();
         self.dispatch(None, result);
     }
-    fn drain_effects(&mut self) {
-        if self.capture.release() != capture::Transition::Unchanged {
-            tracing::info!("Input capture released");
+    fn fail_capture(&mut self, error: &'static str) {
+        // Like Windows, release mapping owners before InputLink closes admission.
+        self.end_capture();
+        if let Some(link) = &self.link {
+            link.fail(error);
         }
+    }
+    fn drain_effects(&mut self) {
         while let Some(input) = self.replay_pending.pop_front() {
             if let Err(error) = replay(input) {
                 self.error = Some(error.to_string());
@@ -301,13 +338,9 @@ impl Policy {
         if self.router.passthrough() && !self.link.as_ref().is_some_and(|link| link.epoch() != 0) {
             self.end_capture();
         }
-        match self
-            .capture
-            .tick(self.link.as_ref(), context, cursor::Capture::request)
-        {
+        match self.capture.tick(self.link.as_ref(), context) {
             capture::Transition::Started => {
-                self.motion = motion::Motion::default();
-                self.sources.clear();
+                self.motion.clear();
                 let result = self.router.set_passthrough(true);
                 let result = self.process(result, context.now);
                 self.dispatch(None, result);
@@ -318,16 +351,18 @@ impl Policy {
                 self.end_capture();
             }
             capture::Transition::Failed(error) => {
-                self.error = Some(error.into());
-                self.end_capture();
+                self.fail_capture(error);
             }
             capture::Transition::Unchanged => {}
         }
         self.drain_effects();
+        if self.router.passthrough() && self.motion.stalled(context.now) {
+            self.fail_capture("Physical mouse input stopped; capture released");
+        }
         self.flush_motion(context.now);
     }
     fn flush_motion(&mut self, now: Instant) {
-        for sample in self.sources.drain(now) {
+        for sample in self.motion.drain(now) {
             if self.router.passthrough() {
                 let result = self.router.route_motion(sample.delta[0], sample.delta[1]);
                 let result = self.process(result, sample.captured);
@@ -459,11 +494,8 @@ impl InputHandle {
                                 if refreshed.elapsed() >= Duration::from_millis(50) {
                                     refreshed = Instant::now();
                                     let current = foreground.path();
-                                    // Cursor ownership must not change the app scope that
-                                    // selected this session. Copy identity only on change.
-                                    if !p.capture.owns_cursor()
-                                        && p.foreground.as_deref() != current
-                                    {
+                                    // Capture never changes focus; scopes follow the real app.
+                                    if p.foreground.as_deref() != current {
                                         p.foreground = current.map(str::to_owned);
                                         result = p.router.set_foreground(current);
                                     }
@@ -485,13 +517,17 @@ impl InputHandle {
                                     p.end_capture();
                                     return false;
                                 }
-                                let ours = p.ours;
+                                let input_error = if tap.enabled() {
+                                    p.devices.error()
+                                } else {
+                                    Some("Physical input event tap is disabled")
+                                };
                                 p.sync(capture::Context {
                                     now: Instant::now(),
-                                    ours,
                                     permitted,
                                     session_active,
                                     secure_input,
+                                    input_error,
                                 });
                                 append(&mut result, p.router.tick(Instant::now()));
                                 let result = p.process(result, Instant::now());
@@ -506,7 +542,7 @@ impl InputHandle {
                         drop(raw);
                     });
                 }));
-                // Both normal exit and a Rust panic release cursor/input ownership
+                // Both normal exit and a Rust panic release input ownership
                 // on the same thread, after callbacks have been unscheduled.
                 objc2::rc::autoreleasepool(|_| {
                     let mut p = state.policy.lock().unwrap_or_else(|e| e.into_inner());
@@ -717,8 +753,8 @@ unsafe extern "C" fn callback(
             p.end_capture();
             return event;
         }
-        // Keyboard, buttons and wheel always retain their event-tap path.
-        // Raw relative motion is paired per event.
+        // Keyboard, buttons and wheel retain their event-tap path.
+        // IOHID exclusively owns physical relative motion.
         let captured = Instant::now();
         let mut caps_pulse = false;
         let edge = match kind {
@@ -800,12 +836,11 @@ unsafe extern "C" fn callback(
             _ => None,
         };
         if edge.is_some() || kind == CGEventType::ScrollWheel {
-            // Preserve movement-before-click/key ordering, even when a raw
-            // counterpart has not arrived. A later raw sample is retired.
-            p.flush_motion(captured + Duration::from_millis(5));
+            // Flush already observed physical motion before an edge.
+            p.flush_motion(captured + motion::COALESCE);
         }
         let result = if let Some(edge) = edge {
-            if p.ours && !p.capture.owns_cursor() {
+            if p.ours && !p.router.passthrough() {
                 p.router.route_local_event(edge)
             } else {
                 p.router.route_event(edge)
@@ -822,29 +857,13 @@ unsafe extern "C" fn callback(
         } else {
             let dx = CGEventGetIntegerValueField(event, CGEventField::MouseEventDeltaX) as i32;
             let dy = CGEventGetIntegerValueField(event, CGEventField::MouseEventDeltaY) as i32;
-            let [dx, dy] = p.motion.relative(
-                CGEventGetIntegerValueField(event, CGEventField::EventSourceUnixProcessID),
-                CGEventGetLocation(event),
-                [dx, dy],
-            );
             if p.router.passthrough() {
-                let source =
-                    CGEventGetIntegerValueField(event, CGEventField::EventSourceUnixProcessID);
-                if source == 0 {
-                    if let Err(error) =
-                        p.sources
-                            .tap(CGEventGetTimestamp(event), captured, [dx, dy])
-                    {
-                        p.error = Some(error.into());
-                        p.end_capture();
-                    }
-                    RouteResult {
-                        consume: true,
-                        ..Default::default()
-                    }
-                } else {
-                    p.flush_motion(captured + Duration::from_millis(5));
-                    p.router.route_motion(dx, dy)
+                // An early HID tap blocks the local cursor, while IOHID supplies
+                // unclipped relative motion. No coordinate or injected fallback.
+                p.motion.observe_tap(captured);
+                RouteResult {
+                    consume: true,
+                    ..Default::default()
                 }
             } else {
                 p.router.route_motion(dx, dy)
@@ -858,7 +877,7 @@ unsafe extern "C" fn callback(
                 down: false,
                 ..edge
             };
-            let result = if p.ours && !p.capture.owns_cursor() {
+            let result = if p.ours && !p.router.passthrough() {
                 p.router.route_local_event(release)
             } else {
                 p.router.route_event(release)
@@ -973,6 +992,119 @@ mod tests {
     }
 
     #[test]
+    fn candidate_selection_keys_produce_shared_keyboard_reports_in_both_foregrounds() {
+        use taprelay_core::{
+            hid::{ConsumerState, InputReports, ReportKind, session::Session},
+            mapping::OutputOwners,
+        };
+        for ours in [true, false] {
+            let (sender, _events) = tokio::sync::mpsc::channel(16);
+            let (link, packets) = InputLink::channel(Arc::new(AtomicU64::new(1)));
+            link.set_ready(1);
+            assert!(link.begin());
+            let mut policy = Policy::new(sender);
+            policy.ours = ours;
+            policy.router.set_passthrough(true);
+            policy.link = Some(link);
+            let shared = Shared {
+                policy: Mutex::new(policy),
+                failure: Mutex::new(None),
+                stop: AtomicBool::new(false),
+                callback_failure: AtomicU8::new(0),
+            };
+            let mut session = Session {
+                keyboard: &mut InputReports::default(),
+                owners: &mut OutputOwners::default(),
+                consumer: &mut ConsumerState::default(),
+                pulses: &mut Vec::new(),
+                next_owner: &mut 0,
+            };
+            // nihao, 1, Space, arrows, Return, Backspace. Expected usages are
+            // fixed USB HID values, not generated from the Mac mapping table.
+            for (native, usage) in [
+                (45, 0x11),
+                (34, 0x0c),
+                (4, 0x0b),
+                (0, 4),
+                (31, 0x12),
+                (18, 0x1e),
+                (49, 0x2c),
+                (123, 0x50),
+                (124, 0x4f),
+                (36, 0x28),
+                (51, 0x2a),
+            ] {
+                for down in [true, false] {
+                    let kind = if down {
+                        CGEventType::KeyDown
+                    } else {
+                        CGEventType::KeyUp
+                    };
+                    assert!(unsafe { key_callback(&shared, native, kind, CGEventFlags::empty()) });
+                    let packet = packets.try_recv().unwrap();
+                    let reports: Vec<_> = session.event(packet.event, false).unwrap().collect();
+                    let mut expected = vec![0; 20];
+                    if down {
+                        expected[2] = usage;
+                    }
+                    assert_eq!(reports, [(ReportKind::Keyboard, expected)]);
+                    if down {
+                        assert!(unsafe {
+                            key_callback(&shared, native, kind, CGEventFlags::empty())
+                        });
+                    }
+                    assert!(
+                        packets.try_recv().is_err(),
+                        "repeat/down/up must not add extra transitions"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn missing_physical_devices_leave_input_local_and_allow_retry() {
+        let (sender, _events) = tokio::sync::mpsc::channel(16);
+        let (link, packets) = InputLink::channel(Arc::new(AtomicU64::new(1)));
+        link.set_profile_available(true);
+        link.request_profile();
+        link.set_ready(1);
+        let mut policy = Policy::new(sender);
+        policy.link = Some(link.clone());
+        let mut cx = capture::Context {
+            now: Instant::now(),
+            permitted: true,
+            session_active: true,
+            secure_input: false,
+            input_error: policy.devices.error(),
+        };
+        policy.sync(cx);
+        assert!(!policy.router.passthrough());
+        assert_eq!(link.epoch(), 0);
+        assert!(link.take_failure().unwrap().contains("physical keyboard"));
+        assert!(
+            policy.error.is_none(),
+            "unavailable capture must not stop ordinary shortcuts"
+        );
+        for down in [true, false] {
+            let result = policy.router.route_event(InputEvent {
+                code: InputCode::Key(0x41),
+                down,
+                captured: cx.now,
+            });
+            assert!(!policy.process(result, cx.now).consume);
+        }
+        assert!(packets.try_recv().is_err());
+        cx.input_error = None;
+        link.request_profile();
+        link.set_ready(1);
+        policy.sync(cx);
+        assert!(policy.router.passthrough());
+        policy.end_capture();
+        assert_eq!(link.epoch(), 0);
+    }
+
+    #[test]
     fn mouse_mapping_emits_right_arrow_press_and_release_without_capture_in_either_foreground() {
         use taprelay_core::{
             hid::{ConsumerState, InputReports, ReportKind, session::Session},
@@ -1069,7 +1201,7 @@ mod tests {
                     assert!(reports.try_recv().is_err());
                     assert_eq!(link.epoch(), 0);
                     assert!(!link.capture_requested());
-                    assert!(!shared.policy.lock().unwrap().capture.owns_cursor());
+                    assert!(shared.policy.lock().unwrap().capture.started().is_none());
                 }
             }
         }
@@ -1187,7 +1319,7 @@ mod tests {
     }
 
     #[test]
-    fn event_tap_keeps_exit_and_pointer_routing_without_any_raw_hid_callback() {
+    fn event_tap_keeps_exit_without_raw_and_never_duplicates_physical_motion() {
         {
             let (sender, _events) = tokio::sync::mpsc::channel(16);
             let (link, reports) = InputLink::channel(Arc::new(AtomicU64::new(1)));
@@ -1229,6 +1361,16 @@ mod tests {
                     .is_null()
                 );
                 CFRelease(event);
+                assert!(
+                    reports.try_recv().is_err(),
+                    "Quartz must not duplicate mouse motion"
+                );
+                let now = Instant::now();
+                {
+                    let mut policy = shared.policy.lock().unwrap();
+                    policy.motion.push(1, 123, now, [9, 0]).unwrap();
+                    policy.flush_motion(now + motion::COALESCE);
+                }
                 assert_eq!(
                     reports.try_recv().unwrap().event,
                     Event::Motion { dx: 9, dy: 0 }
@@ -1256,7 +1398,7 @@ mod tests {
     }
 
     #[test]
-    fn coordinate_only_background_mouse_events_reach_the_shared_input_link() {
+    fn screen_coordinates_never_become_physical_mouse_motion() {
         let (sender, _events) = tokio::sync::mpsc::channel(16);
         let (link, reports) = InputLink::channel(Arc::new(AtomicU64::new(1)));
         link.set_ready(1);
@@ -1274,16 +1416,12 @@ mod tests {
         });
         let info = Arc::as_ptr(&shared) as *mut c_void;
         unsafe {
-            for (point, native_delta, expected) in [
-                ([500., 400.], [0, 0], None),
-                ([504., 398.], [0, 0], Some((4, -2))),
-                ([504., 398.], [0, 0], None),
-                ([505.25, 398.5], [0, 0], Some((1, 0))),
-                ([506., 399.], [0, 0], Some((1, 1))),
-                ([506., 399.], [7, -3], Some((7, -3))),
-                // Ignore recentering after a native relative event.
-                ([100., 100.], [0, 0], None),
-                ([102., 103.], [0, 0], Some((2, 3))),
+            for (point, native_delta) in [
+                ([500., 400.], [0, 0]),
+                ([504., 398.], [0, 0]),
+                ([505.25, 398.5], [0, 0]),
+                ([506., 399.], [7, -3]),
+                ([100., 100.], [0, 0]),
             ] {
                 let event = CGEventCreateMouseEvent(
                     ptr::null(),
@@ -1299,14 +1437,10 @@ mod tests {
                 CGEventSetIntegerValueField(event, CGEventField::MouseEventDeltaY, native_delta[1]);
                 assert!(callback(ptr::null_mut(), CGEventType::MouseMoved, event, info).is_null());
                 CFRelease(event);
-                if let Some((dx, dy)) = expected {
-                    assert_eq!(reports.try_recv().unwrap().event, Event::Motion { dx, dy });
-                } else {
-                    assert!(
-                        reports.try_recv().is_err(),
-                        "zero displacement must not fill the HID queue"
-                    );
-                }
+                assert!(
+                    reports.try_recv().is_err(),
+                    "only IOHID supplies relative movement"
+                );
             }
             for down in [true, false] {
                 let event = CGEventCreateMouseEvent(
@@ -1354,7 +1488,7 @@ mod tests {
     }
 
     #[test]
-    fn exit_cancels_pending_capture_before_cursor_ownership_is_ready() {
+    fn exit_cancels_pending_capture_before_physical_input_is_ready() {
         let (sender, _events) = tokio::sync::mpsc::channel(16);
         let (link, reports) = InputLink::channel(Arc::new(AtomicU64::new(1)));
         link.set_ready(1);
@@ -1375,8 +1509,7 @@ mod tests {
         };
         unsafe {
             let info = &shared as *const Shared as *mut c_void;
-            // Ordinary input must remain local during activation, not queue
-            // up for transmission once the cursor becomes available.
+            // Ordinary input stays local while waiting for capture readiness.
             let event = CGEventCreateKeyboardEvent(ptr::null(), 18, true);
             assert_eq!(
                 callback(ptr::null_mut(), CGEventType::KeyDown, event, info),

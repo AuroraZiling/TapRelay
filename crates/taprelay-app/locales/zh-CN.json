@@ -73,6 +73,8 @@
   "diagnostics.inputs": "检测到输入",
   "error.connection": "接收设备连接暂时不可用。请检查接收设备的蓝牙连接，TapRelay 会继续尝试恢复。",
   "error.operation": "操作未能完成，可查看日志了解原因。",
+  "error.passthrough.keyboard.missing": "未检测到物理键盘。请通过 USB 或蓝牙连接到这台 Mac，再开启透传。",
+  "error.passthrough.mouse.missing": "未检测到相对鼠标。请通过 USB 或蓝牙连接鼠标到这台 Mac，再开启透传。",
   "error.save": "设置未保存",
   "error.startup": "TapRelay 未能正常启动，请检查配置或运行环境。",
   "function.app.togglelistening": "开启/关闭按键监听",

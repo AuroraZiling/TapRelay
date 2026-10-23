@@ -24,12 +24,12 @@ async fn feedback_notifications_deduplicate_dismiss_and_auto_hide(cx: &mut TestA
         .update_window(handle, |_, window, cx| {
             assert_eq!(window.notifications(cx).len(), 1);
             assert_eq!(
-                window.find("notification-message").label(),
-                Some("Test sent")
-            );
-            assert_eq!(
                 window.find("notification-message").role(),
                 Some(gpui_kit::Role::Status)
+            );
+            assert_eq!(
+                window.find("notification-message").label(),
+                Some("Test sent")
             );
             let first = window.notifications(cx)[0].clone();
             view.update(cx, |view, cx| view.effects(window, cx));
@@ -54,13 +54,14 @@ async fn feedback_notifications_deduplicate_dismiss_and_auto_hide(cx: &mut TestA
     std::thread::sleep(Duration::from_millis(410));
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
+        window.hover("page-header", cx);
         assert!(window.find("notification-dismiss").visible());
         assert_eq!(
             window.find("notification-dismiss").label(),
             Some("Dismiss notification")
         );
         view.read(cx).focus.clone().focus(window, cx);
-        for _ in 0..20 {
+        for _ in 0..25 {
             if window.find("notification-dismiss").focused() == Some(true) {
                 break;
             }
@@ -92,6 +93,20 @@ async fn feedback_notifications_deduplicate_dismiss_and_auto_hide(cx: &mut TestA
         window.notifications(cx).is_empty()
     })
     .await;
+}
+
+#[test]
+fn notification_content_exposes_a_polite_live_region_in_both_languages() {
+    use gpui_kit::{Element, Role, accesskit};
+    for message in ["Connected to Tablet", "已连接到平板"] {
+        let element = super::super::window::notification_message(message);
+        let mut node = accesskit::Node::new(element.a11y_role().unwrap());
+        element.write_a11y_info(&mut node);
+        assert_eq!(node.role(), Role::Status);
+        assert_eq!(node.label(), Some(message));
+        assert_eq!(node.value(), Some(message));
+        assert_eq!(node.live(), Some(accesskit::Live::Polite));
+    }
 }
 
 #[gpui_kit::test]

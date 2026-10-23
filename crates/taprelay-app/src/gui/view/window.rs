@@ -1,5 +1,4 @@
-use super::components::LiveElement;
-use super::{AppView, Command};
+use super::{AppView, Command, components::LiveElement};
 use crate::{
     config::Geometry, gui::presentation::WindowCommand, platform::desktop,
     runtime::commands::BindingCommand,
@@ -17,23 +16,14 @@ struct FeedbackNotification;
 struct ProgressNotification;
 
 fn notification(message: String, close_label: String) -> Notification {
+    // The component owns timing/deduplication; application content supplies the
+    // live region and an always-visible, localized keyboard dismissal action.
     Notification::new().content(move |_, _, cx| {
         div()
             .h_flex()
             .items_start()
             .gap_3()
-            .child(
-                div()
-                    .id("notification-message")
-                    .role(Role::Status)
-                    .aria_label(message.clone())
-                    .flex_1()
-                    .min_w_0()
-                    .text_sm()
-                    .child(message.clone())
-                    .live(accesskit::Live::Polite)
-                    .test_support(),
-            )
+            .child(notification_message(&message))
             .child(
                 Button::new("notification-dismiss")
                     .ghost()
@@ -43,6 +33,21 @@ fn notification(message: String, close_label: String) -> Notification {
             )
             .into_any_element()
     })
+}
+
+pub(super) fn notification_message(message: &str) -> impl Element {
+    div()
+        .id("notification-message")
+        .role(Role::Status)
+        .aria_label(message.to_owned())
+        // AccessKit's macOS adapter announces the live node's value.
+        .aria_value(message.to_owned())
+        .flex_1()
+        .min_w_0()
+        .text_sm()
+        .child(message.to_owned())
+        .live(accesskit::Live::Polite)
+        .test_support()
 }
 
 impl AppView {

@@ -206,9 +206,12 @@ impl Policy {
                     down,
                     created,
                 } => {
-                    if let Some(link) = &self.link {
-                        link.submit_mapping(output, token, down, created);
-                    }
+                    let admitted = self
+                        .link
+                        .as_ref()
+                        .is_some_and(|link| link.submit_mapping(output, token, down, created));
+                    // Do not log physical inputs, HID usages, or user-provided names.
+                    tracing::debug!(id, token, down, admitted, "Custom mapping input admission");
                     kept.push(RoutedOutput::Mapping {
                         id,
                         output,
@@ -966,6 +969,109 @@ mod tests {
             .is_null();
             CFRelease(event);
             consumed
+        }
+    }
+
+    #[test]
+    fn mouse_mapping_emits_right_arrow_press_and_release_without_capture_in_either_foreground() {
+        use taprelay_core::{
+            hid::{ConsumerState, InputReports, ReportKind, session::Session},
+            mapping::{CustomMapping, MappingOutput, OutputOwners},
+        };
+        for ours in [true, false] {
+            for (native_button, button) in [
+                (2, MouseButton::Middle),
+                (3, MouseButton::Side1),
+                (4, MouseButton::Side2),
+            ] {
+                let (sender, _events) = tokio::sync::mpsc::channel(16);
+                let (link, reports) = InputLink::channel(Arc::new(AtomicU64::new(1)));
+                link.set_mapping_profile(true);
+                link.set_ready(1);
+                let mut policy = Policy::new(sender);
+                policy.link = Some(link.clone());
+                policy.ours = ours;
+                policy.router.update_mappings(&[CustomMapping {
+                    id: 1,
+                    name: "Right Arrow".into(),
+                    enabled: true,
+                    shortcuts: vec![Shortcut::mouse(ModifierSet::empty(), button)],
+                    output: MappingOutput::Keyboard {
+                        usage: 0x4f,
+                        modifiers: 0,
+                    },
+                    groups: Default::default(),
+                }]);
+                policy.router.set_listening(true);
+                let shared = Shared {
+                    policy: Mutex::new(policy),
+                    failure: Mutex::new(None),
+                    stop: AtomicBool::new(false),
+                    callback_failure: AtomicU8::new(0),
+                };
+                let mut session = Session {
+                    keyboard: &mut InputReports::default(),
+                    owners: &mut OutputOwners::default(),
+                    consumer: &mut ConsumerState::default(),
+                    pulses: &mut Vec::new(),
+                    next_owner: &mut 0,
+                };
+                let mut token = None;
+                for down in [true, false] {
+                    // Exercise a focus change while held as well as both press origins.
+                    if !down {
+                        shared.policy.lock().unwrap().ours = !ours;
+                    }
+                    let kind = if down {
+                        CGEventType::OtherMouseDown
+                    } else {
+                        CGEventType::OtherMouseUp
+                    };
+                    unsafe {
+                        // Owned callback data only: no tap installation or OS input posting.
+                        let event = CGEventCreateMouseEvent(
+                            ptr::null(),
+                            kind,
+                            Point { x: 0., y: 0. },
+                            native_button,
+                        );
+                        assert!(!event.is_null());
+                        let consumed = callback(
+                            ptr::null_mut(),
+                            kind,
+                            event,
+                            &shared as *const Shared as *mut c_void,
+                        )
+                        .is_null();
+                        CFRelease(event);
+                        assert!(consumed, "mapped {button:?} must work with ours={ours}");
+                    }
+                    let packet = reports
+                        .try_recv()
+                        .expect("mapping must reach the input link");
+                    assert!(link.accepts(&packet));
+                    let Event::Mapping {
+                        token: current,
+                        down: edge,
+                        ..
+                    } = packet.event
+                    else {
+                        panic!("mapping must not become physical mouse passthrough");
+                    };
+                    assert_eq!(edge, down);
+                    assert_eq!(*token.get_or_insert(current), current);
+                    let wire: Vec<_> = session.event(packet.event, false).unwrap().collect();
+                    let mut expected = vec![0; 20];
+                    if down {
+                        expected[2] = 0x4f;
+                    }
+                    assert_eq!(wire, [(ReportKind::Keyboard, expected)]);
+                    assert!(reports.try_recv().is_err());
+                    assert_eq!(link.epoch(), 0);
+                    assert!(!link.capture_requested());
+                    assert!(!shared.policy.lock().unwrap().capture.owns_cursor());
+                }
+            }
         }
     }
 

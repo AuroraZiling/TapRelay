@@ -615,10 +615,13 @@ impl Runtime {
 
         for output in result.outputs {
             match output {
-                RoutedOutput::Mapping { down, .. } => {
+                RoutedOutput::Mapping {
+                    id, token, down, ..
+                } => {
                     if down {
                         self.matched += 1;
                     }
+                    tracing::debug!(id, token, down, "Custom mapping recognized");
                 }
                 RoutedOutput::Feedback { binding, action } => {
                     self.matched += 1;

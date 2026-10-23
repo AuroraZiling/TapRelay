@@ -447,7 +447,7 @@ impl InputRouter {
     }
 
     /// Route an edge that belongs to TapRelay's own configuration window.
-    /// Configured function shortcuts also work here, with the same listening,
+    /// Configured functions and custom mappings also work here, with the same listening,
     /// recording, and scope rules as other windows. Unmatched input remains
     /// local for editing; active passthrough owns the window's input too.
     pub fn route_local_event(&mut self, event: InputEvent) -> RouteResult {
@@ -456,7 +456,8 @@ impl InputRouter {
         }
         if event.down
             && !self.recording
-            && self.index.best_match(event.code, &self.physical).is_some()
+            && (self.index.best_match(event.code, &self.physical).is_some()
+                || self.mapping_candidates.contains_key(&event.code))
         {
             return self.route_event(event);
         }
@@ -924,7 +925,69 @@ mod tests {
             mapped(&router.route_local_event(event(code, false))),
             vec![(false, token)]
         );
+        let next = router.route_local_event(event(code, true));
+        assert!(next.consume);
+        assert_eq!(mapped(&next).len(), 1);
+        assert_ne!(mapped(&next)[0].1, token);
         assert!(mapped(&router.route_local_event(event(code, true))).is_empty());
+        assert_eq!(
+            mapped(&router.route_local_event(event(code, false))),
+            vec![(false, mapped(&next)[0].1)]
+        );
+    }
+
+    #[test]
+    fn foreground_mappings_preserve_listening_recording_scope_and_exact_modifier_rules() {
+        let code = InputCode::Mouse(MouseButton::Side1);
+        for blocked_by in ["paused", "recording", "scope", "modifiers", "disabled"] {
+            let (mut router, mut mapping) = custom_router();
+            match blocked_by {
+                "paused" => {
+                    router.set_listening(false);
+                }
+                "recording" => {
+                    router.set_recording(true);
+                }
+                "scope" => {
+                    mapping.groups.insert("games".into());
+                    router.set_foreground_app_rules(&scoped_rules(FunctionId::MediaPlayPause));
+                    router.set_foreground(Some("C:\\other.exe"));
+                    router.update_mappings(&[mapping]);
+                }
+                "modifiers" => {
+                    router.route_local_event(event(InputCode::Key(0xa2), true));
+                }
+                "disabled" => {
+                    mapping.enabled = false;
+                    router.update_mappings(&[mapping]);
+                }
+                _ => unreachable!(),
+            }
+            for down in [true, false] {
+                let result = router.route_local_event(event(code, down));
+                assert!(!result.consume, "{blocked_by} must keep input local");
+                assert!(
+                    mapped(&result).is_empty(),
+                    "{blocked_by} must prevent output"
+                );
+            }
+        }
+        let (mut router, mut mapping) = custom_router();
+        mapping.shortcuts[0].modifiers.ctrl = true;
+        router.update_mappings(&[mapping]);
+        assert!(
+            !router
+                .route_local_event(event(InputCode::Key(0xa2), true))
+                .consume
+        );
+        let press = router.route_local_event(event(code, true));
+        assert!(press.consume && mapped(&press)[0].0);
+        assert!(
+            !router
+                .route_local_event(event(InputCode::Key(0xa2), false))
+                .consume
+        );
+        assert!(!mapped(&router.route_local_event(event(code, false)))[0].0);
     }
 
     #[test]

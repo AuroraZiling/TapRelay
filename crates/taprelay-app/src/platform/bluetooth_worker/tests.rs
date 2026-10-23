@@ -1284,6 +1284,74 @@ fn stable_schema_changes_routing_without_restarting_and_rejects_old_generation()
 
 #[cfg(target_os = "macos")]
 #[test]
+fn live_mapping_profile_forwards_right_arrow_without_requesting_capture() {
+    let h = Harness::new();
+    h.connected();
+    h.state.lock().unwrap().live_profile = true;
+    let process = h.current();
+    let output = taprelay_core::mapping::MappingOutput::Keyboard {
+        usage: 0x4f,
+        modifiers: 0,
+    };
+    h.handle.link.set_mapping_profile(true);
+    h.step();
+    assert_eq!(h.current(), process);
+    assert!(
+        !h.handle
+            .link
+            .submit_mapping(output, 1, true, Instant::now())
+    );
+    h.status(4, "phone", true);
+    h.message(
+        process,
+        Message::Armed {
+            generation: 4,
+            accepted: true,
+        },
+    );
+    h.step();
+    assert!(h.handle.link.ready());
+    for down in [true, false] {
+        assert!(
+            h.handle
+                .link
+                .submit_mapping(output, 2, down, Instant::now())
+        );
+        h.step();
+    }
+    let state = h.state.lock().unwrap();
+    let forwarded: Vec<_> = state
+        .calls
+        .iter()
+        .filter_map(|call| match call {
+            Call::Send(
+                id,
+                Command::Input {
+                    generation, event, ..
+                },
+            ) => Some((*id, *generation, *event)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        forwarded,
+        [true, false].map(|down| (
+            process,
+            4,
+            Event::Mapping {
+                output,
+                token: 2,
+                down
+            }
+        ))
+    );
+    assert_eq!(h.handle.link.epoch(), 0);
+    assert!(!h.handle.link.capture_requested());
+    assert!(h.handle.link.accepts_media(Instant::now()));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn cancelled_live_switch_does_not_accept_late_status_for_previous_mode() {
     let h = Harness::new();
     h.connected();

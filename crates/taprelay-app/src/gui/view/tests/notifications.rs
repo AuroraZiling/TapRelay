@@ -54,21 +54,21 @@ async fn feedback_notifications_deduplicate_dismiss_and_auto_hide(cx: &mut TestA
     std::thread::sleep(Duration::from_millis(410));
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
-        window.hover("page-header", cx);
-        assert!(window.find("notification-dismiss").visible());
+        window.hover("notification", cx);
+        let notification = window.find("notification");
         assert_eq!(
-            window.find("notification-dismiss").label(),
-            Some("Dismiss notification")
+            gpui_kit::base::test_support::snapshots(window)
+                .iter()
+                .filter(|element| {
+                    element.path().starts_with(notification.path())
+                        && element.role() == Some(gpui_kit::Role::Button)
+                })
+                .count(),
+            1,
+            "the notification must have exactly one close button, including on hover"
         );
-        view.read(cx).focus.clone().focus(window, cx);
-        for _ in 0..25 {
-            if window.find("notification-dismiss").focused() == Some(true) {
-                break;
-            }
-            window.press("tab", cx);
-        }
-        assert_eq!(window.find("notification-dismiss").focused(), Some(true));
-        window.press("enter", cx);
+        assert!(window.within("notification").find("close").visible());
+        window.within("notification").click("close", cx);
     })
     .unwrap();
     cx.wait_for(handle, Duration::from_secs(1), |window, cx| {

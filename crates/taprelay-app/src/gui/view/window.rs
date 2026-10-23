@@ -5,34 +5,15 @@ use crate::{
 };
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::{ActiveTheme, Theme, ThemeMode, WindowExt, notification::Notification};
-use gpui_kit::component::{
-    StyledExt,
-    button::{Button, ButtonVariants},
-};
 use gpui_kit::{prelude::*, *};
 use std::time::Instant;
 
 struct FeedbackNotification;
 struct ProgressNotification;
 
-fn notification(message: String, close_label: String) -> Notification {
-    // The component owns timing/deduplication; application content supplies the
-    // live region and an always-visible, localized keyboard dismissal action.
-    Notification::new().content(move |_, _, cx| {
-        div()
-            .h_flex()
-            .items_start()
-            .gap_3()
-            .child(notification_message(&message))
-            .child(
-                Button::new("notification-dismiss")
-                    .ghost()
-                    .icon(gpui_kit::assets::IconName::Close)
-                    .accessibility_label(close_label.clone())
-                    .on_click(cx.listener(|this, _, window, cx| this.dismiss(window, cx))),
-            )
-            .into_any_element()
-    })
+fn notification(message: String) -> Notification {
+    // `content` supplies only the body; Notification already owns its close button.
+    Notification::new().content(move |_, _, _| notification_message(&message).into_any_element())
 }
 
 pub(super) fn notification_message(message: &str) -> impl Element {
@@ -91,24 +72,19 @@ impl AppView {
         self.sync_scope_pickers(window, cx);
         self.sync_output_choice(window, cx);
         if let Some(message) = self.controller.pending_notification.take() {
-            let close_label = self.tr("a11y.dismiss_notification");
             window.defer(cx, move |window, cx| {
-                window.push_notification(
-                    notification(message, close_label).id::<FeedbackNotification>(),
-                    cx,
-                );
+                window.push_notification(notification(message).id::<FeedbackNotification>(), cx);
             });
         }
         if self.last_progress_message != self.ui.progress_message {
             self.last_progress_message = self.ui.progress_message.clone();
             let message = self.last_progress_message.clone();
-            let close_label = self.tr("a11y.dismiss_notification");
             window.defer(cx, move |window, cx| {
                 if message.is_empty() {
                     window.remove_notification::<ProgressNotification>(cx);
                 } else {
                     window.push_notification(
-                        notification(message, close_label)
+                        notification(message)
                             .id::<ProgressNotification>()
                             .autohide(false),
                         cx,

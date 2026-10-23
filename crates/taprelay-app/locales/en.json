@@ -2,7 +2,6 @@
   "a11y.add_app": "Add %{object} to the group",
   "a11y.add_shortcut": "Add a shortcut for %{object}",
   "a11y.delete": "Delete %{object}",
-  "a11y.dismiss_notification": "Dismiss notification",
   "a11y.edit": "Edit %{object}",
   "a11y.output": "Output key: %{object}",
   "a11y.record_shortcut": "Record shortcut for %{object}",

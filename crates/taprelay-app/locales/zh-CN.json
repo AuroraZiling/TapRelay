@@ -2,7 +2,6 @@
   "a11y.add_app": "将 %{object} 添加到分组",
   "a11y.add_shortcut": "为 %{object} 添加快捷键",
   "a11y.delete": "删除 %{object}",
-  "a11y.dismiss_notification": "关闭通知",
   "a11y.edit": "编辑 %{object}",
   "a11y.output": "输出按键：%{object}",
   "a11y.record_shortcut": "录入 %{object} 的快捷键",

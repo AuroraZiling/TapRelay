@@ -78,6 +78,9 @@ struct Data {
     mapping_epoch: u64,
     generation_started: Instant,
     accepted_reports: [u64; 3],
+    // Last accepted values for the selected receiver in this generation.
+    // Read requests must not synthesize a release while a key is held.
+    readable_reports: [Vec<u8>; 3],
 }
 
 // Core Bluetooth's delegate is weak. BleHandle retains both objects for the
@@ -136,8 +139,7 @@ define_class!(
             self.call(manager, |data, manager| unsafe {
                 let characteristic = request.characteristic();
                 let kind = data.kind(&characteristic);
-                // Reads never disclose a selected receiver's held report to another central.
-                let bytes = kind.map(hid::neutral).or_else(|| {
+                let bytes = kind.map(|kind| data.report_value(&central_id(&request.central()), kind)).or_else(|| {
                     let id = characteristic.UUID();
                     if id == uuid(0x2a4a) { Some(hid::HID_INFORMATION.to_vec()) }
                     else if id == uuid(0x2a4b) { Some(Profile::Full.report_map().to_vec()) }
@@ -462,6 +464,7 @@ impl Data {
             mapping_epoch: 0,
             generation_started: Instant::now(),
             accepted_reports: [0; 3],
+            readable_reports: ReportKind::ALL.map(hid::neutral),
         }
     }
 
@@ -484,6 +487,7 @@ impl Data {
         self.schedule.clear_input();
         self.consumer.clear();
         self.keyboard = Default::default();
+        self.readable_reports = ReportKind::ALL.map(hid::neutral);
         self.owners = Default::default();
         self.pulses.clear();
         for notification in self.queue.drain(..) {
@@ -827,6 +831,11 @@ impl Data {
             }
             self.schedule.sent(now);
             self.accepted_reports[notification.kind.index()] += 1;
+            let mut value = notification.bytes.clone();
+            if notification.kind == ReportKind::Mouse {
+                value[1..].fill(0); // Reads retain buttons, never repeat relative motion.
+            }
+            self.readable_reports[notification.kind.index()] = value;
             if let Some(notification) = self.queue.pop_front()
                 && let Some(reply) = notification.reply
             {
@@ -851,6 +860,16 @@ impl Data {
             if self.state.hid_profile == Profile::Full {
                 self.link.set_ready(self.state.generation);
             }
+        }
+    }
+    fn report_value(&self, requester: &str, kind: ReportKind) -> Vec<u8> {
+        if self.state.ready
+            && self.state.generation == self.revision.load(Ordering::Acquire)
+            && self.state.selected.as_deref() == Some(requester)
+        {
+            self.readable_reports[kind.index()].clone()
+        } else {
+            hid::neutral(kind)
         }
     }
     fn tick(&mut self, manager: &CBPeripheralManager) {
@@ -1014,6 +1033,56 @@ mod tests {
                 assert_eq!(hid::neutral(*kind).len(), kind.payload_len());
             }
         });
+    }
+
+    #[test]
+    fn reads_follow_accepted_reports_without_releasing_keys_or_repeating_motion() {
+        let mut data = Data::new(None, Profile::Full, false);
+        data.state.selected = Some("receiver".into());
+        data.state.ready = true;
+        let mut keyboard = vec![0; 20];
+        keyboard[2] = 0x1e;
+        let start = Instant::now();
+        for (index, (kind, bytes)) in [
+            (ReportKind::Keyboard, keyboard),
+            (ReportKind::Mouse, vec![1, 3, 0, 4, 0, 1, 0]),
+            (
+                ReportKind::Consumer,
+                hid::consumer_press(MediaCommand::PlayPause),
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            data.enqueue(kind, bytes.clone());
+            let now = start + Duration::from_millis(35 + index as u64 * 70);
+            data.flush_notifications(now, |_| false);
+            assert!(data.blocked);
+            assert_eq!(data.report_value("receiver", kind), hid::neutral(kind));
+            data.blocked = false;
+            data.flush_notifications(now, |_| true);
+            let mut expected = bytes;
+            if kind == ReportKind::Mouse {
+                expected[1..].fill(0);
+            }
+            assert_eq!(data.report_value("receiver", kind), expected);
+            assert_eq!(data.report_value("other", kind), hid::neutral(kind));
+            data.enqueue(kind, hid::neutral(kind));
+            data.flush_notifications(now + Duration::from_millis(35), |_| true);
+            assert_eq!(data.report_value("receiver", kind), hid::neutral(kind));
+        }
+        data.readable_reports[ReportKind::Keyboard.index()][2] = 0x1e;
+        data.revision.fetch_add(1, Ordering::AcqRel);
+        assert_eq!(
+            data.report_value("receiver", ReportKind::Keyboard),
+            vec![0; 20]
+        );
+        data.revoke();
+        data.state.ready = true;
+        assert_eq!(
+            data.report_value("receiver", ReportKind::Keyboard),
+            vec![0; 20]
+        );
     }
 
     #[test]

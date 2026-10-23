@@ -1199,6 +1199,7 @@ impl Server {
                 pairing,
                 link,
                 subscribed: Knowledge::Yes,
+                reconnectable: true,
                 availability: Availability::Nearby,
                 identity,
                 ..Default::default()

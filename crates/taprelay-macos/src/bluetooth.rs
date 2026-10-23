@@ -26,9 +26,12 @@ use taprelay_core::{
     mapping::OutputOwners,
     passthrough::{Event, InputLink, MAX_INPUT_AGE, Packet, ReportSchedule},
     ports::BackendError,
-    state::{Knowledge, Snapshot, Target},
+    state::{Knowledge, Snapshot, Target, upsert_target},
 };
 use tokio::sync::{oneshot, watch};
+
+mod discovery;
+mod names;
 
 type Reply = oneshot::Sender<Result<(), BackendError>>;
 pub enum Request {
@@ -58,6 +61,9 @@ struct Data {
     input: mpsc::Receiver<Packet>,
     reports: Vec<(ReportKind, Retained<CBMutableCharacteristic>)>,
     peers: BTreeMap<String, Peer>,
+    known: Vec<Target>,
+    discovery: Option<discovery::Discovery>,
+    names: names::ReceiverNames,
     queue: VecDeque<Notification>,
     blocked: bool,
     synchronizing: bool,
@@ -82,6 +88,12 @@ define_class!(
     #[ivars = RefCell<Data>]
     struct Delegate;
     unsafe impl NSObjectProtocol for Delegate {}
+    unsafe impl CBCentralManagerDelegate for Delegate {
+        #[unsafe(method(centralManagerDidUpdateState:))]
+        fn metadata_changed(&self, manager: &CBCentralManager) {
+            tracing::info!(state = ?unsafe { manager.state() }, "Bluetooth name resolver state changed");
+        }
+    }
     unsafe impl CBPeripheralManagerDelegate for Delegate {
         #[unsafe(method(peripheralManagerDidUpdateState:))]
         fn changed(&self, manager: &CBPeripheralManager) { self.call(manager, |data, manager| data.changed(manager)); }
@@ -152,7 +164,7 @@ define_class!(
                     let value = request.value().map(|v| v.to_vec()).unwrap_or_default();
                     if request.offset() != 0 || value.len() != 1 { result = CBATTError::InvalidAttributeValueLength; break; }
                     if ch.UUID() == uuid(0x2a4c) {
-                        if data.state.selected.as_deref() == Some(&central_id(&request.central())) {
+                        if data.selected_peer().is_some_and(|peer| central_id(&peer.central) == central_id(&request.central())) {
                             data.state.hid_suspended = value[0] == 0;
                             data.revoke();
                             if !data.state.hid_suspended { data.synchronize(); }
@@ -183,6 +195,7 @@ impl Delegate {
 pub struct BleHandle {
     delegate: Retained<Delegate>,
     manager: Retained<CBPeripheralManager>,
+    metadata_manager: Retained<CBCentralManager>,
     pub state: watch::Receiver<Snapshot>,
     progress: std::cell::Cell<u64>,
 }
@@ -195,7 +208,17 @@ impl BleHandle {
         objc2::rc::autoreleasepool(|_| {
             let mtm = MainThreadMarker::new()
                 .ok_or_else(|| unavailable("BLE worker must run on its main thread"))?;
-            let data = Data::new(remembered, profile, publish);
+            let mut data = Data::new(remembered, profile, publish);
+            match discovery::Discovery::start() {
+                Ok(discovery) => {
+                    data.discovery = Some(discovery);
+                    data.state.discovery = DiscoveryState::Scanning;
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "Could not start paired-device inventory");
+                    data.state.discovery = DiscoveryState::Failed;
+                }
+            }
             let state = data.updates.subscribe();
             let allocated = Delegate::alloc(mtm).set_ivars(RefCell::new(data));
             let delegate: Retained<Delegate> = unsafe { msg_send![super(allocated), init] };
@@ -206,9 +229,19 @@ impl BleHandle {
                     None,
                 )
             };
+            // Metadata only: never scan, connect, or discover GATT services.
+            // Both managers use the worker's existing main run loop.
+            let metadata_manager = unsafe {
+                CBCentralManager::initWithDelegate_queue(
+                    CBCentralManager::alloc(),
+                    Some(ProtocolObject::from_ref(&*delegate)),
+                    None,
+                )
+            };
             Ok(Self {
                 delegate,
                 manager,
+                metadata_manager,
                 state,
                 progress: std::cell::Cell::new(0),
             })
@@ -222,6 +255,13 @@ impl BleHandle {
             }
             self.delegate
                 .call(&self.manager, |data, manager| data.tick(manager));
+            // Resolve outside subscription callbacks, after servicing input.
+            let mut data = self.delegate.ivars().borrow_mut();
+            data.poll_inventory();
+            if data.names.resolve(&self.metadata_manager) {
+                data.update_names();
+                data.emit();
+            }
             self.progress.set(self.progress.get().wrapping_add(1));
         });
     }
@@ -248,10 +288,7 @@ impl BleHandle {
         let mut data = self.delegate.ivars().borrow_mut();
         match request {
             Request::Select(id) => {
-                data.revoke();
-                data.state.selected = Some(id);
-                data.state.hid_suspended = false;
-                data.synchronize();
+                data.select(id);
             }
             Request::Send(command, reply) => {
                 if !command.valid(
@@ -273,7 +310,14 @@ impl BleHandle {
                 }
             }
             Request::Refresh => {
-                data.emit();
+                if let Some(discovery) = &mut data.discovery {
+                    discovery.refresh();
+                    data.state.discovery = DiscoveryState::Scanning;
+                }
+                let ids = data.peers.keys().cloned().collect::<Vec<_>>();
+                for id in ids {
+                    data.names.refresh(&id);
+                }
             }
             Request::Pair(_) => {
                 return Err(unavailable(
@@ -312,6 +356,7 @@ impl Drop for BleHandle {
                 self.manager.stopAdvertising();
                 self.manager.removeAllServices();
                 self.manager.setDelegate(None);
+                self.metadata_manager.setDelegate(None);
             }
         });
     }
@@ -331,7 +376,52 @@ fn uuid(value: u16) -> Retained<CBUUID> {
 fn central_id(central: &CBCentral) -> String {
     unsafe { central.identifier().UUIDString().to_string() }
 }
+fn merge_targets(
+    known: &[Target],
+    live: impl IntoIterator<Item = Target>,
+    state: &Snapshot,
+) -> Vec<Target> {
+    let mut targets = known.to_vec();
+    for target in live {
+        upsert_target(&mut targets, target);
+    }
+    for target in &mut targets {
+        let selected = state
+            .selected
+            .as_ref()
+            .is_some_and(|id| target.matches_id(id));
+        if state.adapter_state != AdapterState::Available {
+            target.link = if state.adapter_state == AdapterState::Disabled {
+                Knowledge::No
+            } else {
+                Knowledge::Unknown
+            };
+            target.availability = Availability::Unknown;
+        }
+        target.connection = if !selected || state.adapter_state != AdapterState::Available {
+            Connection::Disconnected
+        } else if state.ready {
+            Connection::Connected
+        } else if target.subscribed == Knowledge::Yes {
+            Connection::Synchronizing
+        } else {
+            Connection::AwaitingHostSubscription
+        };
+    }
+    targets.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
+    targets
+}
 impl Data {
+    fn select(&mut self, id: String) {
+        // Init may select before the first native poll. Keep the intent; only
+        // an actual subscription can synchronize and authorize report delivery.
+        self.remembered = None;
+        self.state.selected = Some(id.clone());
+        self.state.hid_suspended = false;
+        self.rebuild_targets();
+        self.reconcile_selection(Some(&id));
+    }
+
     fn new(remembered: Option<Target>, profile: Profile, publish: bool) -> Self {
         let revision = Arc::new(AtomicU64::new(1));
         let (link, input) = InputLink::channel(revision.clone());
@@ -345,12 +435,15 @@ impl Data {
         Self {
             state: snapshot,
             updates,
+            names: names::ReceiverNames::new(remembered.as_ref()),
             remembered,
             revision,
             link,
             input,
             reports: vec![],
             peers: BTreeMap::new(),
+            known: vec![],
+            discovery: None,
             queue: VecDeque::new(),
             blocked: false,
             synchronizing: false,
@@ -418,6 +511,15 @@ impl Data {
         };
         self.state.adapter = state == CBManagerState::PoweredOn;
         self.state.peripheral = self.state.adapter;
+        if let Some(discovery) = &mut self.discovery {
+            discovery.refresh();
+            self.state.discovery = if self.state.adapter {
+                DiscoveryState::Scanning
+            } else {
+                DiscoveryState::Idle
+            };
+        }
+        self.rebuild_targets();
         if state == CBManagerState::Unauthorized {
             self.state.last_error = Some("Bluetooth permission denied. Enable TapRelay in System Settings → Privacy & Security → Bluetooth.".into());
         } else if state == CBManagerState::PoweredOn && self.publish {
@@ -508,24 +610,69 @@ impl Data {
             central: central.retain(),
             subscribed: [false; 3],
         });
+        let was_subscribed = peer.subscribed.iter().any(|value| *value);
         peer.subscribed[kind.index()] = subscribed;
+        if subscribed && !was_subscribed {
+            self.names.refresh(&id);
+        }
         unsafe {
             manager.setDesiredConnectionLatency_forCentral(
                 CBPeripheralManagerConnectionLatency::Low,
                 central,
             );
         }
-        if self.state.selected.is_none() && self.remembered.as_ref().is_some_and(|t| t.id == id) {
-            self.state.selected = Some(id.clone());
+        self.rebuild_targets();
+        if self.discovery.is_none() {
+            self.state.discovery = DiscoveryState::ResultsAvailable;
         }
-        self.state.targets = self
+        self.reconcile_selection(Some(&id));
+    }
+
+    fn reconcile_selection(&mut self, changed_subscription: Option<&str>) {
+        let resolved = self.state.targets.iter().find(|target| {
+            target.subscribed == Knowledge::Yes
+                && if let Some(id) = &self.state.selected {
+                    target.matches_id(id)
+                } else {
+                    self.remembered
+                        .as_ref()
+                        .is_some_and(|wanted| target.same_device(wanted))
+                }
+        });
+        let resolved = resolved.map(|target| target.id.clone());
+        let restored = resolved.is_some() && resolved != self.state.selected;
+        if restored {
+            // Pin the live central UUID so a later metadata miss cannot erase
+            // the active route. Display names never participate in selection.
+            self.state.selected = resolved;
+            tracing::info!("Receiver identity resolved to a subscribed session");
+        }
+        if restored
+            || changed_subscription.is_some_and(|id| self.state.selected.as_deref() == Some(id))
+        {
+            self.blocked = false;
+            self.revoke();
+            self.rebuild_targets();
+            self.synchronize();
+        }
+    }
+    fn rebuild_targets(&mut self) {
+        let live = self
             .peers
             .iter()
+            .filter(|(id, peer)| {
+                peer.subscribed.iter().any(|value| *value)
+                    || self.state.selected.as_deref() == Some(id.as_str())
+                    || self
+                        .state
+                        .selected_target()
+                        .is_some_and(|target| target.matches_id(id))
+            })
             .map(|(id, peer)| {
                 let any = peer.subscribed.iter().any(|v| *v);
                 Target {
                     id: id.clone(),
-                    name: format!("Bluetooth central {}", &id[..8]),
+                    name: self.names.name(id),
                     identity: vec![format!("cbcentral:{id}")],
                     pairing: Knowledge::Unknown,
                     link: if any {
@@ -534,28 +681,57 @@ impl Data {
                         Knowledge::Unknown
                     },
                     subscribed: if any { Knowledge::Yes } else { Knowledge::No },
+                    reconnectable: true,
                     availability: if any {
                         Availability::Nearby
                     } else {
                         Availability::Unknown
                     },
-                    connection: Connection::AwaitingHostSubscription,
                     ..Default::default()
                 }
-            })
-            .collect();
-        self.state.discovery = DiscoveryState::ResultsAvailable;
-        if self.state.selected.as_deref() == Some(&id) {
-            self.blocked = false;
-            self.revoke();
-            self.synchronize();
+            });
+        self.state.targets = merge_targets(&self.known, live, &self.state);
+        self.update_names();
+    }
+    fn update_names(&mut self) {
+        for target in &mut self.state.targets {
+            if let Some(known) = self.known.iter().find(|known| known.same_device(target)) {
+                target.name.clone_from(&known.name);
+            } else {
+                target.name = self.names.name(&target.id);
+            }
         }
     }
+    fn poll_inventory(&mut self) {
+        let available = self.state.adapter_state == AdapterState::Available;
+        let Some(result) = self
+            .discovery
+            .as_mut()
+            .and_then(|discovery| discovery.poll(available))
+        else {
+            return;
+        };
+        match result {
+            Ok(known) => {
+                self.known = known;
+                self.rebuild_targets();
+                // Inventory and subscriptions can arrive in either order.
+                self.reconcile_selection(None);
+                self.state.discovery = if available {
+                    DiscoveryState::ResultsAvailable
+                } else {
+                    DiscoveryState::Idle
+                };
+            }
+            Err(error) => {
+                tracing::warn!(%error, "System paired-device inventory unavailable");
+                self.state.discovery = DiscoveryState::Failed;
+            }
+        }
+        self.emit();
+    }
     fn selected_peer(&self) -> Option<&Peer> {
-        self.state
-            .selected
-            .as_ref()
-            .and_then(|id| self.peers.get(id))
+        self.peers.get(self.state.selected.as_ref()?)
     }
     fn subscribed(&self) -> bool {
         self.selected_peer().is_some_and(|peer| {
@@ -657,7 +833,12 @@ impl Data {
             self.synchronizing = false;
             self.state.ready = true;
             for target in &mut self.state.targets {
-                target.connection = if Some(&target.id) == self.state.selected.as_ref() {
+                target.connection = if self
+                    .state
+                    .selected
+                    .as_ref()
+                    .is_some_and(|id| target.matches_id(id))
+                {
                     Connection::Connected
                 } else {
                     Connection::Disconnected
@@ -786,6 +967,199 @@ mod tests {
     use super::*;
     use taprelay_core::passthrough::KeyUsage;
 
+    #[test]
+    fn selection_before_discovery_keeps_intent_without_authorizing_input() {
+        let mut data = Data::new(
+            Some(Target {
+                id: "old".into(),
+                ..Default::default()
+            }),
+            Profile::Full,
+            true,
+        );
+        data.select("wanted".into());
+        assert_eq!(data.state.selected.as_deref(), Some("wanted"));
+        assert!(data.remembered.is_none());
+        assert!(!data.state.ready && !data.link.ready());
+        assert!(data.queue.is_empty() && !data.synchronizing);
+        let generation = data.state.generation;
+        data.state.targets = vec![Target {
+            id: "unrelated".into(),
+            subscribed: Knowledge::Yes,
+            ..Default::default()
+        }];
+        data.reconcile_selection(Some("unrelated"));
+        assert_eq!(data.state.selected.as_deref(), Some("wanted"));
+        assert_eq!(data.state.generation, generation);
+        assert!(!data.state.ready && !data.link.ready());
+    }
+
+    #[test]
+    fn receiver_identity_resolves_in_either_arrival_order_and_survives_metadata_loss() {
+        for inventory_first in [true, false] {
+            for explicit_selection in [true, false] {
+                let wanted = Target {
+                    id: "macos-bt:001122334455".into(),
+                    name: "Tablet".into(),
+                    identity: vec!["bt-address:001122334455".into()],
+                    ..Default::default()
+                };
+                let mut known = Target {
+                    id: "uuid".into(),
+                    aliases: vec![wanted.id.clone()],
+                    reconnectable: true,
+                    ..wanted.clone()
+                };
+                known.identity.push("cbcentral:uuid".into());
+                let live = Target {
+                    id: "uuid".into(),
+                    name: "Tablet".into(),
+                    identity: vec!["cbcentral:uuid".into()],
+                    subscribed: Knowledge::Yes,
+                    reconnectable: true,
+                    ..Default::default()
+                };
+                let mut data = Data::new(Some(wanted.clone()), Profile::Full, true);
+                data.state.adapter_state = AdapterState::Available;
+                if explicit_selection {
+                    data.select(wanted.id.clone());
+                }
+                let generation = data.state.generation;
+                data.known = if inventory_first {
+                    vec![known.clone()]
+                } else {
+                    vec![]
+                };
+                data.state.targets = merge_targets(
+                    &data.known,
+                    if inventory_first {
+                        vec![]
+                    } else {
+                        vec![live.clone()]
+                    },
+                    &data.state,
+                );
+                data.reconcile_selection(if inventory_first { None } else { Some("uuid") });
+                assert_eq!(data.state.generation, generation);
+                assert_ne!(data.state.selected.as_deref(), Some("uuid"));
+
+                data.known = vec![known];
+                data.state.targets = merge_targets(&data.known, [live.clone()], &data.state);
+                data.reconcile_selection(if inventory_first { Some("uuid") } else { None });
+                assert_eq!(data.state.selected.as_deref(), Some("uuid"));
+                assert_eq!(data.state.generation, generation + 1);
+                // Resolving metadata alone cannot bypass actual native report subscriptions.
+                assert!(!data.state.ready && !data.link.ready());
+
+                data.state.ready = true;
+                data.known.clear();
+                data.state.targets = merge_targets(&data.known, [live], &data.state);
+                data.reconcile_selection(None);
+                assert_eq!(data.state.selected.as_deref(), Some("uuid"));
+                assert_eq!(data.state.generation, generation + 1);
+                assert!(data.state.ready);
+            }
+        }
+    }
+
+    #[test]
+    fn paired_inventory_and_live_subscription_merge_without_changing_the_session() {
+        let address_id = "macos-bt:001122334455";
+        let known = Target {
+            id: address_id.into(),
+            name: "Tablet".into(),
+            identity: vec!["bt-address:001122334455".into(), "cbcentral:uuid".into()],
+            pairing: Knowledge::Yes,
+            link: Knowledge::Yes,
+            ..Default::default()
+        };
+        let live = Target {
+            id: "uuid".into(),
+            name: "Tablet".into(),
+            identity: vec!["cbcentral:uuid".into()],
+            subscribed: Knowledge::Yes,
+            link: Knowledge::Yes,
+            ..Default::default()
+        };
+        let state = Snapshot {
+            selected: Some(address_id.into()),
+            ready: true,
+            generation: 42,
+            adapter_state: AdapterState::Available,
+            ..Default::default()
+        };
+        let rows = merge_targets(std::slice::from_ref(&known), [live.clone()], &state);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "uuid");
+        assert!(rows[0].matches_id(address_id));
+        assert_eq!(rows[0].pairing, Knowledge::Yes);
+        assert_eq!(rows[0].connection, Connection::Connected);
+
+        // A fresh inventory replaces old bonds; no historical pairing survives removal.
+        let unpaired = merge_targets(&[], [live], &state);
+        assert_eq!(unpaired[0].pairing, Knowledge::Unknown);
+        let disconnected = merge_targets(
+            &[known],
+            [],
+            &Snapshot {
+                ready: false,
+                ..state
+            },
+        );
+        assert_eq!(disconnected[0].subscribed, Knowledge::Unknown);
+        assert_eq!(
+            disconnected[0].connection,
+            Connection::AwaitingHostSubscription
+        );
+    }
+
+    #[test]
+    fn system_connections_do_not_create_hid_readiness_and_radio_off_clears_links() {
+        let speaker = Target {
+            id: "speaker".into(),
+            name: "Speaker".into(),
+            pairing: Knowledge::Yes,
+            link: Knowledge::Yes,
+            ..Default::default()
+        };
+        let mut data = Data::new(None, Profile::MediaOnly, true);
+        data.state.adapter_state = AdapterState::Available;
+        data.known = vec![speaker];
+        data.rebuild_targets();
+        assert!(!data.state.ready);
+        assert!(data.state.selected.is_none());
+        assert_eq!(data.state.targets[0].subscribed, Knowledge::Unknown);
+        data.state.adapter_state = AdapterState::Disabled;
+        data.rebuild_targets();
+        assert_eq!(data.state.targets[0].link, Knowledge::No);
+        assert_eq!(data.state.targets[0].pairing, Knowledge::Yes);
+        data.known.clear();
+        data.rebuild_targets();
+        assert!(data.state.targets.is_empty());
+    }
+
+    #[test]
+    fn resolving_a_name_preserves_selection_readiness_and_generation() {
+        let remembered = Target {
+            id: "receiver".into(),
+            name: "My tablet".into(),
+            ..Default::default()
+        };
+        let mut data = Data::new(Some(remembered), Profile::MediaOnly, true);
+        data.state.selected = Some("receiver".into());
+        data.state.ready = true;
+        data.state.targets = vec![Target {
+            id: "receiver".into(),
+            name: "Old placeholder".into(),
+            subscribed: Knowledge::Yes,
+            connection: Connection::Connected,
+            ..Default::default()
+        }];
+        let mut expected = data.state.clone();
+        expected.targets[0].name = "My tablet".into();
+        data.update_names();
+        assert_eq!(data.state, expected);
+    }
     #[test]
     fn accepted_notifications_are_paced_and_false_preserves_the_pending_release() {
         let mut data = Data::new(None, Profile::Full, true);

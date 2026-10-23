@@ -168,7 +168,7 @@ pub fn row(target: &Target, state: &Snapshot, tr: impl Fn(&'static str) -> Strin
         ("disconnect-device", keys::RECEIVER_DISCONNECT)
     } else if target.link == Knowledge::Yes
         && (target.subscribed == Knowledge::Yes
-            || (state.service_paused && target.pairing == Knowledge::Yes))
+            || (state.service_paused && target.pairing == Knowledge::Yes && target.reconnectable))
     {
         ("device", keys::RECEIVER_CONNECT)
     } else if target.pairing == Knowledge::No {
@@ -498,6 +498,13 @@ mod tests {
             assert_ne!(device.action, "device");
         }
         target.link = Knowledge::Yes;
+        let unresolved = row(&target, &state, |key| key.into());
+        assert!(
+            !unresolved.enabled,
+            "a paired address alone cannot restore a HID session"
+        );
+        assert_ne!(unresolved.action, "device");
+        target.reconnectable = true;
         let device = row(&target, &state, |key| key.into());
         assert!(device.enabled);
         assert_eq!(device.action, "device");

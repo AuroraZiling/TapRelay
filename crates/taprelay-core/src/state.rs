@@ -24,6 +24,10 @@ pub struct Target {
     pub pairing: Knowledge,
     pub link: Knowledge,
     pub subscribed: Knowledge,
+    /// The platform can resolve this endpoint after restarting its HID service.
+    /// This is an identity capability, not evidence of a live subscription.
+    #[serde(default)]
+    pub reconnectable: bool,
     /// Platform-provided physical identity keys; display names are never identity.
     pub identity: Vec<String>,
     pub aliases: Vec<String>,
@@ -85,6 +89,7 @@ pub fn upsert_target(targets: &mut Vec<Target>, mut target: Target) {
         if previous.link == Knowledge::Yes {
             target.link = Knowledge::Yes;
         }
+        target.reconnectable |= previous.reconnectable;
         target.identity = identity;
         target.aliases = aliases;
     }

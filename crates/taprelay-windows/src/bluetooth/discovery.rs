@@ -118,6 +118,7 @@ impl Stream {
             .map(|info| {
                 Ok(Target {
                     id: info.Id()?.to_string(),
+                    reconnectable: true,
                     name: info.Name()?.to_string(),
                     kind: device_kind(info),
                     pairing: if info.Pairing()?.IsPaired()? {

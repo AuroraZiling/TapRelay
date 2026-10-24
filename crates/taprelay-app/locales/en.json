@@ -142,6 +142,7 @@
   "overview.manage": "Manage bindings",
   "permissions.badge.administrator": "Administrator",
   "permissions.badge.user": "User",
+  "permissions.current": "Current permission:",
   "permissions.restart": "Restart as administrator",
   "permissions.restart.short": "Restart elevated",
   "permissions.warning": "Running without elevation. Input may be unavailable in elevated games.",

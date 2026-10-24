@@ -267,11 +267,17 @@ impl AppView {
                             .gap_3()
                             .flex_wrap()
                             .child(
-                                permission_tag
-                                    .gap_1()
-                                    .flex_shrink_0()
-                                    .child(Icon::new(permission_icon).size_3p5())
-                                    .child(self.text(self.tr(permission_label))),
+                                div()
+                                    .h_flex()
+                                    .gap_2()
+                                    .child(self.text(self.tr("permissions.current")).text_sm())
+                                    .child(
+                                        permission_tag
+                                            .gap_1()
+                                            .flex_shrink_0()
+                                            .child(Icon::new(permission_icon).size_3p5())
+                                            .child(self.text(self.tr(permission_label))),
+                                    ),
                             )
                             .child(
                                 self.app_button(

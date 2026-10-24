@@ -142,6 +142,7 @@
   "overview.manage": "管理绑定",
   "permissions.badge.administrator": "管理员",
   "permissions.badge.user": "用户",
+  "permissions.current": "当前权限：",
   "permissions.restart": "以管理员身份重启",
   "permissions.restart.short": "以管理员重启",
   "permissions.warning": "当前未提权，在管理员游戏中可能无法监听。",

@@ -86,7 +86,6 @@
   "groups.default_name": "New group",
   "groups.delete": "Delete group",
   "groups.delete_confirm": "Unlink and delete",
-  "groups.delete_unused": "Delete this group? No functions are using it.",
   "groups.delete_warning": "This group will be removed from these functions' scopes:",
   "groups.help": "Set up a whitelist of applications for TapRelay to respond to.",
   "groups.invalid": "Use a unique group name (1–80 characters) and choose valid applications.",

@@ -143,28 +143,22 @@ impl Controller {
                         .filter(|mapping| mapping.groups.contains(value))
                         .map(|mapping| mapping.name.clone()),
                 );
+                if names.is_empty() {
+                    return self.delete_group(ui, value);
+                }
                 ui.groups.selected_id = value.into();
                 ui.groups.selected_name = rules.groups[value].name.clone();
-                ui.groups.deletion_warning = if names.is_empty() {
-                    self.tr(keys::GROUPS_DELETE_UNUSED)
-                } else {
-                    format!(
-                        "{}\n{}",
-                        self.tr(keys::GROUPS_DELETE_WARNING),
-                        names.join(" / ")
-                    )
-                };
+                ui.groups.deletion_warning = format!(
+                    "{}\n{}",
+                    self.tr(keys::GROUPS_DELETE_WARNING),
+                    names.join(" / ")
+                );
                 self.group_draft = None;
                 self.open_group_view(ui, true);
             }
             "delete" => {
                 anyhow::ensure!(ui.groups.confirming_delete, "Delete confirmation required");
-                let mut candidate = rules.clone();
-                candidate.remove_group(&ui.groups.selected_id.clone());
-                self.save_foreground_app_rules(ui, candidate.clone())?;
-                self.pending_group_rules = Some(candidate);
-                ui.groups.saving = true;
-                ui.groups.form_error = "".into();
+                self.delete_group(ui, &ui.groups.selected_id.clone())?;
             }
             "running" => {
                 let draft = self
@@ -224,6 +218,16 @@ impl Controller {
         Ok(())
     }
 
+    fn delete_group(&mut self, ui: &mut Presentation, id: &str) -> Result<()> {
+        let mut candidate = self.runtime.config.foreground_app_rules.clone();
+        candidate.remove_group(id);
+        self.save_foreground_app_rules(ui, candidate.clone())?;
+        self.pending_group_rules = Some(candidate);
+        ui.groups.saving = true;
+        ui.groups.form_error.clear();
+        Ok(())
+    }
+
     fn running_app_paths(&self) -> Result<Vec<String>> {
         let apps = self.desktop.running_apps()?;
         let apps = {
@@ -280,7 +284,12 @@ impl Controller {
                 self.close_group_view(ui);
             } else {
                 ui.groups.saving = false;
-                ui.groups.form_error = self.tr(keys::COMMON_SAVE_FAILED);
+                let message = self.tr(keys::COMMON_SAVE_FAILED);
+                if ui.groups.editor_open || ui.groups.confirming_delete {
+                    ui.groups.form_error = message;
+                } else {
+                    ui.groups.error = message;
+                }
             }
         }
     }

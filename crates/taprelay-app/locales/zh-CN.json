@@ -86,7 +86,6 @@
   "groups.default_name": "新建应用组",
   "groups.delete": "删除组",
   "groups.delete_confirm": "解绑并删除",
-  "groups.delete_unused": "确定删除此应用组？目前没有功能使用它。",
   "groups.delete_warning": "删除此组后，将从以下功能的生效范围中移除：",
   "groups.help": "设置前台应用白名单。",
   "groups.invalid": "请输入不重复的组名（1–80 个字符）并选择有效应用。",

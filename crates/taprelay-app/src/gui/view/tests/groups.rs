@@ -1,7 +1,155 @@
-use super::support::{open, settle};
+use super::support::{open, open_with_config, settle};
 use crate::config::Config;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{AppContext, TestAppContext};
+
+#[gpui_kit::test]
+fn deleting_a_group_used_by_a_function_requires_confirmation(cx: &mut TestAppContext) {
+    check_used_group_delete(cx, false);
+}
+
+#[gpui_kit::test]
+fn deleting_a_group_used_by_a_disabled_mapping_requires_confirmation(cx: &mut TestAppContext) {
+    check_used_group_delete(cx, true);
+}
+
+fn check_used_group_delete(cx: &mut TestAppContext, mapping: bool) {
+    use taprelay_core::{
+        foreground_app::ForegroundAppGroup,
+        function::{FunctionId, Shortcut},
+        mapping::{CustomMapping, MappingOutput},
+    };
+
+    let mut config = Config::default();
+    config.wizard.dismissed = true;
+    config.foreground_app_rules.groups.insert(
+        "work".into(),
+        ForegroundAppGroup {
+            name: "Work".into(),
+            foreground_apps: vec![r"C:\Apps\Editor.exe".into()],
+        },
+    );
+    if mapping {
+        config.custom_mappings.push(CustomMapping {
+            id: 1,
+            name: "Speed".into(),
+            enabled: false,
+            shortcuts: vec![Shortcut::keyboard(Default::default(), 0x77)],
+            output: MappingOutput::Keyboard {
+                usage: 0x59,
+                modifiers: 0,
+            },
+            groups: ["work".into()].into(),
+        });
+    } else {
+        config
+            .foreground_app_rules
+            .assignments
+            .insert(FunctionId::MediaPlayPause, ["work".into()].into());
+    }
+    let geometry = config.window.clone();
+    let (handle, view, folder) =
+        open_with_config(cx, geometry.width, geometry.height, config, None);
+    settle(cx, handle, &view);
+    cx.update_window(handle, |_, window, cx| {
+        cx.set_reduce_motion(true);
+        window.render_frame(cx);
+        window.click("0-2", cx);
+    })
+    .unwrap();
+    settle(cx, handle, &view);
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("group-delete-work", cx);
+        assert!(view.read(cx).ui.groups.confirming_delete);
+        assert!(window.find("group-delete-dialog").visible());
+        if mapping {
+            assert!(view.read(cx).ui.groups.deletion_warning.contains("Speed"));
+        }
+        window.within("dialog").click("dialog-cancel", cx);
+        assert!(
+            view.read(cx)
+                .controller
+                .runtime
+                .config
+                .foreground_app_rules
+                .groups
+                .contains_key("work")
+        );
+        window.click("group-delete-work", cx);
+        window.within("dialog").click("dialog-delete", cx);
+    })
+    .unwrap();
+    settle(cx, handle, &view);
+    let saved = Config::load(&folder.path().join("config.json")).unwrap();
+    assert!(saved.foreground_app_rules.groups.is_empty());
+    assert!(saved.foreground_app_rules.assignments.is_empty());
+    assert!(
+        saved
+            .custom_mappings
+            .iter()
+            .all(|mapping| mapping.groups.is_empty())
+    );
+}
+
+#[gpui_kit::test]
+fn deleting_an_unused_group_keeps_it_on_save_failure_and_allows_retry(cx: &mut TestAppContext) {
+    let (handle, view, folder) = open(cx);
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("0-2", cx);
+    })
+    .unwrap();
+    settle(cx, handle, &view);
+    cx.update_window(handle, |_, window, cx| {
+        window.click("group-create", cx);
+    })
+    .unwrap();
+    settle(cx, handle, &view);
+    cx.update_window(handle, |_, window, cx| {
+        window.click("group-save", cx);
+    })
+    .unwrap();
+    settle(cx, handle, &view);
+    let saved_path = folder.path().join("config.json");
+    let original = Config::load(&saved_path).unwrap().foreground_app_rules;
+    let id = original.groups.keys().next().unwrap();
+    let delete = gpui_kit::SharedString::from(format!("group-delete-{id}"));
+    cx.update_window(handle, |_, window, cx| {
+        view.update(cx, |view, _| {
+            view.controller.path = folder.path().to_owned()
+        });
+        window.render_frame(cx);
+        window.click(delete.clone(), cx);
+        assert!(!view.read(cx).ui.groups.confirming_delete);
+    })
+    .unwrap();
+    settle(cx, handle, &view);
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find(delete.clone()).visible());
+        assert!(!view.read(cx).ui.groups.error.is_empty());
+        assert_eq!(
+            view.read(cx).controller.runtime.config.foreground_app_rules,
+            original
+        );
+        view.update(cx, |view, _| view.controller.path = saved_path.clone());
+        window.click(delete, cx);
+    })
+    .unwrap();
+    settle(cx, handle, &view);
+    assert!(
+        Config::load(&saved_path)
+            .unwrap()
+            .foreground_app_rules
+            .groups
+            .is_empty()
+    );
+    cx.update(|cx| {
+        assert!(!view.read(cx).ui.groups.confirming_delete);
+        assert!(view.read(cx).ui.groups.error.is_empty());
+    });
+}
 
 #[gpui_kit::test]
 fn browsing_an_executable_is_async_and_handles_cancel_invalid_and_selected_paths(
@@ -222,20 +370,8 @@ fn creates_selects_removes_and_deletes_an_application_group_through_controls(
         assert!(!view.read(cx).ui.groups.editor_open);
         assert!(window.find(delete.clone()).visible());
         window.click(delete.clone(), cx);
-        window.within("dialog").click("dialog-cancel", cx);
-        assert!(window.find(delete.clone()).visible());
-        assert_eq!(
-            view.read(cx)
-                .controller
-                .runtime
-                .config
-                .foreground_app_rules
-                .groups
-                .len(),
-            1
-        );
-        window.click(delete.clone(), cx);
-        window.within("dialog").click("dialog-delete", cx);
+        assert!(!view.read(cx).ui.groups.confirming_delete);
+        assert!(window.try_find("group-delete-dialog").is_none());
     })
     .unwrap();
     settle(cx, handle, &view);

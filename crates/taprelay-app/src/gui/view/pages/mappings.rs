@@ -96,7 +96,7 @@ impl AppView {
                             .flex_basis(px(0.))
                             .min_w_0()
                             .text_ellipsis()
-                            .child(self.text(row.name.clone())),
+                            .child(self.text(row.name.clone()).text_sm()),
                     )
                     .child(
                         self.caption(format!("{} → {}", row.input, row.output), cx)
@@ -112,7 +112,7 @@ impl AppView {
                             )))
                             .role(Role::Label)
                             .aria_label(row.scope.clone())
-                            .text_size(rems(0.8125))
+                            .text_sm()
                             .w(rems(10.))
                             .flex_shrink_0()
                             .text_ellipsis()

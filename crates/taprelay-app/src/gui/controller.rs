@@ -168,13 +168,18 @@ impl Controller {
         self.pending_notification = Some(message);
     }
 
-    pub(super) fn passthrough_feedback(&mut self, notice: &crate::runtime::passthrough::Notice) {
-        let (prefix, device, suffix) = notice.text_parts(self.locale());
-        let message = format!("{prefix}{device}{suffix}");
-        if self.runtime.config.options.notifications {
-            self.desktop.notify("TapRelay", &message);
-        }
-        self.say(message);
+    pub(super) fn passthrough_feedback(
+        &mut self,
+        notice: Option<crate::runtime::passthrough::Notice>,
+        ui: &Presentation,
+    ) {
+        self.overlay.update(
+            notice,
+            self.runtime.config.options.passthrough_overlay && self.exit.is_none(),
+            self.locale(),
+            ui.overlay_background,
+            ui.overlay_foreground,
+        );
     }
 
     pub(super) fn command_error(&mut self, error: &anyhow::Error) {
@@ -197,8 +202,8 @@ impl Controller {
     pub(super) fn notify_error(&mut self, summary: &str) {
         if self.runtime.config.options.notifications
             && self.last_notification.elapsed() > Duration::from_secs(60)
+            && self.desktop.notify("TapRelay", summary)
         {
-            self.desktop.notify("TapRelay", summary);
             self.last_notification = Instant::now();
         }
     }

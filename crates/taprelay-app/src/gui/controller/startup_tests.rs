@@ -27,6 +27,7 @@ fn controller(state: Snapshot) -> (Controller, tempfile::TempDir) {
         None,
         Shell::Headless {
             autostart: false,
+            foreground: false,
             running_apps: Vec::new(),
             notifications: Default::default(),
             bluetooth_settings_opened: false,

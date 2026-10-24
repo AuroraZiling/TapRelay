@@ -7,6 +7,7 @@ pub(in crate::gui) enum Shell {
     #[cfg(test)]
     Headless {
         autostart: bool,
+        foreground: bool,
         running_apps: Vec<String>,
         notifications: std::cell::RefCell<Vec<(String, String)>>,
         bluetooth_settings_opened: bool,
@@ -100,7 +101,19 @@ impl Shell {
             Self::Headless { .. } => {}
         }
     }
-    pub(in crate::gui) fn notify(&self, title: &str, body: &str) {
+    fn foreground_is_ours(&self) -> bool {
+        match self {
+            Self::Native(_) => desktop::foreground_is_ours(),
+            #[cfg(test)]
+            Self::Headless { foreground, .. } => *foreground,
+        }
+    }
+
+    /// Returns whether the notification was submitted to the desktop.
+    pub(in crate::gui) fn notify(&self, title: &str, body: &str) -> bool {
+        if self.foreground_is_ours() {
+            return false;
+        }
         match self {
             Self::Native(desktop) => desktop.notify(title, body),
             #[cfg(test)]
@@ -108,6 +121,7 @@ impl Shell {
                 notifications.borrow_mut().push((title.into(), body.into()))
             }
         }
+        true
     }
 
     pub(in crate::gui) fn running_apps(&self) -> Result<Vec<RunningApp>> {

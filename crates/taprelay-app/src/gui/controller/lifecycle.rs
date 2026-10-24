@@ -21,20 +21,7 @@ impl Controller {
                 Notice::Passthrough(notice) => passthrough_notice = Some(notice),
             }
         }
-        if self.exit.is_none()
-            && let Some(notice) = &passthrough_notice
-        {
-            self.passthrough_feedback(notice);
-        }
-        {
-            self.overlay.update(
-                passthrough_notice,
-                self.runtime.config.options.passthrough_overlay && self.exit.is_none(),
-                self.locale(),
-                ui.overlay_background,
-                ui.overlay_foreground,
-            );
-        }
+        self.passthrough_feedback(passthrough_notice, ui);
         if self.exit.is_some() {
             if let Err(error) = self.finish_exit(ui) {
                 self.command_error(&error);

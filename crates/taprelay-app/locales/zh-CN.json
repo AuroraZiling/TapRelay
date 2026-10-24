@@ -220,7 +220,7 @@
   "settings.license": "开源许可证",
   "settings.licensing": "许可",
   "settings.notifications": "通知",
-  "settings.notifications.hint": "接收错误与透传状态通知，后台运行时也可收到。",
+  "settings.notifications.hint": "仅在 TapRelay 处于后台时接收错误与连接异常通知。",
   "settings.notifications.toggle": "系统通知",
   "settings.passthrough": "透传",
   "settings.passthrough.mouse.report.rate": "鼠标回报率上限",

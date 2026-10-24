@@ -110,48 +110,92 @@ fn notification_content_exposes_a_polite_live_region_in_both_languages() {
 }
 
 #[gpui_kit::test]
-fn passthrough_feedback_preserves_device_and_respects_system_notification_setting(
-    cx: &mut TestAppContext,
-) {
+fn passthrough_feedback_does_not_emit_window_or_system_notifications(cx: &mut TestAppContext) {
+    use crate::runtime::passthrough::{Notice, Status};
+
     let (handle, view, _folder) = open(cx);
     cx.update_window(handle, |_, _, cx| {
         view.update(cx, |view, _| {
             view._pump = gpui_kit::Task::ready(());
+            // Keep this test headless; disabling the capsule must not fall back
+            // to either notification channel.
+            view.controller.runtime.config.options.passthrough_overlay = false;
             view.controller.hidden = true;
-            for (language, expected) in [
-                ("en", "Disconnected from Tablet"),
-                ("zh-CN", "已断开与 Tablet 的连接"),
-            ] {
-                view.controller.runtime.config.options.language =
-                    crate::config::Language::from_name(language).unwrap();
-                for enabled in [true, false] {
-                    view.controller.runtime.config.options.notifications = enabled;
-                    view.controller
-                        .passthrough_feedback(&crate::runtime::passthrough::Notice {
-                            status: crate::runtime::passthrough::Status::Disconnected,
-                            device: "Tablet".into(),
-                        });
-                    assert_eq!(
-                        view.controller.pending_notification.as_deref(),
-                        Some(expected)
-                    );
-                    let crate::gui::controller::Shell::Headless { notifications, .. } =
-                        &view.controller.desktop
-                    else {
-                        unreachable!()
-                    };
-                    assert_eq!(
-                        *notifications.borrow(),
-                        if enabled {
-                            vec![("TapRelay".into(), expected.into())]
-                        } else {
-                            Vec::new()
-                        }
-                    );
-                    notifications.borrow_mut().clear();
-                }
+            view.controller.runtime.config.options.notifications = true;
+            let crate::gui::controller::Shell::Headless { foreground, .. } =
+                &mut view.controller.desktop
+            else {
+                unreachable!()
+            };
+            *foreground = false;
+            for status in [Status::Controlling, Status::Stopped, Status::Disconnected] {
+                view.controller.passthrough_feedback(
+                    Some(Notice {
+                        status,
+                        device: "Tablet".into(),
+                    }),
+                    &view.ui,
+                );
+                assert!(view.controller.pending_notification.is_none());
             }
+            let crate::gui::controller::Shell::Headless { notifications, .. } =
+                &view.controller.desktop
+            else {
+                unreachable!()
+            };
+            assert!(notifications.borrow().is_empty());
         });
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn foreground_errors_keep_window_feedback_without_consuming_system_notification_cooldown(
+    cx: &mut TestAppContext,
+) {
+    use crate::gui::controller::Shell;
+
+    let (handle, view, _folder) = open(cx);
+    cx.update_window(handle, |_, window, cx| {
+        view.update(cx, |view, cx| {
+            view._pump = gpui_kit::Task::ready(());
+            view.controller.runtime.config.options.notifications = true;
+            view.controller.error("Foreground failure");
+            assert_eq!(
+                view.controller.pending_notification.as_deref(),
+                Some(view.tr("error.operation").as_str())
+            );
+            let Shell::Headless {
+                foreground,
+                notifications,
+                ..
+            } = &mut view.controller.desktop
+            else {
+                unreachable!()
+            };
+            assert!(notifications.borrow().is_empty());
+            *foreground = false;
+            // The visible window has lost focus. A disabled preference must
+            // also leave the cooldown available for a subsequent notification.
+            assert!(!view.controller.hidden);
+            view.controller.runtime.config.options.notifications = false;
+            view.controller.notify_error("Disabled");
+            view.controller.runtime.config.options.notifications = true;
+            view.controller.notify_error("Background failure");
+            view.controller.notify_error("Repeated failure");
+            let Shell::Headless { notifications, .. } = &view.controller.desktop else {
+                unreachable!()
+            };
+            assert_eq!(
+                *notifications.borrow(),
+                vec![("TapRelay".into(), "Background failure".into())]
+            );
+            view.effects(window, cx);
+        });
+    })
+    .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        assert_eq!(window.notifications(cx).len(), 1);
     })
     .unwrap();
 }

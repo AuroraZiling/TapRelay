@@ -220,7 +220,7 @@
   "settings.license": "License",
   "settings.licensing": "Licensing",
   "settings.notifications": "Notifications",
-  "settings.notifications.hint": "Receive error and passthrough alerts, including in the background.",
+  "settings.notifications.hint": "Receive error and connection alerts only when TapRelay is in the background.",
   "settings.notifications.toggle": "System notifications",
   "settings.passthrough": "Passthrough",
   "settings.passthrough.mouse.report.rate": "Mouse report rate limit",

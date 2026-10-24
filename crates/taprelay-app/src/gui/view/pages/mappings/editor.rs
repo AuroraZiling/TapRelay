@@ -136,7 +136,7 @@ impl AppView {
                     if recording {
                         mapping.capture_text.clone()
                     } else {
-                        self.tr("shortcuts.unset")
+                        self.tr("shortcuts.add")
                     },
                     Command::Mapping("capture-input", mapping.inputs.len().to_string()),
                     busy,

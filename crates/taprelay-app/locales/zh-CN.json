@@ -234,7 +234,7 @@
   "settings.theme.hint": "跟随系统时，随系统外观自动切换深浅色。",
   "settings.third.party.notices": "第三方声明",
   "settings.wizard": "配置向导",
-  "shortcuts.add": "添加绑定",
+  "shortcuts.add": "添加快捷键",
   "shortcuts.unset": "未设置快捷键",
   "startup.bluetooth.settings": "蓝牙设置",
   "startup.description": "检查应用环境和蓝牙媒体控制服务。",

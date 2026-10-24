@@ -119,7 +119,7 @@ impl AppView {
                         if recording {
                             self.ui.binding.capture.text.clone()
                         } else {
-                            self.tr("shortcuts.unset")
+                            self.tr("shortcuts.add")
                         },
                         Command::Binding(BindingCommand::BeginCapture(CaptureTarget {
                             id,

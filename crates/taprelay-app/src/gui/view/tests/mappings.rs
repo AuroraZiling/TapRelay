@@ -6,6 +6,104 @@ use gpui_kit::test::TestWindowExt;
 use gpui_kit::{AppContext, TestAppContext, px};
 
 #[gpui_kit::test]
+fn cancelling_output_capture_does_not_record_the_cancel_click(cx: &mut TestAppContext) {
+    use gpui_kit::{MouseButton, MouseDownEvent, MouseUpEvent};
+    use taprelay_core::input::{InputCode, InputEvent, MouseButton as InputMouseButton};
+
+    let (handle, view, _folder) = open(cx);
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("0-1", cx);
+    })
+    .unwrap();
+    settle(cx, handle, &view);
+    cx.update_window(handle, |_, window, cx| {
+        window.click("custom-mappings", cx);
+        window.click("mapping-create", cx);
+        window.click("mapping-record-output", cx);
+    })
+    .unwrap();
+    settle(cx, handle, &view);
+    cx.update_window(handle, |_, window, cx| window.press("f8", cx))
+        .unwrap();
+    wait_until(cx, handle, &view, |view| !view.controller.recording());
+    let original = cx.update(|cx| view.read(cx).ui.mapping.selected_output.clone());
+    cx.update_window(handle, |_, window, cx| {
+        window.click("mapping-record-output", cx)
+    })
+    .unwrap();
+    settle(cx, handle, &view);
+    let position = cx
+        .update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.hover("mapping-cancel-output", cx);
+            window.find("mapping-cancel-output").bounds().center()
+        })
+        .unwrap();
+    for down in [true, false] {
+        cx.update(|cx| {
+            view.update(cx, |view, _| {
+                view.controller.runtime.window_key(InputEvent {
+                    code: InputCode::Mouse(InputMouseButton::Left),
+                    down,
+                    captured: std::time::Instant::now(),
+                });
+                view.controller.runtime.tick();
+            });
+        });
+        settle(cx, handle, &view);
+        cx.update_window(handle, |_, window, cx| {
+            if down {
+                window.dispatch_event(
+                    gpui_kit::PlatformInput::MouseDown(MouseDownEvent {
+                        button: MouseButton::Left,
+                        position,
+                        click_count: 1,
+                        ..Default::default()
+                    }),
+                    cx,
+                );
+            } else {
+                window.dispatch_event(
+                    gpui_kit::PlatformInput::MouseUp(MouseUpEvent {
+                        button: MouseButton::Left,
+                        position,
+                        click_count: 1,
+                        ..Default::default()
+                    }),
+                    cx,
+                );
+            }
+        })
+        .unwrap();
+        settle(cx, handle, &view);
+    }
+    cx.update(|cx| {
+        assert_eq!(view.read(cx).ui.mapping.selected_output, original);
+        assert!(!view.read(cx).controller.recording());
+    });
+    cx.update_window(handle, |_, window, cx| {
+        window.click("mapping-record-output", cx)
+    })
+    .unwrap();
+    settle(cx, handle, &view);
+    cx.update(|cx| {
+        view.update(cx, |view, _| {
+            for down in [true, false] {
+                view.controller.runtime.window_key(InputEvent {
+                    code: InputCode::Mouse(InputMouseButton::Left),
+                    down,
+                    captured: std::time::Instant::now(),
+                });
+            }
+            view.controller.runtime.tick();
+        });
+    });
+    wait_until(cx, handle, &view, |view| !view.controller.recording());
+    cx.update(|cx| assert_eq!(view.read(cx).ui.mapping.selected_output.value, "mouse/0"));
+}
+
+#[gpui_kit::test]
 fn saving_an_invalid_mapping_from_the_leave_dialog_returns_to_editor_with_error(
     cx: &mut TestAppContext,
 ) {

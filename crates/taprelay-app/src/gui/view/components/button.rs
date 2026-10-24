@@ -1,5 +1,6 @@
 use crate::gui::action::Action;
 use crate::gui::view::{AppView, Command};
+use crate::runtime::commands::BindingCommand;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{Disableable, button::Button};
 use gpui_kit::{prelude::*, *};
@@ -24,13 +25,9 @@ impl AppView {
         cx: &Context<Self>,
     ) -> Button {
         let label = label.into();
-        Button::new(id)
+        self.command_button(id, command, disabled, cx)
             .accessibility_label(label.clone())
             .child(self.button_text(label))
-            .disabled(disabled)
-            .on_click(
-                cx.listener(move |this, _, window, cx| this.dispatch(command.clone(), window, cx)),
-            )
     }
 
     pub(in crate::gui::view) fn app_button(
@@ -72,10 +69,34 @@ impl AppView {
         disabled: bool,
         cx: &Context<Self>,
     ) -> Button {
-        Button::new(id)
+        self.command_button(id, command, disabled, cx)
             .icon(icon)
             .accessibility_label(label)
+    }
+
+    fn command_button(
+        &self,
+        id: impl Into<ElementId>,
+        command: Command,
+        disabled: bool,
+        cx: &Context<Self>,
+    ) -> Button {
+        let cancel_capture = matches!(
+            command,
+            Command::Binding(BindingCommand::CancelCapture) | Command::Mapping("cancel-capture", _)
+        );
+        Button::new(id)
             .disabled(disabled)
+            .when(cancel_capture && !disabled, |button| {
+                // Native mouse capture commits on release, before a button's click callback.
+                button.on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, window, cx| {
+                        this.dispatch(Command::Binding(BindingCommand::CancelCapture), window, cx);
+                        cx.stop_propagation();
+                    }),
+                )
+            })
             .on_click(
                 cx.listener(move |this, _, window, cx| this.dispatch(command.clone(), window, cx)),
             )

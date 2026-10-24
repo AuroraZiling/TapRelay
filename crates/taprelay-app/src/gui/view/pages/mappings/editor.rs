@@ -222,7 +222,11 @@ impl AppView {
             self.reveal_focus(
                 "output-record-focus",
                 self.button(
-                    "mapping-record-output",
+                    if mapping.capture_slot == 2 {
+                        "mapping-cancel-output"
+                    } else {
+                        "mapping-record-output"
+                    },
                     if mapping.capture_slot == 2 {
                         self.tr("capture.cancel_shortcut")
                     } else {

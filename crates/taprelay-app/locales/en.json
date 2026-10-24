@@ -91,7 +91,6 @@
   "groups.invalid": "Use a unique group name (1–80 characters) and choose valid applications.",
   "groups.list_empty": "No applications added",
   "groups.missing": "File missing or inaccessible. Choose the new executable if it has moved.",
-  "groups.name": "Group name",
   "groups.name_example": "e.g. Games or Work",
   "groups.name_required": "Enter a name for this group.",
   "groups.no_apps": "This group is empty. Functions assigned to it will not respond in any application.",

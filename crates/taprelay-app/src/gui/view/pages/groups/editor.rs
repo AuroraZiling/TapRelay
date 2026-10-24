@@ -103,12 +103,12 @@ impl AppView {
                 div()
                     .h_flex()
                     .gap_4()
-                    .child(self.text(self.tr("groups.name")))
+                    .child(self.text(self.tr("common.description")))
                     .child(
                         div().flex_1().min_w_0().child(
                             Input::new(&self.group_name)
                                 .id("group-name")
-                                .aria_label(self.tr("groups.name"))
+                                .aria_label(self.tr("common.description"))
                                 .disabled(busy),
                         ),
                     ),

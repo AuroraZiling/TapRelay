@@ -91,7 +91,6 @@
   "groups.invalid": "请输入不重复的组名（1–80 个字符）并选择有效应用。",
   "groups.list_empty": "尚未添加应用",
   "groups.missing": "文件不存在或无法访问；如果程序已移动，请重新添加。",
-  "groups.name": "应用组名称",
   "groups.name_example": "例如：游戏、办公",
   "groups.name_required": "请为应用组填写一个名称。",
   "groups.no_apps": "此组为空，关联的功能不会在任何应用中响应。",

@@ -181,7 +181,6 @@ impl AppView {
                         .child(
                             self.caption(gesture.gesture.clone(), cx)
                                 .w_10()
-                                .text_right()
                                 .flex_shrink_0(),
                         )
                         .child(

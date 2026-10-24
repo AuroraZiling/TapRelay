@@ -77,13 +77,14 @@ impl AppView {
                     .when(id == "bindings", |content| content.pr_3())
                     .child(content),
             );
+        let viewport = div()
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
+            .child(scroller.size_full().test_support());
         if id == "bindings" {
-            div()
-                .relative()
-                .flex_1()
-                .min_h_0()
-                .min_w_0()
-                .child(scroller.size_full().test_support())
+            viewport
                 .child(
                     div().absolute().inset_0().child(
                         Scrollbar::vertical(&self.content_scroll)
@@ -94,9 +95,8 @@ impl AppView {
                 )
                 .into_any_element()
         } else {
-            scroller
+            viewport
                 .vertical_scrollbar(&self.content_scroll)
-                .test_support()
                 .into_any_element()
         }
     }

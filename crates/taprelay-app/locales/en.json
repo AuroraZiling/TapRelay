@@ -214,6 +214,7 @@
   "settings.data.folder": "Data folder",
   "settings.hidden": "Start in the background",
   "settings.hidden.hint": "After setup, start with the window hidden. Open it again from the TapRelay icon.",
+  "settings.homepage": "Homepage",
   "settings.language": "Language",
   "settings.language.hint": "Update the interface and menus immediately, without restarting.",
   "settings.license": "License",

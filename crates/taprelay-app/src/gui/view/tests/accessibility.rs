@@ -78,7 +78,7 @@ fn tab_and_reverse_tab_reveal_controls_in_compact_scroll_regions(cx: &mut TestAp
                         for element in snapshots(window) {
                             if matches!(
                                 element.role(),
-                                Some(Role::Button | Role::Switch | Role::CheckBox)
+                                Some(Role::Button | Role::Link | Role::Switch | Role::CheckBox)
                             ) && element.focused() == Some(true)
                             {
                                 assert!(
@@ -100,7 +100,17 @@ fn tab_and_reverse_tab_reveal_controls_in_compact_scroll_regions(cx: &mut TestAp
                 }
             }
             if page == 3 {
-                cx.update(|cx| assert!(visited.contains(&view.read(cx).tr("settings.wizard"))));
+                cx.update(|cx| {
+                    for key in [
+                        "settings.repository",
+                        "settings.homepage",
+                        "settings.data.folder",
+                        "logs.folder",
+                        "settings.wizard",
+                    ] {
+                        assert!(visited.contains(&view.read(cx).tr(key)), "{key}");
+                    }
+                });
             }
         }
     }

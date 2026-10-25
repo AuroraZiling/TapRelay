@@ -5,8 +5,8 @@ use crate::gui::{
 };
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::{
-    Selectable, StyledExt,
-    button::ButtonVariants,
+    ActiveTheme, Selectable, StyledExt,
+    button::{Button, ButtonCustomVariant, ButtonGroup, ButtonVariants},
     combobox::Combobox,
     group_box::{GroupBox, GroupBoxVariants},
     searchable_list::SearchableListItem,
@@ -62,9 +62,40 @@ impl AppView {
 
     pub(in crate::gui::view) fn settings(&self, cx: &Context<Self>) -> AnyElement {
         let mut appearance = self.section("settings.appearance", cx);
-        let mut themes = div().h_flex().gap_2();
-        for (index, name) in ["system", "light", "dark"].iter().enumerate() {
-            themes = themes.child(
+        let appearance_choice = |button: Button, selected: bool| {
+            button
+                .border_color(cx.theme().border)
+                .selected(selected)
+                .when(selected, |button| button.primary())
+                .when(!cx.theme().is_dark(), |button| {
+                    let surface = cx.theme().group_box;
+                    let primary = cx.theme().primary;
+                    let selected_fill = surface.blend(primary.opacity(0.1));
+                    button
+                        .custom(
+                            ButtonCustomVariant::new(cx)
+                                .color(surface)
+                                .foreground(if selected {
+                                    primary
+                                } else {
+                                    cx.theme().foreground
+                                })
+                                .hover(surface.blend(primary.opacity(0.04)))
+                                .active(selected_fill),
+                        )
+                        .bg(if selected { selected_fill } else { surface })
+                })
+        };
+        let mut themes = ButtonGroup::new("theme-options").outline().flex_shrink_0();
+        for (index, (name, icon)) in [
+            ("system", IconName::Monitor),
+            ("light", IconName::Sun),
+            ("dark", IconName::Moon),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            themes = themes.child(appearance_choice(
                 self.button(
                     ("theme", index),
                     self.tr(&format!("theme.{name}")),
@@ -72,13 +103,15 @@ impl AppView {
                     false,
                     cx,
                 )
-                .selected(self.ui.theme_choice == index as i32)
-                .toggled(self.ui.theme_choice == index as i32),
-            );
+                .icon(icon),
+                self.ui.theme_choice == index as i32,
+            ));
         }
-        let mut languages = div().h_flex().gap_2();
+        let mut languages = ButtonGroup::new("language-options")
+            .outline()
+            .flex_shrink_0();
         for (index, option) in self.ui.language_options.iter().enumerate() {
-            languages = languages.child(
+            languages = languages.child(appearance_choice(
                 self.button(
                     ("language", index),
                     option.label.clone(),
@@ -86,31 +119,25 @@ impl AppView {
                     false,
                     cx,
                 )
-                .selected(self.ui.language_choice == index as i32)
-                .toggled(self.ui.language_choice == index as i32),
-            );
+                .icon(if option.value == "system" {
+                    IconName::Globe
+                } else {
+                    IconName::Languages
+                }),
+                self.ui.language_choice == index as i32,
+            ));
         }
         appearance = appearance
-            .child(
-                self.reveal_focus(
-                    "theme-options",
-                    div()
-                        .v_flex()
-                        .gap_2()
-                        .child(self.setting_text("settings.theme", "settings.theme.hint", cx))
-                        .child(themes.flex_wrap()),
-                ),
-            )
-            .child(
-                self.reveal_focus(
-                    "language-options",
-                    div()
-                        .v_flex()
-                        .gap_2()
-                        .child(self.setting_text("settings.language", "settings.language.hint", cx))
-                        .child(languages.flex_wrap()),
-                ),
-            );
+            .child(self.setting_row(
+                "theme",
+                self.setting_text("settings.theme", "settings.theme.hint", cx),
+                themes,
+            ))
+            .child(self.setting_row(
+                "language",
+                self.setting_text("settings.language", "settings.language.hint", cx),
+                languages,
+            ));
         let passthrough = self
             .section("settings.passthrough", cx)
             .child(self.setting(
@@ -479,43 +506,102 @@ impl AppView {
             );
         let about = self
             .section("settings.about", cx)
-            .child(self.text(format!("TapRelay {}", self.ui.app_version)))
-            .child(self.caption(self.ui.data_directory.clone(), cx))
+            .child(
+                self.setting_row(
+                    "about-project",
+                    div()
+                        .h_flex()
+                        .gap_3()
+                        .child(
+                            self.text("TapRelay")
+                                .text_lg()
+                                .font_weight(FontWeight::SEMIBOLD),
+                        )
+                        .child(Tag::secondary().child(self.text(self.ui.app_version.clone()))),
+                    div()
+                        .h_flex()
+                        .gap_1()
+                        .flex_shrink_0()
+                        .child(
+                            self.icon_button(
+                                "repository",
+                                IconName::Github,
+                                self.tr("settings.repository"),
+                                Command::App(Action::Repository, String::new()),
+                                false,
+                                cx,
+                            )
+                            .link()
+                            .size_8(),
+                        )
+                        .child(
+                            self.icon_button(
+                                "homepage",
+                                IconName::House,
+                                self.tr("settings.homepage"),
+                                Command::App(Action::Homepage, String::new()),
+                                false,
+                                cx,
+                            )
+                            .link()
+                            .size_8(),
+                        ),
+                ),
+            )
+            .child(
+                div()
+                    .h_flex()
+                    .gap_2()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(Icon::new(IconName::FolderOpen).size_4().flex_shrink_0())
+                    .child(self.caption(self.ui.data_directory.clone(), cx).min_w_0()),
+            )
             .child(
                 self.reveal_focus(
                     "about-actions",
                     div()
                         .h_flex()
-                        .gap_2()
+                        .justify_between()
+                        .gap_3()
                         .flex_wrap()
-                        .child(self.app_button(
-                            "repository",
-                            "settings.repository",
-                            Action::Repository,
-                            false,
-                            cx,
-                        ))
-                        .child(self.app_button(
-                            "data-folder",
-                            "settings.data.folder",
-                            Action::DataFolder,
-                            false,
-                            cx,
-                        ))
-                        .child(self.app_button(
-                            "logs-folder",
-                            "logs.folder",
-                            Action::LogsFolder,
-                            false,
-                            cx,
-                        ))
-                        .child(self.app_button(
-                            "wizard",
-                            "settings.wizard",
-                            Action::Wizard,
-                            false,
-                            cx,
-                        )),
+                        .pt_4()
+                        .border_t_1()
+                        .border_color(cx.theme().border)
+                        .child(
+                            div()
+                                .h_flex()
+                                .gap_2()
+                                .child(
+                                    self.app_button(
+                                        "data-folder",
+                                        "settings.data.folder",
+                                        Action::DataFolder,
+                                        false,
+                                        cx,
+                                    )
+                                    .icon(IconName::FolderOpen)
+                                    .ghost(),
+                                )
+                                .child(
+                                    self.app_button(
+                                        "logs-folder",
+                                        "logs.folder",
+                                        Action::LogsFolder,
+                                        false,
+                                        cx,
+                                    )
+                                    .icon(IconName::FileText)
+                                    .ghost(),
+                                ),
+                        )
+                        .child(
+                            self.app_button("wizard", "settings.wizard", Action::Wizard, false, cx)
+                                .icon(
+                                    Icon::new(IconName::WandSparkles)
+                                        .text_color(cx.theme().primary),
+                                )
+                                .secondary(),
+                        ),
                 ),
             );
         self.scroller(

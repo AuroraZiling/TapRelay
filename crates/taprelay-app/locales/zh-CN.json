@@ -214,6 +214,7 @@
   "settings.data.folder": "数据文件夹",
   "settings.hidden": "后台启动",
   "settings.hidden.hint": "完成配置后，启动时隐藏主窗口，可通过 TapRelay 图标重新打开。",
+  "settings.homepage": "主页",
   "settings.language": "界面语言",
   "settings.language.hint": "立即切换界面与菜单的语言，无需重启。",
   "settings.license": "开源许可证",

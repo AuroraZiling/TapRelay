@@ -130,6 +130,7 @@ impl Controller {
                 })?;
             }
             Action::Repository => desktop::open("https://github.com/AuroraZiling/TapRelay")?,
+            Action::Homepage => desktop::open("https://taprelay.ziling.moe")?,
             Action::License => {
                 desktop::open("https://github.com/AuroraZiling/TapRelay/blob/main/LICENSE")?
             }

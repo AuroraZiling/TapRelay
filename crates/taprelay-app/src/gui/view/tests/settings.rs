@@ -182,6 +182,60 @@ fn login_approval_refreshes_from_the_os_and_pending_registration_can_be_cancelle
 }
 
 #[gpui_kit::test]
+fn appearance_choices_remain_single_selected_and_keyboard_operable(cx: &mut TestAppContext) {
+    let (handle, view, folder) = open(cx);
+    settle(cx, handle, &view);
+    cx.update_window(handle, |_, window, cx| {
+        cx.set_reduce_motion(true);
+        window.render_frame(cx);
+        window.click(("nav", 3usize), cx);
+        view.update(cx, |view, cx| view.focus.focus(window, cx));
+        for _ in 0..10 {
+            window.press("tab", cx);
+            if window.find(("theme", 0usize)).focused() == Some(true) {
+                break;
+            }
+        }
+        assert_eq!(window.find(("theme", 0usize)).focused(), Some(true));
+        window.press("enter", cx);
+        for (group, choice, key) in [
+            ("theme", 1, "space"),
+            ("theme", 2, "enter"),
+            ("language", 0, "enter"),
+            ("language", 1, "space"),
+            ("language", 2, "enter"),
+        ] {
+            window.press("tab", cx);
+            assert_eq!(
+                window.find((group, choice)).focused(),
+                Some(true),
+                "Tab must reach {group} {choice}"
+            );
+            for _ in 0..2 {
+                window.press(key, cx);
+                for index in 0..3usize {
+                    assert_eq!(
+                        window.find((group, index)).checked(),
+                        Some(index == choice),
+                        "{group} must keep exactly one selected option"
+                    );
+                }
+                let selected = if group == "theme" {
+                    view.read(cx).ui.theme_choice
+                } else {
+                    view.read(cx).ui.language_choice
+                };
+                assert_eq!(selected, choice as i32);
+            }
+        }
+        let saved = crate::config::Config::load(&folder.path().join("config.json")).unwrap();
+        assert_eq!(saved.options.theme, Theme::Dark);
+        assert_eq!(saved.options.language.locale(), "zh-CN");
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
 fn settings_switch_between_light_dark_and_system_themes_and_persist(cx: &mut TestAppContext) {
     let (handle, view, folder) = open(cx);
     cx.update_window(handle, |_, window, cx| {

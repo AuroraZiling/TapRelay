@@ -21,7 +21,8 @@ actions! {
     BluetoothPermissions => "bluetooth-permissions",
     NotificationSettings => "notification-settings",
     DataFolder => "data-folder", LogsFolder => "logs-folder",
-    Repository => "repository", License => "license", ThirdPartyNotices => "third-party-notices",
+    Repository => "repository", Homepage => "homepage",
+    License => "license", ThirdPartyNotices => "third-party-notices",
     // Payload: the device id the row was built from.
     Device => "device",
     PairDevice => "pair-device", DisconnectDevice => "disconnect-device",

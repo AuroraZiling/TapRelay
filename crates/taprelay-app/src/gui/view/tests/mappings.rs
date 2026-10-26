@@ -6,6 +6,110 @@ use gpui_kit::test::TestWindowExt;
 use gpui_kit::{AppContext, TestAppContext, px};
 
 #[gpui_kit::test]
+fn opening_mapping_editor_dismisses_the_edit_tooltip(cx: &mut TestAppContext) {
+    use gpui_kit::component::tooltip::Tooltip;
+    use std::{cell::Cell, rc::Rc, time::Duration};
+    use taprelay_core::{
+        function::Shortcut,
+        mapping::{CustomMapping, MappingOutput},
+    };
+
+    let mut config = Config::default();
+    config.wizard.dismissed = true;
+    config.options.language = crate::config::Language::from_name("zh-CN").unwrap();
+    config.custom_mappings.push(CustomMapping {
+        id: 1,
+        name: "倍速".into(),
+        enabled: true,
+        shortcuts: vec![Shortcut::keyboard(Default::default(), 0x41)],
+        output: MappingOutput::Keyboard {
+            usage: 0x5e,
+            modifiers: 0,
+        },
+        groups: Default::default(),
+    });
+    let (handle, view, _folder) = super::support::open_with_config(cx, 1100., 650., config, None);
+    settle(cx, handle, &view);
+    let tooltip_builds = Rc::new(Cell::new(0));
+    let observed_builds = tooltip_builds.clone();
+    let _observer = cx.update(|cx| {
+        cx.observe_new::<Tooltip>(move |_, _, _| {
+            observed_builds.set(observed_builds.get() + 1);
+        })
+    });
+    cx.update_window(handle, |_, window, cx| {
+        cx.set_reduce_motion(true);
+        view.update(cx, |view, cx| {
+            view._pump = gpui_kit::Task::ready(());
+            view.dispatch(Command::App(Action::Navigate, "1".into()), window, cx);
+        });
+    })
+    .unwrap();
+    settle(cx, handle, &view);
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("custom-mappings", cx);
+        assert_eq!(window.find("mapping-edit-1").label(), Some("编辑 倍速"));
+        window.hover("mapping-edit-1", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    cx.update_window(handle, |_, window, cx| window.render_frame(cx))
+        .unwrap();
+    cx.run_until_parked();
+    assert!(tooltip_builds.get() > 0, "hover must show the edit tooltip");
+    cx.update_window(handle, |_, window, cx| {
+        view.update(cx, |view, cx| {
+            view.dispatch(Command::Mapping("edit", "1".into()), window, cx);
+        });
+        assert!(view.read(cx).ui.mapping.editor);
+        window.hover("mapping-name", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    let builds_before_frame = tooltip_builds.get();
+    cx.update_window(handle, |_, window, cx| window.render_frame(cx))
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        tooltip_builds.get(),
+        builds_before_frame,
+        "the removed edit button must not keep painting its tooltip in the editor"
+    );
+    cx.update_window(handle, |_, window, cx| {
+        view.update(cx, |view, cx| {
+            view.dispatch(Command::Mapping("back", String::new()), window, cx);
+        });
+    })
+    .unwrap();
+    settle(cx, handle, &view);
+    cx.update_window(handle, |_, window, cx| {
+        window.hover("mapping-edit-1", cx);
+        view.update(cx, |view, cx| {
+            view.dispatch(Command::Mapping("edit", "1".into()), window, cx);
+        });
+        window.hover("mapping-name", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let builds_before_delay = tooltip_builds.get();
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    cx.update_window(handle, |_, window, cx| window.render_frame(cx))
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        tooltip_builds.get(),
+        builds_before_delay,
+        "a removed button's pending tooltip must not open in the editor"
+    );
+}
+
+#[gpui_kit::test]
 fn cancelling_output_capture_does_not_record_the_cancel_click(cx: &mut TestAppContext) {
     use gpui_kit::{MouseButton, MouseDownEvent, MouseUpEvent};
     use taprelay_core::input::{InputCode, InputEvent, MouseButton as InputMouseButton};

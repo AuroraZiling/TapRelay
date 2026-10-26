@@ -2,7 +2,11 @@ use crate::gui::action::Action;
 use crate::gui::view::{AppView, Command};
 use crate::runtime::commands::BindingCommand;
 use gpui_kit::assets::IconName;
-use gpui_kit::component::{Disableable, button::Button};
+use gpui_kit::component::{
+    Disableable,
+    button::Button,
+    tooltip::{Tooltip, TooltipDefaults},
+};
 use gpui_kit::{prelude::*, *};
 
 impl AppView {
@@ -56,8 +60,27 @@ impl AppView {
         disabled: bool,
         cx: &Context<Self>,
     ) -> Button {
-        self.plain_icon_button(id, icon, label.clone(), command, disabled, cx)
-            .tooltip(label)
+        self.button_tooltip(
+            self.plain_icon_button(id, icon, label.clone(), command, disabled, cx),
+            label,
+            cx,
+        )
+    }
+
+    pub(in crate::gui::view) fn button_tooltip(
+        &self,
+        mut button: Button,
+        label: String,
+        cx: &App,
+    ) -> Button {
+        // GPUI Kit 0.7.3's managed tooltip can outlive a removed trigger.
+        button
+            .interactivity()
+            .tooltip(move |window, cx| Tooltip::new(label.clone()).build(window, cx));
+        button
+            .interactivity()
+            .tooltip_show_delay(TooltipDefaults::global(cx).show_delay());
+        button
     }
 
     pub(in crate::gui::view) fn plain_icon_button(

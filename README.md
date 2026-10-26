@@ -8,7 +8,6 @@
 
 <p align="center">
   <a href="https://github.com/AuroraZiling/TapRelay/releases/latest"><img src="https://img.shields.io/github/v/release/AuroraZiling/TapRelay?style=flat-square" alt="Latest release"></a>
-  <a href="https://github.com/AuroraZiling/TapRelay/releases"><img src="https://img.shields.io/badge/Windows-x64-0078D4?style=flat-square" alt="Windows x64"></a>
   <a href="rust-toolchain.toml"><img src="https://img.shields.io/badge/Rust-nightly-CE422B?style=flat-square" alt="Rust nightly"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPL--3.0--only-green?style=flat-square" alt="License: GPL-3.0-only"></a>
 </p>

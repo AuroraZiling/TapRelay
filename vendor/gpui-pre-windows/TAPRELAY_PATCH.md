@@ -2,7 +2,7 @@
 
 TapRelay uses WARP software rendering on Windows to reduce idle memory usage.
 
-This is the published `gpui-pre-windows` 0.3.9 source, under Apache-2.0.
+This is the published `gpui-pre-windows` 0.3.12 source, under Apache-2.0.
 See `LICENSE-APACHE` and the repository's `THIRD_PARTY_NOTICES.md`.
 
 `DirectXRendererDevices::gpu_specs` obtains its metadata adapter from the created

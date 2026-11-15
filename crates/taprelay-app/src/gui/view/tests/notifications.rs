@@ -50,8 +50,8 @@ async fn feedback_notifications_deduplicate_dismiss_and_auto_hide(cx: &mut TestA
         window.render_frame(cx);
     })
     .unwrap();
-    // GPUI's notification entrance animation uses wall-clock time.
-    std::thread::sleep(Duration::from_millis(410));
+    cx.executor().advance_clock(Duration::from_millis(410));
+    cx.run_until_parked();
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         window.hover("notification", cx);

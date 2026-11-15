@@ -25,17 +25,17 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
 ] }
 tracing-appender = "0.2.5"
 tempfile = "3.27.0"
-lru = { version = "0.18.5", default-features = false }
+lru = { version = "0.19.0", default-features = false }
 rust-i18n = "4.2.4"
-gpui-kit = "=0.7.3"
-image = { version = "0.25", default-features = false, features = ["png"] }
+gpui-kit = "=0.9.1"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
 
 [build-dependencies]
 serde_json = "1.0.154"
 embed-resource = "3.0.12"
 
 [dev-dependencies]
-gpui-kit = { version = "=0.7.3", features = ["test-support"] }
+gpui-kit = { version = "=0.9.1", features = ["test-support"] }
 time = { version = "0.3.55", features = ["macros"] }
 
 [target.'cfg(windows)'.dependencies]

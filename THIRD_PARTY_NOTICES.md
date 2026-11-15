@@ -11,7 +11,7 @@ in this project, and components with special attribution requirements.
 
 - Source: [Lucide](https://github.com/lucide-icons/lucide), including icons derived
   from [Feather](https://github.com/feathericons/feather), supplied by
-  [GPUI Kit Assets](https://github.com/longbridge/gpui-kit) 0.7.3.
+  [GPUI Kit Assets](https://github.com/longbridge/gpui-kit) 0.9.1.
 - Paths: icons embedded by `gpui_kit::assets::AllAssets`; the ScreenShare path in
   `crates/taprelay-windows/src/overlay.rs` is drawn with Direct2D.
 - Modifications: the overlay converts the original 24-unit SVG geometry to native drawing commands.
@@ -65,9 +65,9 @@ SOFTWARE.
 
 ## GPUI Windows backend
 
-- Source: [`gpui-pre-windows` 0.3.9](https://crates.io/crates/gpui-pre-windows/0.3.9),
+- Source: [`gpui-pre-windows` 0.3.12](https://crates.io/crates/gpui-pre-windows/0.3.12),
   a snapshot of Zed's `gpui_windows` at
-  [`93d745668805029476e6d7fbb19652116fed51de`](https://github.com/zed-industries/zed/tree/93d745668805029476e6d7fbb19652116fed51de/crates/gpui_windows).
+  [`d2a4fb6ded7c470be25d1541281da3882495b65b`](https://github.com/zed-industries/zed/tree/d2a4fb6ded7c470be25d1541281da3882495b65b/crates/gpui_windows).
 - Path: `vendor/gpui-pre-windows/`.
 - License: Apache-2.0; the upstream license is retained in
   `vendor/gpui-pre-windows/LICENSE-APACHE`.

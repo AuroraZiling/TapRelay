@@ -1,3 +1,4 @@
+use crate::gui::typography;
 use crate::gui::view::{AppView, Command};
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::{
@@ -62,7 +63,7 @@ impl ScopePicker {
                             .aria_label(item.name.clone())
                             .child(
                                 Tag::new()
-                                    .text_size(rems(0.8125))
+                                    .text_size(typography::CONTROL_SMALL)
                                     .border_0()
                                     .px_1p5()
                                     .min_w_0()
@@ -88,7 +89,7 @@ impl ScopePicker {
                             .aria_label(label.clone())
                             .child(
                                 Tag::new()
-                                    .text_size(rems(0.8125))
+                                    .text_size(typography::CONTROL_SMALL)
                                     .border_0()
                                     .px_1p5()
                                     .child(label),

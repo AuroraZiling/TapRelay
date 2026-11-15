@@ -1,3 +1,4 @@
+use crate::gui::typography;
 use crate::gui::view::{AppView, Command};
 use gpui_kit::assets::IconName;
 use gpui_kit::base::TestSupportExt;
@@ -171,12 +172,19 @@ impl AppView {
                 .gap_0p5()
                 .child(
                     self.text(icons.name(&app.path).unwrap_or(&app.name).to_string())
-                        .text_sm()
+                        .text_size(typography::BODY_SMALL)
                         .text_ellipsis(),
                 )
-                .child(self.caption(app.path.clone(), cx).text_xs().text_ellipsis());
+                .child(
+                    self.caption(app.path.clone(), cx)
+                        .text_size(typography::DESCRIPTION_COMPACT)
+                        .text_ellipsis(),
+                );
             if icons.missing(&app.path) {
-                details = details.child(self.error(&self.tr("groups.missing"), cx).text_xs());
+                details = details.child(
+                    self.error(&self.tr("groups.missing"), cx)
+                        .text_size(typography::DESCRIPTION_COMPACT),
+                );
             }
             rows = rows.child(
                 GroupBox::new()

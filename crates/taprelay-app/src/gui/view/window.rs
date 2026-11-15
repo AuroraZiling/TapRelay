@@ -1,4 +1,5 @@
 use super::{AppView, Command, components::LiveElement};
+use crate::gui::typography;
 use crate::{
     config::Geometry, gui::presentation::WindowCommand, platform::desktop,
     runtime::commands::BindingCommand,
@@ -25,7 +26,7 @@ pub(super) fn notification_message(message: &str) -> impl Element {
         .aria_value(message.to_owned())
         .flex_1()
         .min_w_0()
-        .text_sm()
+        .text_size(typography::BODY_SMALL)
         .child(message.to_owned())
         .live(accesskit::Live::Polite)
         .test_support()

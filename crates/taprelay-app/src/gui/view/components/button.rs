@@ -1,4 +1,5 @@
 use crate::gui::action::Action;
+use crate::gui::typography;
 use crate::gui::view::{AppView, Command};
 use crate::runtime::commands::BindingCommand;
 use gpui_kit::assets::IconName;
@@ -16,7 +17,7 @@ impl AppView {
             .min_w_0()
             .whitespace_nowrap()
             .text_ellipsis()
-            .text_size(rems(0.8125))
+            .text_size(typography::CONTROL_SMALL)
             .child(text.into())
     }
 

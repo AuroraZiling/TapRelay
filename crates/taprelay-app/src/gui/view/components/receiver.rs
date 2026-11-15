@@ -1,4 +1,5 @@
 use crate::gui::action::Action;
+use crate::gui::typography;
 use crate::gui::view::{AppView, Command};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
@@ -37,7 +38,7 @@ impl AppView {
             .id("receiver-discovery-status")
             .role(Role::Status)
             .aria_label(self.ui.discovery_status.clone())
-            .text_sm()
+            .text_size(typography::DESCRIPTION)
             .text_color(cx.theme().muted_foreground)
             .map(|description| {
                 if self.ui.scanning {

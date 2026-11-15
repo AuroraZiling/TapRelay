@@ -1,4 +1,5 @@
 use crate::gui::presentation::MappingOutputOption;
+use crate::gui::typography;
 use crate::gui::view::components::ShortcutButton;
 use crate::gui::view::{AppView, Command};
 use gpui_kit::assets::IconName;
@@ -266,7 +267,12 @@ impl AppView {
                             .search_placeholder(self.tr("mappings.search_output"))
                             .menu_width(rems(20.))
                             .disabled(busy)
-                            .empty(move |_, _| div().p_3().text_sm().child(empty.clone())),
+                            .empty(move |_, _| {
+                                div()
+                                    .p_3()
+                                    .text_size(typography::DESCRIPTION)
+                                    .child(empty.clone())
+                            }),
                     )
                     .test_support(),
             )
@@ -282,7 +288,7 @@ impl AppView {
             modifiers = modifiers.child(
                 Checkbox::new(("output-modifier", index as usize))
                     .gap_1()
-                    .text_size(rems(0.875))
+                    .text_size(typography::CONTROL)
                     .label(label)
                     .checked(checked)
                     .disabled(busy)
@@ -403,7 +409,9 @@ impl AppView {
                     self.error(error, cx)
                         .id(id)
                         .when(id == "mapping-capture-error", |error| {
-                            error.text_xs().line_height(relative(1.25))
+                            error
+                                .text_size(typography::DESCRIPTION_COMPACT)
+                                .line_height(relative(1.25))
                         })
                         .test_support(),
                 );

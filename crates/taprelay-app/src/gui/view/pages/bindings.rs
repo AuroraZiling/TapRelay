@@ -1,3 +1,4 @@
+use crate::gui::typography;
 use crate::gui::view::components::ShortcutButton;
 use crate::gui::view::{AppView, Command};
 use crate::runtime::commands::{BindingCommand, CaptureTarget};
@@ -158,7 +159,7 @@ impl AppView {
                 shortcut_column = shortcut_column.child(
                     self.error(&self.ui.binding.capture.error, cx)
                         .id("binding-capture-error")
-                        .text_xs()
+                        .text_size(typography::DESCRIPTION_COMPACT)
                         .line_height(relative(1.25))
                         .test_support(),
                 );

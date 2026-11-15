@@ -1,4 +1,5 @@
 use crate::gui::action::Action;
+use crate::gui::typography;
 use crate::gui::{
     presentation::ChoiceOption,
     view::{AppView, Command},
@@ -202,7 +203,7 @@ impl AppView {
                 self.tr(autostart_status.unwrap_or("settings.autostart.hint")),
                 cx,
             )
-            .text_size(rems(0.8125));
+            .text_size(typography::DESCRIPTION_SMALL);
         let autostart_description = if autostart_status.is_some() {
             autostart_description
                 .id("autostart-status")
@@ -297,7 +298,10 @@ impl AppView {
                                 div()
                                     .h_flex()
                                     .gap_2()
-                                    .child(self.text(self.tr("permissions.current")).text_sm())
+                                    .child(
+                                        self.text(self.tr("permissions.current"))
+                                            .text_size(typography::BODY_SMALL),
+                                    )
                                     .child(
                                         permission_tag
                                             .gap_1()
@@ -514,7 +518,7 @@ impl AppView {
                         .gap_3()
                         .child(
                             self.text("TapRelay")
-                                .text_lg()
+                                .text_size(typography::TITLE_SMALL)
                                 .font_weight(FontWeight::SEMIBOLD),
                         )
                         .child(Tag::secondary().child(self.text(self.ui.app_version.clone()))),
@@ -622,12 +626,13 @@ impl AppView {
         GroupBox::new()
             .id(key)
             .fill()
-            .text_sm()
+            .text_size(typography::BODY_SMALL)
             .content_style(self.card_style(cx))
             .title(
                 self.text(self.tr(key))
                     .role(Role::Heading)
                     .aria_level(2)
+                    .text_size(typography::TITLE_COMPACT)
                     .font_weight(FontWeight::MEDIUM),
             )
     }
@@ -685,6 +690,9 @@ impl AppView {
             .v_flex()
             .gap_1()
             .child(self.text(self.tr(label)))
-            .child(self.caption(self.tr(hint), cx).text_size(rems(0.8125)))
+            .child(
+                self.caption(self.tr(hint), cx)
+                    .text_size(typography::DESCRIPTION_SMALL),
+            )
     }
 }

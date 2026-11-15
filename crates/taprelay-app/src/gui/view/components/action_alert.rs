@@ -1,4 +1,5 @@
 use super::LiveElement;
+use crate::gui::typography;
 use std::rc::Rc;
 
 use gpui_kit::base::TestSupportExt;
@@ -178,7 +179,7 @@ impl RenderOnce for ActionAlert {
             .py(padding_y)
             .gap(gap)
             .justify_between()
-            .text_sm()
+            .text_size(typography::BODY_SMALL)
             .border_1()
             .border_color(border_color)
             .when(!self.banner, |this| this.rounded(radius).items_start())

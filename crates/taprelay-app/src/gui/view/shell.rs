@@ -1,5 +1,6 @@
 use super::{AppView, Command};
 use crate::gui::action::Action;
+use crate::gui::typography;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::base::motion::{Transition, transition};
@@ -30,7 +31,7 @@ impl AppView {
             .id("titlebar-brand")
             .h_flex()
             .flex_shrink_0()
-            .text_sm()
+            .text_size(typography::TITLE_COMPACT)
             .when(self.ui.mode == 2, |brand| {
                 brand.child(
                     div()

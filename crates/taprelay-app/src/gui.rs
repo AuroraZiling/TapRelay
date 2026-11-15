@@ -6,6 +6,7 @@ mod overlay;
 pub(crate) mod presentation;
 mod ripple;
 mod theme;
+mod typography;
 mod view;
 
 pub use bootstrap::run;

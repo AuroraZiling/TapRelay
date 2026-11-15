@@ -1,3 +1,4 @@
+use crate::gui::typography;
 use crate::gui::view::{AppView, Command};
 use gpui_kit::assets::IconName;
 use gpui_kit::base::TestSupportExt;
@@ -96,7 +97,10 @@ impl AppView {
                             .flex_basis(px(0.))
                             .min_w_0()
                             .text_ellipsis()
-                            .child(self.text(row.name.clone()).text_sm()),
+                            .child(
+                                self.text(row.name.clone())
+                                    .text_size(typography::BODY_SMALL),
+                            ),
                     )
                     .child(
                         self.caption(format!("{} → {}", row.input, row.output), cx)
@@ -112,7 +116,7 @@ impl AppView {
                             )))
                             .role(Role::Label)
                             .aria_label(row.scope.clone())
-                            .text_sm()
+                            .text_size(typography::BODY_SMALL)
                             .w(rems(10.))
                             .flex_shrink_0()
                             .text_ellipsis()

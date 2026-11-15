@@ -1,4 +1,5 @@
 use super::{AppView, Command};
+use crate::gui::typography;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::WindowExt;
 use gpui_kit::component::{ActiveTheme, StyledExt, dialog::Dialog, window_paddings};
@@ -56,7 +57,7 @@ impl AppView {
                 self.text(title)
                     .role(Role::Heading)
                     .aria_level(2)
-                    .text_lg()
+                    .text_size(typography::TITLE_SMALL)
                     .font_semibold(),
             )
             .child(body)

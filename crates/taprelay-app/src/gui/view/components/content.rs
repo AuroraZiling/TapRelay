@@ -1,4 +1,5 @@
 use super::{LiveElement, LiveRegion};
+use crate::gui::typography;
 use crate::gui::view::AppView;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::{
@@ -35,7 +36,7 @@ impl AppView {
         cx: &App,
     ) -> Stateful<Div> {
         self.text(text)
-            .text_sm()
+            .text_size(typography::DESCRIPTION)
             .text_color(cx.theme().muted_foreground)
     }
 
@@ -49,7 +50,10 @@ impl AppView {
 
     #[track_caller]
     pub(in crate::gui::view) fn heading(&self, text: String) -> Stateful<Div> {
-        self.text(text).role(Role::Heading).aria_level(1).text_xl()
+        self.text(text)
+            .role(Role::Heading)
+            .aria_level(1)
+            .text_size(typography::TITLE)
     }
 
     pub(in crate::gui::view) fn scroller(

@@ -1,4 +1,5 @@
 use crate::gui::action::Action;
+use crate::gui::typography;
 use crate::gui::view::{AppView, Command};
 use gpui_kit::assets::IconName;
 use gpui_kit::base::TestSupportExt;
@@ -37,10 +38,11 @@ impl AppView {
                             .content_style(self.card_style(cx).h_flex().gap_3())
                             .child(Icon::new(kind).size_5().flex_shrink_0())
                             .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(self.text(row.name.clone()).text_sm().text_ellipsis()),
+                                div().flex_1().min_w_0().child(
+                                    self.text(row.name.clone())
+                                        .text_size(typography::BODY_SMALL)
+                                        .text_ellipsis(),
+                                ),
                             )
                             .child(
                                 div()

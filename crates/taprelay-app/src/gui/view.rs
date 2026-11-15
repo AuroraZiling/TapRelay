@@ -336,6 +336,7 @@ impl Render for AppView {
             .relative()
             .items_stretch()
             .bg(cx.theme().sidebar)
+            .text_size(super::typography::BODY)
             .text_color(cx.theme().foreground)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if !this.controller.recording() {

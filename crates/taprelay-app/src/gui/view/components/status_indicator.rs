@@ -1,4 +1,5 @@
 use super::{LiveElement, LiveRegion};
+use crate::gui::typography;
 use crate::gui::view::AppView;
 use gpui_kit::component::{ActiveTheme, StyledExt};
 use gpui_kit::{prelude::*, *};
@@ -31,7 +32,7 @@ impl AppView {
         div()
             .id(id)
             .h_flex()
-            .text_sm()
+            .text_size(typography::BODY_SMALL)
             .gap_3()
             .min_w_0()
             .role(Role::Status)

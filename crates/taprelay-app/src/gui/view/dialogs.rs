@@ -10,7 +10,6 @@ impl AppView {
         &self,
         dialog: Dialog,
         content: AnyElement,
-        measurement: AnyElement,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Dialog {
@@ -19,23 +18,7 @@ impl AppView {
             - size(padding.left + padding.right, padding.top + padding.bottom);
         let width =
             (window.rem_size() * 28.).min(viewport.width - cx.theme().spacing_tokens().lg * 2.);
-        // GPUI Kit 0.7.3 only exposes a top offset, so measure the content before centering.
-        let height = div()
-            .w(width)
-            .border_1()
-            .p_4()
-            .child(measurement)
-            .into_any_element()
-            .layout_as_root(
-                size(AvailableSpace::Definite(width), AvailableSpace::MinContent),
-                window,
-                &mut *cx,
-            );
-        dialog
-            .w(width)
-            .p_4()
-            .margin_top((viewport.height - height.height) / 2.)
-            .child(content)
+        dialog.centered().w(width).p_4().child(content)
     }
 
     pub(super) fn dialog_content(
@@ -45,7 +28,7 @@ impl AppView {
         body: impl IntoElement,
         footer: impl IntoElement,
     ) -> AnyElement {
-        // GPUI Kit 0.7.3 does not connect Dialog::title to the dialog's accessible name.
+        // The styled Dialog does not connect its title to its accessible name.
         div()
             .id(id)
             .role(Role::Dialog)

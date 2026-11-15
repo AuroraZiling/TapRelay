@@ -65,7 +65,7 @@ fn opening_mapping_editor_dismisses_the_edit_tooltip(cx: &mut TestAppContext) {
             view.dispatch(Command::Mapping("edit", "1".into()), window, cx);
         });
         assert!(view.read(cx).ui.mapping.editor);
-        window.hover("mapping-name", cx);
+        window.render_frame(cx);
     })
     .unwrap();
     cx.run_until_parked();
@@ -92,7 +92,7 @@ fn opening_mapping_editor_dismisses_the_edit_tooltip(cx: &mut TestAppContext) {
         view.update(cx, |view, cx| {
             view.dispatch(Command::Mapping("edit", "1".into()), window, cx);
         });
-        window.hover("mapping-name", cx);
+        window.render_frame(cx);
     })
     .unwrap();
     cx.run_until_parked();

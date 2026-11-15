@@ -1,5 +1,6 @@
-use gpui_kit::component::{ActiveTheme, Theme, ThemeRegistry, ThemeSet};
+use gpui_kit::component::{ActiveTheme, Theme, ThemeRegistry, ThemeSet, input::CursorBlink};
 use gpui_kit::{App, Hsla, rgb};
+use std::time::Duration;
 
 pub(super) fn warning_signal(cx: &App) -> Hsla {
     if cx.theme().is_dark() {
@@ -69,5 +70,7 @@ pub(super) fn init(cx: &mut App) {
         theme.apply_config(if theme.is_dark() { &dark } else { &light });
         theme.light_theme = light;
         theme.dark_theme = dark;
+        theme.cursor_blink = CursorBlink::blinking(Duration::from_millis(500))
+            .with_idle_timeout(Duration::from_secs(5));
     });
 }

@@ -11,49 +11,39 @@ impl AppView {
         cx: &mut Context<Self>,
     ) -> Dialog {
         let busy = self.ui.groups.saving;
-        let footer = || {
-            div()
-                .h_flex()
-                .justify_end()
-                .gap_2()
-                .child(self.button(
-                    "dialog-cancel",
-                    self.tr("common.cancel"),
-                    cancel.clone(),
-                    busy,
-                    cx,
-                ))
-                .child(self.button(
-                    "dialog-delete",
-                    self.tr(if busy {
-                        "common.saving"
-                    } else {
-                        "groups.delete_confirm"
-                    }),
-                    Command::Group("delete", String::new()),
-                    busy,
-                    cx,
-                ))
-        };
+        let footer = div()
+            .h_flex()
+            .justify_end()
+            .gap_2()
+            .child(self.button("dialog-cancel", self.tr("common.cancel"), cancel, busy, cx))
+            .child(self.button(
+                "dialog-delete",
+                self.tr(if busy {
+                    "common.saving"
+                } else {
+                    "groups.delete_confirm"
+                }),
+                Command::Group("delete", String::new()),
+                busy,
+                cx,
+            ));
         let title = format!(
             "{} — {}",
             self.tr("groups.delete"),
             self.ui.groups.selected_name
         );
-        let content = || {
-            self.dialog_content(
-                "group-delete-dialog",
-                title.clone(),
-                div()
-                    .v_flex()
-                    .gap_3()
-                    .child(self.text(self.ui.groups.deletion_warning.clone()))
-                    .when(!self.ui.groups.form_error.is_empty(), |body| {
-                        body.child(self.error(&self.ui.groups.form_error, cx))
-                    }),
-                footer(),
-            )
-        };
-        self.centered_dialog(dialog, content(), content(), window, cx)
+        let content = self.dialog_content(
+            "group-delete-dialog",
+            title,
+            div()
+                .v_flex()
+                .gap_3()
+                .child(self.text(self.ui.groups.deletion_warning.clone()))
+                .when(!self.ui.groups.form_error.is_empty(), |body| {
+                    body.child(self.error(&self.ui.groups.form_error, cx))
+                }),
+            footer,
+        );
+        self.centered_dialog(dialog, content, window, cx)
     }
 }

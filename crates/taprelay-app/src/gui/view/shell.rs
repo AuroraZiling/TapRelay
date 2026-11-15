@@ -207,7 +207,8 @@ impl AppView {
         let content_width = target_width - window.rem_size() * SIDEBAR_PADDING_REMS * 2.;
         let nav = |id: ElementId, page: usize, icon| {
             let label = self.tr(TITLES[page]);
-            self.button_tooltip(Button::new(id), label.clone(), cx)
+            Button::new(id)
+                .tooltip(label.clone())
                 .ghost()
                 .child(Icon::new(icon).size_4())
                 .accessibility_label(label.clone())

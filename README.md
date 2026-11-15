@@ -29,6 +29,8 @@
 
 <a href=".github/assets/overview-en.webp"><img src=".github/assets/overview-en.webp" alt="overview" width="640"></a>
 
+⭐ If you find TapRelay useful, [give it a star](https://github.com/AuroraZiling/TapRelay).
+
 ## 🖥️ Requirements
 
 - Windows x64, or a Mac running macOS 13 or later.

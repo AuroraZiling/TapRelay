@@ -4,7 +4,7 @@ use std::sync::{Arc, LazyLock};
 
 #[derive(Default)]
 pub(in crate::gui::view) struct AppIcon {
-    raster: Option<(u32, Arc<RenderImage>)>,
+    rasters: Vec<(u32, Arc<RenderImage>)>,
 }
 
 impl AppIcon {
@@ -19,20 +19,20 @@ impl AppIcon {
                 .into_rgba8()
         });
         let pixels = (f32::from(size) * window.scale_factor()).round().max(1.) as u32;
-        if self
-            .raster
-            .as_ref()
-            .is_none_or(|(cached, _)| *cached != pixels)
-        {
-            // Resample at the display's physical size before GPUI's bilinear sampling.
-            let mut raster =
-                image::imageops::resize(&*SOURCE, pixels, pixels, FilterType::Lanczos3);
-            // GPUI's render cache consumes BGRA.
-            for pixel in raster.pixels_mut() {
-                pixel.0.swap(0, 2);
-            }
-            self.raster = Some((pixels, Arc::new(RenderImage::new(vec![Frame::new(raster)]))));
+        if let Some((_, image)) = self.rasters.iter().find(|(cached, _)| *cached == pixels) {
+            return image.clone();
         }
-        self.raster.as_ref().unwrap().1.clone()
+        // Resample at the display's physical size before GPUI's bilinear sampling.
+        let mut raster = image::imageops::resize(&*SOURCE, pixels, pixels, FilterType::Lanczos3);
+        // GPUI's render cache consumes BGRA.
+        for pixel in raster.pixels_mut() {
+            pixel.0.swap(0, 2);
+        }
+        let image = Arc::new(RenderImage::new(vec![Frame::new(raster)]));
+        if self.rasters.len() >= 4 {
+            self.rasters.remove(0);
+        }
+        self.rasters.push((pixels, image.clone()));
+        image
     }
 }

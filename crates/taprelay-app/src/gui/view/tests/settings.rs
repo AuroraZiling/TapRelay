@@ -252,6 +252,10 @@ fn settings_switch_between_light_dark_and_system_themes_and_persist(cx: &mut Tes
                 view.controller.last_system_poll = Instant::now();
             });
             window.click(("theme", choice as usize), cx);
+            assert_eq!(
+                window.find("app-version").label(),
+                Some(view.read(cx).ui.app_version.as_str())
+            );
             let theme = gpui_kit::component::Theme::global(cx);
             assert_eq!(view.read(cx).ui.theme_choice, choice);
             assert_eq!(view.read(cx).ui.dark, dark);

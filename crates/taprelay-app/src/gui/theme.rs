@@ -1,4 +1,6 @@
-use gpui_kit::component::{ActiveTheme, Theme, ThemeRegistry, ThemeSet, input::CursorBlink};
+use gpui_kit::component::{
+    ActiveTheme, Colorize, Theme, ThemeRegistry, ThemeSet, input::CursorBlink,
+};
 use gpui_kit::{App, Hsla, rgb};
 use std::time::Duration;
 
@@ -7,6 +9,47 @@ pub(super) fn warning_signal(cx: &App) -> Hsla {
         cx.theme().warning
     } else {
         rgb(0xBC8A00).into()
+    }
+}
+
+pub(super) fn star_icon(cx: &App) -> Hsla {
+    if cx.theme().is_dark() {
+        rgb(0xF5A623).into()
+    } else {
+        rgb(0xBC7000).into()
+    }
+}
+
+pub(super) fn star_banner_bg(cx: &App) -> Hsla {
+    if cx.theme().is_dark() {
+        rgb(0x3D3228).into()
+    } else {
+        rgb(0xFEF7E8).into()
+    }
+}
+
+pub(super) fn star_link_foreground(cx: &App) -> Hsla {
+    if cx.theme().is_dark() {
+        star_icon(cx).lighten(0.35)
+    } else {
+        star_icon(cx).darken(0.35)
+    }
+}
+
+pub(super) fn about_link_colors(cx: &App) -> [Hsla; 4] {
+    let colors = if cx.theme().is_dark() {
+        [0x8AADF4, 0xC6A0F6, 0xA6DA95, 0xEED49F]
+    } else {
+        [0x295CC4, 0x7C3BB5, 0x356E1A, 0x805600]
+    };
+    colors.map(|color| rgb(color).into())
+}
+
+pub(super) fn star_banner_border(cx: &App) -> Hsla {
+    if cx.theme().is_dark() {
+        rgb(0x5E4A36).into()
+    } else {
+        rgb(0xEDD8B4).into()
     }
 }
 

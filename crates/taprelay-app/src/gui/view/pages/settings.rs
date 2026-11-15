@@ -61,7 +61,11 @@ impl AppView {
         self.report_rate_auto_label = auto_label;
     }
 
-    pub(in crate::gui::view) fn settings(&self, cx: &Context<Self>) -> AnyElement {
+    pub(in crate::gui::view) fn settings(
+        &mut self,
+        window: &gpui_kit::Window,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         let mut appearance = self.section("settings.appearance", cx);
         let appearance_choice = |button: Button, selected: bool| {
             button
@@ -482,142 +486,263 @@ impl AppView {
                 Action::SetConnectionWaitWarning,
                 cx,
             ));
-        let licensing = self
-            .section("settings.licensing", cx)
-            .child(self.text("GPL-3.0-only"))
-            .child(
-                self.reveal_focus(
-                    "license-actions",
-                    div()
-                        .h_flex()
-                        .gap_2()
-                        .flex_wrap()
-                        .child(self.app_button(
-                            "license",
-                            "settings.license",
-                            Action::License,
-                            false,
-                            cx,
-                        ))
-                        .child(self.app_button(
-                            "notices",
-                            "settings.third.party.notices",
-                            Action::ThirdPartyNotices,
-                            false,
-                            cx,
-                        )),
-                ),
-            );
+        let app_icon = self.app_icon.image(window.rem_size() * 2.5, window);
+        let star_surface = crate::gui::theme::star_banner_bg(cx);
+        let star_accent = crate::gui::theme::star_icon(cx);
+        let star_hint = self.tr("settings.star.hint");
+        let (star_prefix, star_suffix) = star_hint
+            .split_once("{star}")
+            .expect("star hint must contain its link placeholder");
+        let footer_radius = if cx.theme().is_dark() {
+            cx.theme().radius_lg
+        } else if cx.theme().radius_lg > gpui_kit::px(1.) {
+            cx.theme().radius_lg - gpui_kit::px(1.)
+        } else {
+            gpui_kit::px(0.)
+        };
         let about = self
             .section("settings.about", cx)
+            .content_style(self.card_style(cx).p_0().gap_0())
             .child(
-                self.setting_row(
-                    "about-project",
+                self.reveal_focus(
+                    "about-header",
                     div()
+                        .p_4()
                         .h_flex()
-                        .gap_3()
+                        .justify_between()
+                        .items_center()
+                        .gap_4()
+                        .flex_wrap()
                         .child(
-                            self.text("TapRelay")
-                                .text_size(typography::TITLE_SMALL)
-                                .font_weight(FontWeight::SEMIBOLD),
+                            div()
+                                .h_flex()
+                                .items_center()
+                                .gap_3()
+                                .min_w_0()
+                                .child(gpui_kit::img(app_icon).size_10().flex_shrink_0())
+                                .child(
+                                    div()
+                                        .v_flex()
+                                        .items_start()
+                                        .gap_0p5()
+                                        .min_w_0()
+                                        .child(
+                                            div()
+                                                .h_flex()
+                                                .items_center()
+                                                .gap_1()
+                                                .child(
+                                                    self.text("TapRelay")
+                                                        .text_size(typography::TITLE_SMALL)
+                                                        .font_weight(FontWeight::SEMIBOLD),
+                                                )
+                                                .child(
+                                                    self.icon_button(
+                                                        "wizard",
+                                                        IconName::WandSparkles,
+                                                        self.tr("settings.wizard"),
+                                                        Command::App(Action::Wizard, String::new()),
+                                                        false,
+                                                        cx,
+                                                    )
+                                                    .ghost()
+                                                    .icon(
+                                                        Icon::new(IconName::WandSparkles)
+                                                            .text_color(cx.theme().primary),
+                                                    ),
+                                                ),
+                                        )
+                                        .child(
+                                            Tag::secondary().border_0().px_2().py_0p5().child(
+                                                self.text(self.ui.app_version.clone())
+                                                    .id("app-version")
+                                                    .text_size(typography::DESCRIPTION_SMALL)
+                                                    .test_support(),
+                                            ),
+                                        ),
+                                ),
                         )
-                        .child(Tag::secondary().child(self.text(self.ui.app_version.clone()))),
-                    div()
-                        .h_flex()
-                        .gap_1()
-                        .flex_shrink_0()
                         .child(
-                            self.icon_button(
-                                "repository",
-                                IconName::Github,
-                                self.tr("settings.repository"),
-                                Command::App(Action::Repository, String::new()),
-                                false,
-                                cx,
-                            )
-                            .link()
-                            .size_8(),
-                        )
-                        .child(
-                            self.icon_button(
-                                "homepage",
-                                IconName::House,
-                                self.tr("settings.homepage"),
-                                Command::App(Action::Homepage, String::new()),
-                                false,
-                                cx,
-                            )
-                            .link()
-                            .size_8(),
+                            div()
+                                .h_flex()
+                                .items_center()
+                                .gap_2()
+                                .flex_shrink_0()
+                                .children(
+                                    [
+                                        (
+                                            "homepage",
+                                            IconName::Globe,
+                                            "settings.homepage",
+                                            Action::Homepage,
+                                        ),
+                                        (
+                                            "repository",
+                                            IconName::Github,
+                                            "settings.repository",
+                                            Action::Repository,
+                                        ),
+                                        (
+                                            "license",
+                                            IconName::Scale,
+                                            "settings.license",
+                                            Action::License,
+                                        ),
+                                        (
+                                            "notices",
+                                            IconName::ScrollText,
+                                            "settings.third.party.notices",
+                                            Action::ThirdPartyNotices,
+                                        ),
+                                    ]
+                                    .into_iter()
+                                    .zip(crate::gui::theme::about_link_colors(cx))
+                                    .map(
+                                        |((id, icon, key, action), color)| {
+                                            self.icon_button(
+                                                id,
+                                                icon,
+                                                self.tr(key),
+                                                Command::App(action, String::new()),
+                                                false,
+                                                cx,
+                                            )
+                                            .ghost()
+                                            .role(Role::Link)
+                                            .cursor_pointer()
+                                            .icon(Icon::new(icon).text_color(color))
+                                        },
+                                    ),
+                                ),
                         ),
                 ),
             )
             .child(
                 div()
-                    .h_flex()
-                    .gap_2()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(Icon::new(IconName::FolderOpen).size_4().flex_shrink_0())
-                    .child(self.caption(self.ui.data_directory.clone(), cx).min_w_0()),
+                    .p_4()
+                    .v_flex()
+                    .gap_3()
+                    .border_t_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        self.reveal_focus(
+                            "about-storage",
+                            div()
+                                .h_flex()
+                                .justify_between()
+                                .items_center()
+                                .gap_3()
+                                .flex_wrap()
+                                .child(
+                                    div()
+                                        .h_flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .min_w_0()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(
+                                            Icon::new(IconName::FolderOpen)
+                                                .size_4()
+                                                .flex_shrink_0(),
+                                        )
+                                        .child(
+                                            self.caption(self.ui.data_directory.clone(), cx)
+                                                .min_w_0(),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .h_flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .flex_shrink_0()
+                                        .child(
+                                            self.app_button(
+                                                "data-folder",
+                                                "settings.data.folder",
+                                                Action::DataFolder,
+                                                false,
+                                                cx,
+                                            )
+                                            .icon(IconName::Database)
+                                            .ghost(),
+                                        )
+                                        .child(
+                                            self.app_button(
+                                                "logs-folder",
+                                                "logs.folder",
+                                                Action::LogsFolder,
+                                                false,
+                                                cx,
+                                            )
+                                            .icon(IconName::FileText)
+                                            .ghost(),
+                                        ),
+                                ),
+                        ),
+                    ),
             )
             .child(
                 self.reveal_focus(
-                    "about-actions",
+                    "about-support",
                     div()
-                        .h_flex()
-                        .justify_between()
-                        .gap_3()
-                        .flex_wrap()
-                        .pt_4()
+                        .px_4()
+                        .py_3()
                         .border_t_1()
-                        .border_color(cx.theme().border)
+                        .border_color(crate::gui::theme::star_banner_border(cx))
+                        .bg(star_surface)
+                        .rounded_b(footer_radius)
+                        .h_flex()
+                        .items_center()
+                        .gap_2p5()
+                        .child(
+                            Icon::new(IconName::StarFill)
+                                .size_4()
+                                .flex_shrink_0()
+                                .text_color(star_accent),
+                        )
                         .child(
                             div()
                                 .h_flex()
-                                .gap_2()
+                                .items_center()
+                                .flex_wrap()
+                                .min_w_0()
+                                .text_size(typography::BODY_SMALL)
+                                .line_height(relative(1.25))
+                                .child(self.text(star_prefix.to_owned()))
                                 .child(
-                                    self.app_button(
-                                        "data-folder",
-                                        "settings.data.folder",
-                                        Action::DataFolder,
-                                        false,
-                                        cx,
-                                    )
-                                    .icon(IconName::FolderOpen)
-                                    .ghost(),
+                                    Button::new("star-repository")
+                                        .link()
+                                        .text_size(typography::BODY_SMALL)
+                                        .accessibility_label(self.tr("settings.star"))
+                                        .child(
+                                            self.text(self.tr("settings.star"))
+                                                .text_size(typography::BODY_SMALL)
+                                                .text_color(
+                                                    crate::gui::theme::star_link_foreground(cx),
+                                                ),
+                                        )
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.dispatch(
+                                                Command::App(Action::Repository, String::new()),
+                                                window,
+                                                cx,
+                                            );
+                                        })),
                                 )
-                                .child(
-                                    self.app_button(
-                                        "logs-folder",
-                                        "logs.folder",
-                                        Action::LogsFolder,
-                                        false,
-                                        cx,
-                                    )
-                                    .icon(IconName::FileText)
-                                    .ghost(),
-                                ),
-                        )
-                        .child(
-                            self.app_button("wizard", "settings.wizard", Action::Wizard, false, cx)
-                                .icon(
-                                    Icon::new(IconName::WandSparkles)
-                                        .text_color(cx.theme().primary),
-                                )
-                                .secondary(),
+                                .child(self.text(star_suffix.to_owned())),
                         ),
                 ),
             );
         self.scroller(
             "settings",
             div().v_flex().gap_7().pr_3().children([
-                appearance,
-                passthrough,
-                startup,
-                permissions,
-                notifications,
-                licensing,
-                about,
+                appearance.into_any_element(),
+                passthrough.into_any_element(),
+                startup.into_any_element(),
+                permissions.into_any_element(),
+                notifications.into_any_element(),
+                about.into_any_element(),
             ]),
         )
     }

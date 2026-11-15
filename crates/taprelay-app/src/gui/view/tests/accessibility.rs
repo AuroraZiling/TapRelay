@@ -104,9 +104,12 @@ fn tab_and_reverse_tab_reveal_controls_in_compact_scroll_regions(cx: &mut TestAp
                     for key in [
                         "settings.repository",
                         "settings.homepage",
+                        "settings.license",
+                        "settings.third.party.notices",
                         "settings.data.folder",
                         "logs.folder",
                         "settings.wizard",
+                        "settings.star",
                     ] {
                         assert!(visited.contains(&view.read(cx).tr(key)), "{key}");
                     }

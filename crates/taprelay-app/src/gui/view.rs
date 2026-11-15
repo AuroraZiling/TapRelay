@@ -327,7 +327,7 @@ impl Render for AppView {
                 1 if self.ui.mapping.open => self.mappings(cx),
                 1 => self.bindings(window, cx),
                 2 => self.devices(cx),
-                3 => self.settings(cx),
+                3 => self.settings(window, cx),
                 _ => self.groups(cx),
             },
         };

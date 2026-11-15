@@ -29,6 +29,8 @@
 
 <a href=".github/assets/overview-zh.webp"><img src=".github/assets/overview-zh.webp" alt="概览页" width="640"></a>
 
+⭐ 如果 TapRelay 对你有帮助，欢迎[点个 Star](https://github.com/AuroraZiling/TapRelay) 支持这个项目。
+
 ## 🖥️ 运行条件
 
 - Windows x64 或 运行 macOS 13 及以上版本的 Mac。

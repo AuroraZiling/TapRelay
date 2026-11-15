@@ -27,6 +27,10 @@ fn app_theme_text_boundaries_and_focus_meet_contrast_thresholds(cx: &mut TestApp
                 view.ui.dark = dark;
                 view.effects(window, cx);
             });
+            let (star_banner_bg, star_icon) = (
+                crate::gui::theme::star_banner_bg(cx),
+                crate::gui::theme::star_icon(cx),
+            );
             let theme = cx.theme();
             for surface in [
                 theme.background,
@@ -62,6 +66,57 @@ fn app_theme_text_boundaries_and_focus_meet_contrast_thresholds(cx: &mut TestApp
                     );
                 }
             }
+            for (name, color) in [
+                ("foreground", theme.foreground),
+                ("muted", theme.muted_foreground),
+            ] {
+                assert!(
+                    contrast(color, star_banner_bg) >= 4.5,
+                    "dark={dark} star_banner {name}: {}",
+                    contrast(color, star_banner_bg)
+                );
+            }
+            for color in crate::gui::theme::about_link_colors(cx) {
+                let hover = if dark {
+                    theme.accent.opacity(0.5)
+                } else {
+                    theme.accent
+                };
+                for surface in [theme.group_box, hover, theme.tokens.button_active.into()] {
+                    let surface = theme.group_box.blend(surface);
+                    assert!(
+                        contrast(color, surface) >= 3.,
+                        "dark={dark} about link: {}",
+                        contrast(color, surface)
+                    );
+                }
+            }
+            let star_foreground = crate::gui::theme::star_link_foreground(cx);
+            assert!(
+                contrast(star_foreground, star_banner_bg) >= 4.5,
+                "dark={dark} star_link: {}",
+                contrast(star_foreground, star_banner_bg)
+            );
+            assert!(
+                contrast(star_icon, star_banner_bg) >= 3.,
+                "dark={dark} star_icon: {}",
+                contrast(star_icon, star_banner_bg)
+            );
+            assert!(
+                contrast(theme.ring, star_banner_bg) >= 3.,
+                "dark={dark} star_banner focus: {}",
+                contrast(theme.ring, star_banner_bg)
+            );
+            assert!(
+                contrast(theme.secondary_foreground, theme.secondary) >= 4.5,
+                "dark={dark} secondary: {}",
+                contrast(theme.secondary_foreground, theme.secondary)
+            );
+            assert!(
+                contrast(theme.foreground, theme.secondary) >= 4.5,
+                "dark={dark} secondary foreground: {}",
+                contrast(theme.foreground, theme.secondary)
+            );
             assert!(contrast(theme.primary_foreground, theme.primary) >= 4.5);
         }
     })

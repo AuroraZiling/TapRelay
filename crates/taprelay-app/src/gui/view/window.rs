@@ -12,6 +12,31 @@ use std::time::Instant;
 struct FeedbackNotification;
 struct ProgressNotification;
 
+pub(super) struct EditorFocus {
+    pub(super) trigger: ElementId,
+    pub(super) handle: FocusHandle,
+    editing: bool,
+}
+
+impl EditorFocus {
+    fn new(trigger: String, cx: &mut App) -> Self {
+        Self {
+            trigger: SharedString::from(trigger).into(),
+            handle: cx.focus_handle(),
+            editing: true,
+        }
+    }
+
+    fn restore(&mut self, editing: bool, visible: bool, window: &mut Window, cx: &mut App) {
+        if self.editing && !editing {
+            self.editing = false;
+            if visible {
+                self.handle.focus(window, cx);
+            }
+        }
+    }
+}
+
 fn notification(message: String) -> Notification {
     // `content` supplies only the body; Notification already owns its close button.
     Notification::new().content(move |_, _, _| notification_message(&message).into_any_element())
@@ -121,13 +146,31 @@ impl AppView {
         if self.ui.groups.focus_request != self.group_focus_request {
             self.group_focus_request = self.ui.groups.focus_request;
             if self.ui.groups.editor_open {
+                self.group_editor_focus = Some(EditorFocus::new(
+                    if self.ui.groups.selected_id.is_empty() {
+                        "group-create".into()
+                    } else {
+                        format!("group-edit-{}", self.ui.groups.selected_id)
+                    },
+                    cx,
+                ));
                 self.group_name
                     .update(cx, |input, cx| input.focus(window, cx));
             }
         }
         if self.ui.mapping.focus_request != self.mapping_focus_request {
             self.mapping_focus_request = self.ui.mapping.focus_request;
-            if self.ui.mapping.editor {
+            if self.ui.mapping.editor
+                && let Some(draft) = &self.controller.mapping_draft
+            {
+                self.mapping_editor_focus = Some(EditorFocus::new(
+                    if self.ui.mapping.new_mapping {
+                        "mapping-create".into()
+                    } else {
+                        format!("mapping-edit-{}", draft.mapping.id)
+                    },
+                    cx,
+                ));
                 self.mapping_name
                     .update(cx, |input, cx| input.focus(window, cx));
             }
@@ -141,6 +184,22 @@ impl AppView {
             focus.focus(window, cx);
         }
         self.update_dialog(window, cx);
+        if let Some(focus) = &mut self.group_editor_focus {
+            focus.restore(
+                self.ui.groups.editor_open,
+                self.ui.mode == 2 && self.ui.page == 4,
+                window,
+                cx,
+            );
+        }
+        if let Some(focus) = &mut self.mapping_editor_focus {
+            focus.restore(
+                self.ui.mapping.editor,
+                self.ui.mode == 2 && self.ui.page == 1 && self.ui.mapping.open,
+                window,
+                cx,
+            );
+        }
         if let Some(command) = self.ui.window_command.take() {
             match command {
                 WindowCommand::Quit => {

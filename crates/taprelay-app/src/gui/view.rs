@@ -58,6 +58,8 @@ pub(super) struct AppView {
     dialog: u8,
     group_focus_request: i32,
     mapping_focus_request: i32,
+    group_editor_focus: Option<window::EditorFocus>,
+    mapping_editor_focus: Option<window::EditorFocus>,
     last_progress_message: String,
     #[cfg(target_os = "macos")]
     menu_locale: String,
@@ -227,6 +229,8 @@ impl AppView {
             dialog: 0,
             group_focus_request: 0,
             mapping_focus_request: 0,
+            group_editor_focus: None,
+            mapping_editor_focus: None,
             last_progress_message: String::new(),
             #[cfg(target_os = "macos")]
             menu_locale: String::new(),

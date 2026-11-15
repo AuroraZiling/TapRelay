@@ -273,6 +273,7 @@ fn invalid_group_name_stays_in_editor_and_save_persists(cx: &mut TestAppContext)
     let edit = gpui_kit::SharedString::from(format!("group-edit-{id}"));
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
+        assert_eq!(window.find("group-create").focused(), Some(true));
         window.click(edit.clone(), cx);
         window.click("group-name", cx);
         window.press(
@@ -292,6 +293,7 @@ fn invalid_group_name_stays_in_editor_and_save_persists(cx: &mut TestAppContext)
         assert!(!view.read(cx).ui.groups.form_error.is_empty());
         window.render_frame(cx);
         assert!(window.find("group-form-error").visible());
+        assert_eq!(window.find("group-name").focused(), Some(true));
         window.click("group-name", cx);
         window.input("Work", cx);
         window.click("group-save", cx);
@@ -303,9 +305,15 @@ fn invalid_group_name_stays_in_editor_and_save_persists(cx: &mut TestAppContext)
     assert_eq!(updated.foreground_app_rules.groups[id].name, "Work");
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
-        window.click(edit, cx);
+        assert_eq!(window.find(edit.clone()).focused(), Some(true));
+        window.press("enter", cx);
+        assert!(view.read(cx).ui.groups.editor_open);
         window.press("escape", cx);
         assert!(!view.read(cx).ui.groups.editor_open);
+        assert_eq!(window.find(edit).focused(), Some(true));
+        window.click("group-create", cx);
+        window.click("group-cancel", cx);
+        assert_eq!(window.find("group-create").focused(), Some(true));
     })
     .unwrap();
 }

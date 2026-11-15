@@ -235,6 +235,7 @@ fn saving_an_invalid_mapping_from_the_leave_dialog_returns_to_editor_with_error(
         assert!(window.try_find("mapping-leave-dialog").is_none());
         assert!(view.read(cx).ui.mapping.editor);
         assert!(window.find("mapping-form-error").visible());
+        assert_eq!(window.find("mapping-name").focused(), Some(true));
     })
     .unwrap();
 }
@@ -431,6 +432,7 @@ fn edits_mapping_text_and_keeps_or_discards_the_draft(cx: &mut TestAppContext) {
         window.click("mapping-back", cx);
         window.click("dialog-discard", cx);
         assert!(window.find("mapping-create").visible());
+        assert_eq!(window.find("mapping-create").focused(), Some(true));
         assert!(!view.read(cx).ui.mapping.editor);
         assert!(
             view.read(cx)
@@ -505,6 +507,7 @@ fn mapping_save_failure_keeps_draft_then_retry_and_delete_persist(cx: &mut TestA
         assert!(state.controller.runtime.config.custom_mappings.is_empty());
         window.render_frame(cx);
         assert!(window.find("mapping-form-error").visible());
+        assert_eq!(window.find("mapping-name").focused(), Some(true));
         view.update(cx, |view, _| {
             view.controller.path = folder.path().join("config.json")
         });
@@ -518,6 +521,7 @@ fn mapping_save_failure_keeps_draft_then_retry_and_delete_persist(cx: &mut TestA
     cx.update_window(handle, |_, window, cx| {
         assert!(!view.read(cx).ui.mapping.editor);
         window.render_frame(cx);
+        assert_eq!(window.find("mapping-create").focused(), Some(true));
         window.click(
             gpui_kit::SharedString::from(format!("mapping-delete-{}", saved.custom_mappings[0].id)),
             cx,
@@ -701,6 +705,7 @@ fn records_input_selects_a_filtered_output_and_saves_through_controls(cx: &mut T
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         assert!(window.find("mapping-create").visible());
+        assert_eq!(window.find("mapping-create").focused(), Some(true));
         assert!(!view.read(cx).ui.mapping.editor);
     })
     .unwrap();

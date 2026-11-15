@@ -82,12 +82,21 @@ impl AppView {
         disabled: bool,
         cx: &Context<Self>,
     ) -> Button {
+        let id = id.into();
+        let focus = [
+            self.group_editor_focus.as_ref(),
+            self.mapping_editor_focus.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .find(|focus| focus.trigger == id);
         let cancel_capture = matches!(
             command,
             Command::Binding(BindingCommand::CancelCapture) | Command::Mapping("cancel-capture", _)
         );
         Button::new(id)
             .disabled(disabled)
+            .when_some(focus, |button, focus| button.track_focus(&focus.handle))
             .when(cancel_capture && !disabled, |button| {
                 // Native mouse capture commits on release, before a button's click callback.
                 button.on_mouse_down(

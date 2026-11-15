@@ -16,6 +16,8 @@
   English · <a href="README.zh-cn.md">简体中文</a>
 </p>
 
+> TapRelay lets you control a phone, tablet, or other compatible device over Bluetooth using your computer’s keyboard and mouse. Map shortcuts or mouse buttons to media controls and remote key presses, or pass through your keyboard and mouse input to the other device.
+
 ## ⭐ Features
 
 - 🎵 Bluetooth media controls

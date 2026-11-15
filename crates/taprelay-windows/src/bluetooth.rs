@@ -615,6 +615,18 @@ fn selected_subscriber_index(
     })
 }
 
+fn apply_paired_names(targets: &mut [Target], paired: &[Target]) {
+    for target in targets {
+        if let Some(known) = paired.iter().find(|known| {
+            known.pairing == Knowledge::Yes
+                && !known.name.trim().is_empty()
+                && known.same_device(target)
+        }) {
+            target.name.clone_from(&known.name);
+        }
+    }
+}
+
 // Every publication, including refresh/notify intermediate snapshots, must use
 // the same lifecycle projection as the worker loop.
 fn publish_snapshot(
@@ -1316,6 +1328,7 @@ impl Server {
             target.availability = Availability::Unavailable;
             targets.push(target);
         }
+        apply_paired_names(&mut targets, &self.connected);
         targets.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
         self.state.targets = targets;
         let report_active = peers.map(|peer| peer.is_some_and(|peer| peer.active));

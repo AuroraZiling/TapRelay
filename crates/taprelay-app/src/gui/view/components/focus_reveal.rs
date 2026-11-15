@@ -29,21 +29,27 @@ impl AppView {
 
 impl RenderOnce for FocusReveal {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let state = window.use_keyed_state(self.id.clone(), cx, |_, cx| RevealState {
-            region: cx.focus_handle(),
-            previous: None,
+        let state = window.use_keyed_state(self.id.clone(), cx, |window, cx| {
+            // Focus ancestry is available only after a newly mounted region's first frame.
+            window.on_next_frame(|window, _| window.refresh());
+            RevealState {
+                region: cx.focus_handle(),
+                previous: None,
+            }
         });
         let region = state.read(cx).region.clone();
         let observed_region = region.clone();
         div()
             .on_children_prepainted(move |bounds, window, cx| {
-                let focused = window.focused(cx);
+                let focused = window
+                    .focused(cx)
+                    .filter(|focus| observed_region.contains(focus, window));
                 let changed = state.update(cx, |state, _| {
-                    let changed = state.previous != focused;
+                    let changed = state.previous != focused && focused.is_some();
                     state.previous = focused;
                     changed
                 });
-                if !changed || !observed_region.contains_focused(window, cx) {
+                if !changed {
                     return;
                 }
                 let Some(bounds) = bounds.first() else { return };

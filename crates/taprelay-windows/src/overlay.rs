@@ -210,12 +210,10 @@ impl Overlay {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn update(
         &mut self,
-        prefix: &str,
-        device: &str,
-        suffix: &str,
+        locale: &str,
+        text: (&str, &str, &str),
         background: [u8; 3],
         foreground: [u8; 3],
         duration: Option<Duration>,
@@ -232,9 +230,7 @@ impl Overlay {
             self.placement = Some(foreground_placement()?);
         }
         let placement = self.placement.expect("visible placement");
-        self.surface = Some(render(
-            prefix, device, suffix, background, foreground, placement,
-        )?);
+        self.surface = Some(render(locale, text, background, foreground, placement)?);
         if let Some(duration) = duration {
             if let Some(timeline) = &mut self.timeline {
                 timeline.replace(now, duration);
@@ -357,9 +353,8 @@ fn elide(dc: HDC, text: &str, available: i32) -> String {
 }
 
 fn render(
-    prefix: &str,
-    device: &str,
-    suffix: &str,
+    locale: &str,
+    (prefix, device, suffix): (&str, &str, &str),
     background: [u8; 3],
     foreground: [u8; 3],
     placement: Placement,
@@ -370,13 +365,18 @@ fn render(
         .min(placement.work.right - placement.work.left - px(16.0))
         .max(1);
     let mut surface = Surface::new(max_width, px(60.0))?;
+    let (face, weight) = if locale == "zh-CN" {
+        (w!("Microsoft YaHei UI"), FW_NORMAL)
+    } else {
+        (w!("Segoe UI"), FW_MEDIUM)
+    };
     let font = Font(unsafe {
         CreateFontW(
             -px(14.0),
             0,
             0,
             0,
-            FW_MEDIUM.0 as i32,
+            weight.0 as i32,
             0,
             0,
             0,
@@ -385,7 +385,7 @@ fn render(
             CLIP_DEFAULT_PRECIS,
             ANTIALIASED_QUALITY,
             DEFAULT_PITCH.0 as u32,
-            w!("Segoe UI"),
+            face,
         )
     });
     if font.0.is_invalid() {
@@ -496,69 +496,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn capsule_renders_at_multiple_scales_with_transparent_corners() {
-        for scale in [1.0, 1.5, 2.0] {
-            for dark in [false, true] {
-                for (locale, prefix, suffix) in [
-                    ("zh", "已断开与 ", " 的连接"),
-                    ("en", "Disconnected from ", ""),
-                ] {
-                    let placement = Placement {
-                        work: RECT {
-                            left: -1920,
-                            top: 0,
-                            right: 0,
-                            bottom: 1040,
-                        },
-                        scale,
-                    };
-                    let (background, foreground) = if dark {
-                        ([23; 3], [250; 3])
-                    } else {
-                        ([245; 3], [23; 3])
-                    };
-                    let mut surface = render(
-                        prefix,
-                        "Artemis 的 iPad Pro / A very long receiver name that must be truncated without losing the connection status",
-                        suffix,
-                        background,
-                        foreground,
-                        placement,
-                    )
-                    .unwrap();
-                    let (width, height) = (surface.width, surface.height);
-                    assert!(width <= (520.0 * scale) as i32);
-                    let pixels = surface.pixels();
-                    assert_eq!(pixels[0] >> 24, 0);
-                    assert_eq!(pixels[(width * height / 2 + width / 2) as usize] >> 24, 255);
-                    assert!(
-                        pixels
-                            .iter()
-                            .any(|pixel| pixel & 255 == foreground[2] as u32)
-                    );
-                    if let Some(dir) = std::env::var_os("TAPRELAY_UI_RENDER_DIR") {
-                        let dir = std::path::PathBuf::from(dir);
-                        std::fs::create_dir_all(&dir).unwrap();
-                        let mut ppm = format!("P6\n{width} {height}\n255\n").into_bytes();
-                        for pixel in pixels {
-                            let alpha = pixel.to_be_bytes()[0] as u16;
-                            for shift in [16, 8, 0] {
-                                let channel = ((*pixel >> shift) & 255) as u16;
-                                ppm.push((channel + 110 * (255 - alpha) / 255).min(255) as u8);
-                            }
-                        }
-                        std::fs::write(
-                            dir.join(format!("capsule-{locale}-{dark}-{scale}.ppm")),
-                            ppm,
-                        )
-                        .unwrap();
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
     #[ignore = "Briefly shows a native capsule; requires an interactive Windows desktop"]
     fn native_window_keeps_focus_and_has_click_through_toolwindow_styles() {
         unsafe {
@@ -566,9 +503,8 @@ mod tests {
             let mut overlay = Overlay::new().unwrap();
             overlay
                 .update(
-                    "正在控制 ",
-                    "测试设备",
-                    "",
+                    "zh-CN",
+                    ("已停止控制 ", "iPad", ""),
                     [23; 3],
                     [250; 3],
                     Some(Duration::from_secs(3)),

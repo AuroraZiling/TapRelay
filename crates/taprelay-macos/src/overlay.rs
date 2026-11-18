@@ -54,9 +54,8 @@ impl Overlay {
     }
     pub fn update(
         &mut self,
-        prefix: &str,
-        device: &str,
-        suffix: &str,
+        _locale: &str,
+        (prefix, device, suffix): (&str, &str, &str),
         background: [u8; 3],
         foreground: [u8; 3],
         duration: Option<Duration>,

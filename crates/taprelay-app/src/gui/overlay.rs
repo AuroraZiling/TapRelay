@@ -40,9 +40,8 @@ impl Overlay {
                 }
                 let (prefix, device, suffix) = notice.text_parts(locale);
                 native.as_mut().unwrap().update(
-                    &prefix,
-                    &device,
-                    &suffix,
+                    locale,
+                    (&prefix, &device, &suffix),
                     background,
                     foreground,
                     changed.then_some(notice.duration()),

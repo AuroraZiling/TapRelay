@@ -141,16 +141,15 @@ impl Overlay {
     }
     pub fn update(
         &mut self,
-        prefix: &str,
-        device: &str,
-        suffix: &str,
+        locale: &str,
+        text: (&str, &str, &str),
         background: [u8; 3],
         foreground: [u8; 3],
         duration: Option<std::time::Duration>,
     ) -> Result<()> {
         Ok(self
             .0
-            .update(prefix, device, suffix, background, foreground, duration)?)
+            .update(locale, text, background, foreground, duration)?)
     }
     pub fn hide(&mut self) {
         self.0.hide();

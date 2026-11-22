@@ -219,7 +219,6 @@ impl Runtime {
             }
         }
         if let Some(error) = input_error {
-            self.listening = false;
             self.error = Some(error);
             if let Some(link) = self
                 .transport

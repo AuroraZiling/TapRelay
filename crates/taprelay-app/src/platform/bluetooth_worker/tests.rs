@@ -593,6 +593,85 @@ fn mappings_forward_without_capture_and_capture_exit_releases_physical_input_on_
 }
 
 #[test]
+fn failed_mapping_session_rearms_with_a_fresh_token_without_replaying_input() {
+    let h = Harness::new();
+    h.connected();
+    h.handle.link.set_mapping_profile(true);
+    h.step();
+    h.status(3, "phone", true);
+    h.message(
+        h.current(),
+        Message::Armed {
+            generation: 3,
+            accepted: true,
+        },
+    );
+    h.step();
+    let previous = h.current();
+    let output = taprelay_core::mapping::MappingOutput::Keyboard {
+        usage: 0x4f,
+        modifiers: 0,
+    };
+    assert!(
+        h.handle
+            .link
+            .submit_mapping(output, 12, true, Instant::now())
+    );
+    h.message(previous, status(3, "phone", false));
+    h.message(
+        previous,
+        Message::Failure("Bluetooth worker input exceeded 250 ms".into()),
+    );
+    h.step();
+    assert_eq!(
+        h.handle.link.take_failure().as_deref(),
+        Some("Bluetooth worker input exceeded 250 ms")
+    );
+
+    h.handle.link.set_mapping_profile(false);
+    h.handle.invalidate();
+    h.handle.link.set_mapping_profile(true);
+    h.step();
+    assert_ne!(h.current(), previous);
+    h.status(3, "phone", true);
+    h.message(
+        h.current(),
+        Message::Armed {
+            generation: 3,
+            accepted: true,
+        },
+    );
+    h.step();
+    assert!(h.handle.link.ready());
+    assert!(!h.handle.link.capture_requested());
+    assert_eq!(h.handle.link.epoch(), 0);
+    assert!(
+        h.handle
+            .link
+            .submit_mapping(output, 14, true, Instant::now())
+    );
+    h.step();
+    let forwarded: Vec<_> = h
+        .state
+        .lock()
+        .unwrap()
+        .calls
+        .iter()
+        .filter_map(|call| match call {
+            Call::Send(
+                process,
+                Command::Input {
+                    event: Event::Mapping { token, .. },
+                    ..
+                },
+            ) => Some((*process, *token)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(forwarded, [(h.current(), 14)]);
+}
+
+#[test]
 fn only_matching_arm_authorizes_capture_and_losing_input_returns_to_media() {
     let h = Harness::new();
     h.connected();

@@ -29,32 +29,33 @@ impl Transport for FakeTransport {
     }
 }
 
+struct LinkedTransport(taprelay_core::passthrough::InputLink);
+impl Transport for LinkedTransport {
+    fn input_link(&self) -> Option<taprelay_core::passthrough::InputLink> {
+        Some(self.0.clone())
+    }
+    fn snapshot(&mut self) -> Option<Snapshot> {
+        None
+    }
+    fn refresh(&self) -> Result<()> {
+        Ok(())
+    }
+    fn restart(&self) -> Result<u64> {
+        Ok(1)
+    }
+    fn select(&self, _: String) -> Result<u64> {
+        Ok(1)
+    }
+    fn invalidate(&self) {
+        self.0.end();
+    }
+    fn send(&self, _: QueuedCommand) -> Result<oneshot::Receiver<Result<(), BackendError>>> {
+        unreachable!()
+    }
+}
+
 #[test]
 fn mapping_profile_is_revoked_even_after_the_input_source_is_gone() {
-    struct LinkedTransport(taprelay_core::passthrough::InputLink);
-    impl Transport for LinkedTransport {
-        fn input_link(&self) -> Option<taprelay_core::passthrough::InputLink> {
-            Some(self.0.clone())
-        }
-        fn snapshot(&mut self) -> Option<Snapshot> {
-            None
-        }
-        fn refresh(&self) -> Result<()> {
-            Ok(())
-        }
-        fn restart(&self) -> Result<u64> {
-            Ok(1)
-        }
-        fn select(&self, _: String) -> Result<u64> {
-            Ok(1)
-        }
-        fn invalidate(&self) {
-            self.0.end();
-        }
-        fn send(&self, _: QueuedCommand) -> Result<oneshot::Receiver<Result<(), BackendError>>> {
-            unreachable!()
-        }
-    }
     let (link, _receiver) = taprelay_core::passthrough::InputLink::channel(std::sync::Arc::new(
         std::sync::atomic::AtomicU64::new(1),
     ));
@@ -82,6 +83,61 @@ fn mapping_profile_is_revoked_even_after_the_input_source_is_gone() {
     runtime.configure_input();
     assert_eq!(link.mapping_epoch(), 0);
     assert!(!link.profile_requested());
+}
+
+#[test]
+fn transport_failure_preserves_listening_and_rearms_mappings() {
+    struct LinkedInput(taprelay_core::passthrough::InputLink);
+    impl InputSource for LinkedInput {
+        fn passthrough_error(&self) -> Option<String> {
+            self.0.take_failure()
+        }
+        fn is_finished(&self) -> bool {
+            false
+        }
+        fn configure(
+            &self,
+            _: &FunctionConfigs,
+            _: &[taprelay_core::mapping::CustomMapping],
+            _: &taprelay_core::foreground_app::ForegroundAppRules,
+            _: bool,
+            _: bool,
+            _: u64,
+        ) -> RouteResult {
+            RouteResult::default()
+        }
+        fn terminate(&self, _: RouterReason) -> RouteResult {
+            RouteResult::default()
+        }
+        fn replay(&self, _: taprelay_core::input_router::PhysicalInput) -> Result<()> {
+            Ok(())
+        }
+    }
+    let (link, _receiver) = taprelay_core::passthrough::InputLink::channel(std::sync::Arc::new(
+        std::sync::atomic::AtomicU64::new(1),
+    ));
+    let mut mapping = capture_mapping_draft();
+    mapping.shortcuts = vec![Shortcut::mouse(ModifierSet::empty(), MouseButton::Side1)];
+    let mut runtime = Runtime::new(Config {
+        custom_mappings: vec![mapping],
+        ..Default::default()
+    });
+    runtime.transport = Some(Box::new(LinkedTransport(link.clone())));
+    runtime.input = Some(Box::new(LinkedInput(link.clone())));
+    runtime.set_listening(true).unwrap();
+    let previous = link.mapping_epoch();
+    assert_ne!(previous, 0);
+
+    link.fail("Bluetooth worker input exceeded 250 ms");
+    runtime.configure_input();
+    assert!(runtime.listening);
+    assert!(runtime.error.is_some());
+    assert_eq!(link.mapping_epoch(), 0);
+
+    runtime.configure_input();
+    assert!(link.profile_requested());
+    assert_ne!(link.mapping_epoch(), previous);
+    assert!(!link.capture_requested());
 }
 
 struct SnapshotTransport(Option<Snapshot>);

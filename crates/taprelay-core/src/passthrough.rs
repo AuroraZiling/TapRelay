@@ -318,9 +318,9 @@ impl InputLink {
         };
         if self.sender.try_send(packet).is_err() {
             // Prevent fail -> end -> ReleasePhysical from recursively trying a
-            // full queue, and revoke held mapping admission until restarted.
+            // full queue, and revoke held mapping admission until re-armed.
             self.set_mapping_profile(false);
-            self.fail("Mapping input queue unavailable; listener must be restarted");
+            self.fail("Mapping input queue unavailable");
             return false;
         }
         self.wake();

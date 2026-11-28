@@ -81,7 +81,7 @@ jobs:
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
           dotnet tool install vpk --version $env:VELOPACK_VERSION --tool-path "$env:RUNNER_TEMP/vpk"
-          & "$env:RUNNER_TEMP/vpk/vpk" --version
+          & "$env:RUNNER_TEMP/vpk/vpk" --help --skip-updates
           "$env:RUNNER_TEMP/vpk" >> $env:GITHUB_PATH
           $zip = "$env:RUNNER_TEMP/ssign-windows-x86_64.zip"
           Invoke-WebRequest 'https://github.com/Le-Syl21/ssign/releases/download/v0.1.11/ssign-windows-x86_64.zip' -OutFile $zip
@@ -173,7 +173,7 @@ jobs:
         run: |
           python3 -m unittest discover -s scripts/tests -p test_macos_signing_identity.py
           dotnet tool install vpk --version "$VELOPACK_VERSION" --tool-path "$RUNNER_TEMP/taprelay-vpk"
-          "$RUNNER_TEMP/taprelay-vpk/vpk" --version
+          "$RUNNER_TEMP/taprelay-vpk/vpk" --help --skip-updates
           echo "$RUNNER_TEMP/taprelay-vpk" >> "$GITHUB_PATH"
       - name: Sign, notarize and package
         id: signing

@@ -38,8 +38,7 @@ a `vX.Y.Z` tag is pushed. It publishes a signed, notarized installer for each
 architecture, alongside its Velopack feed and full update package. The installer
 supports both `/Applications` and `~/Applications`.
 
-Create the GitHub Environment `macos-signing` under **Settings → Environments**,
-allow deployment only from `v*` release tags, and add these environment secrets:
+Add these repository secrets under **Settings → Secrets and variables → Actions**:
 
 | Secret | Value |
 | --- | --- |

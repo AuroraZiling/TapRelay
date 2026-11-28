@@ -131,7 +131,6 @@ jobs:
             target: x86_64-apple-darwin
             runner: macos-26-intel
     runs-on: ${{ matrix.runner }}
-    environment: macos-signing
     timeout-minutes: 90
     permissions:
       contents: read

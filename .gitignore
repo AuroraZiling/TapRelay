@@ -17,3 +17,5 @@ config.json
 !config.json.example
 
 AGENTS.md
+__pycache__/
+*.pyc

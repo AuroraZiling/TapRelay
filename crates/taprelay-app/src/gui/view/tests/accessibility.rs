@@ -106,7 +106,7 @@ fn tab_and_reverse_tab_reveal_controls_in_compact_scroll_regions(cx: &mut TestAp
                         "settings.homepage",
                         "settings.license",
                         "settings.third.party.notices",
-                        "settings.data.folder",
+                        "settings.app.folder",
                         "logs.folder",
                         "settings.wizard",
                         "settings.star",

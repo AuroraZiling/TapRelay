@@ -44,6 +44,6 @@ impl AppView {
                 }),
             footer,
         );
-        self.centered_dialog(dialog, content, window, cx)
+        self.centered_dialog(dialog, 28., content, window, cx)
     }
 }

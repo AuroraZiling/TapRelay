@@ -17,6 +17,8 @@ use gpui_kit::component::{
 use gpui_kit::{assets::IconName, component::Icon};
 use gpui_kit::{prelude::*, *};
 
+mod updates;
+
 impl SearchableListItem for ChoiceOption {
     type Value = String;
 
@@ -624,6 +626,15 @@ impl AppView {
                     .gap_3()
                     .border_t_1()
                     .border_color(cx.theme().border)
+                    .child(self.update_settings(cx)),
+            )
+            .child(
+                div()
+                    .p_4()
+                    .v_flex()
+                    .gap_3()
+                    .border_t_1()
+                    .border_color(cx.theme().border)
                     .child(
                         self.reveal_focus(
                             "about-storage",
@@ -646,7 +657,7 @@ impl AppView {
                                                 .flex_shrink_0(),
                                         )
                                         .child(
-                                            self.caption(self.ui.data_directory.clone(), cx)
+                                            self.caption(self.ui.app_directory.clone(), cx)
                                                 .min_w_0(),
                                         ),
                                 )
@@ -658,13 +669,13 @@ impl AppView {
                                         .flex_shrink_0()
                                         .child(
                                             self.app_button(
-                                                "data-folder",
-                                                "settings.data.folder",
-                                                Action::DataFolder,
+                                                "app-folder",
+                                                "settings.app.folder",
+                                                Action::AppFolder,
                                                 false,
                                                 cx,
                                             )
-                                            .icon(IconName::Database)
+                                            .icon(IconName::FolderOpen)
                                             .ghost(),
                                         )
                                         .child(

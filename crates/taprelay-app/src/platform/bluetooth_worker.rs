@@ -40,7 +40,13 @@ pub struct Handle {
     link: InputLink,
     revision: Arc<AtomicU64>,
     stopping: Arc<AtomicBool>,
-    worker: Option<thread::JoinHandle<()>>,
+    worker: Option<thread::JoinHandle<Result<(), Unstopped>>>,
+    unconfirmed: Option<Box<dyn WorkerProcess>>,
+}
+
+struct Unstopped {
+    process: Box<dyn WorkerProcess>,
+    error: anyhow::Error,
 }
 
 impl Handle {
@@ -84,12 +90,10 @@ impl Handle {
         let worker = thread::Builder::new()
             .name("taprelay-bluetooth-supervisor".into())
             .spawn(move || {
-                if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| supervisor.run()))
-                    .is_err()
-                {
-                    let _ =
-                        supervisor.finish(Err(anyhow::anyhow!("Bluetooth supervisor panicked")));
-                }
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| supervisor.run()))
+                    .unwrap_or_else(|_| {
+                        supervisor.finish(Err(anyhow::anyhow!("Bluetooth supervisor panicked")))
+                    })
             })?;
         link.set_worker(worker.thread().clone());
         Ok(Self {
@@ -99,6 +103,7 @@ impl Handle {
             revision,
             stopping,
             worker: Some(worker),
+            unconfirmed: None,
         })
     }
 
@@ -119,6 +124,41 @@ impl Handle {
 }
 
 impl crate::platform::Transport for Handle {
+    fn stop_and_wait(&mut self) -> Result<()> {
+        if let Some(process) = &mut self.unconfirmed {
+            process.stop()?;
+            self.unconfirmed.take();
+            return Ok(());
+        }
+        self.link.end();
+        self.stopping.store(true, Ordering::Release);
+        self.link.wake();
+        let worker = self
+            .worker
+            .as_ref()
+            .context("No Bluetooth supervisor to confirm shutdown")?;
+        let until = Instant::now() + Duration::from_secs(3);
+        while !worker.is_finished() {
+            anyhow::ensure!(
+                Instant::now() < until,
+                "Bluetooth service owner has not stopped"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        match self
+            .worker
+            .take()
+            .unwrap()
+            .join()
+            .map_err(|_| anyhow::anyhow!("Bluetooth supervisor panicked"))?
+        {
+            Ok(()) => Ok(()),
+            Err(Unstopped { process, error }) => {
+                self.unconfirmed = Some(process);
+                Err(error)
+            }
+        }
+    }
     fn input_link(&self) -> Option<InputLink> {
         Some(self.link.clone())
     }
@@ -201,7 +241,7 @@ trait WorkerProcess: Send {
 }
 
 trait Execution: Send + 'static {
-    type Worker: WorkerProcess;
+    type Worker: WorkerProcess + 'static;
     #[cfg(target_os = "macos")]
     fn live_profile_switch(&self) -> bool {
         false
@@ -240,12 +280,12 @@ struct Supervisor<E: Execution> {
 }
 
 impl<E: Execution> Supervisor<E> {
-    fn run(&mut self) -> Result<()> {
+    fn run(&mut self) -> Result<(), Unstopped> {
         let result = self.run_loop();
         self.finish(result)
     }
 
-    fn finish(&mut self, mut result: Result<()>) -> Result<()> {
+    fn finish(&mut self, result: Result<()>) -> Result<(), Unstopped> {
         self.link.disconnect();
         self.link.set_profile_available(false);
         for (_, pending) in std::mem::take(&mut self.pending) {
@@ -261,20 +301,25 @@ impl<E: Execution> Supervisor<E> {
         self.snapshot.service = false;
         self.snapshot.broadcasting = false;
         self.publish_snapshot();
-        if let Some(mut worker) = self.process.take()
-            && let Err(error) = worker.stop()
-            && result.is_ok()
+        let stopped = self.process.take().map_or(Ok(()), |mut worker| {
+            worker.stop().map_err(|error| Unstopped {
+                process: Box::new(worker),
+                error,
+            })
+        });
+        if let Some(error) = stopped
+            .as_ref()
+            .err()
+            .map(|s| &s.error)
+            .or(result.as_ref().err())
         {
-            result = Err(error);
-        }
-        if let Err(error) = &result {
             let message = format!("{error:#}");
             tracing::error!(%message, "Bluetooth supervisor stopped");
             self.link.fail(message.clone());
             self.snapshot.last_error = Some(message);
             self.publish_snapshot();
         }
-        result
+        stopped
     }
 
     fn run_loop(&mut self) -> Result<()> {

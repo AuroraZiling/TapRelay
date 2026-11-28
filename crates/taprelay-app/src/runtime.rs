@@ -62,6 +62,7 @@ pub struct Runtime {
     input: Option<Box<dyn InputSource>>,
     input_initialized: bool,
     transport: Option<Box<dyn Transport>>,
+    unconfirmed_update_stop: Option<Box<dyn Transport>>,
     events: mpsc::Receiver<RoutedInput>,
     sender: mpsc::Sender<RoutedInput>,
     capture_state: InputState,
@@ -140,6 +141,7 @@ impl Runtime {
             input: None,
             input_initialized: false,
             transport: None,
+            unconfirmed_update_stop: None,
             events,
             sender,
             capture_state: InputState::default(),
@@ -327,12 +329,33 @@ impl Runtime {
     /// boundary, so a physically disconnected receiver cannot be promised a
     /// final packet.
     pub fn shutdown(&mut self) {
+        self.stop_input_for_exit();
+        self.transport.take();
+    }
+
+    fn stop_input_for_exit(&mut self) {
         self.invalidate(RouterReason::ApplicationExit);
         self.listening = false;
         self.capture = None;
         self.input.take();
-        self.transport.take();
         self.state.ready = false;
+    }
+
+    fn stop_for_update(&mut self) -> Result<()> {
+        self.stop_input_for_exit();
+        self.startup_retry_at = None;
+        if self.unconfirmed_update_stop.is_none() {
+            self.unconfirmed_update_stop = self.transport.take();
+        }
+        self.confirm_update_stop()
+    }
+
+    fn confirm_update_stop(&mut self) -> Result<()> {
+        if let Some(transport) = &mut self.unconfirmed_update_stop {
+            transport.stop_and_wait()?;
+        }
+        self.unconfirmed_update_stop.take();
+        Ok(())
     }
 
     pub fn send(&mut self) -> Result<()> {

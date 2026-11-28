@@ -14,4 +14,5 @@ mod settings;
 mod shell;
 mod smoke;
 mod support;
+mod updates;
 mod wizard;

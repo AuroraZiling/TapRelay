@@ -16,6 +16,10 @@ impl Runtime {
         create: impl FnOnce(Option<taprelay_core::state::Target>) -> Result<Box<dyn Transport>>,
     ) -> Result<()> {
         self.startup_retry_at = Some(Instant::now() + std::time::Duration::from_secs(5));
+        if let Err(error) = self.confirm_update_stop() {
+            self.state.last_error = Some(error.to_string());
+            return Err(error);
+        }
         self.state.ready = false;
         self.state.service = false;
         self.state.broadcasting = false;

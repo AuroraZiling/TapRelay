@@ -49,6 +49,6 @@ impl AppView {
             self.text(self.tr("mappings.unsaved_help")),
             footer,
         );
-        self.centered_dialog(dialog, content, window, cx)
+        self.centered_dialog(dialog, 28., content, window, cx)
     }
 }

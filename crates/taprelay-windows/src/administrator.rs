@@ -1,4 +1,5 @@
 //! UAC elevation uses the Windows shell, never a command interpreter or a stored password.
+mod update_handoff;
 use std::{
     ffi::{OsStr, OsString},
     mem::size_of,
@@ -6,6 +7,7 @@ use std::{
     path::Path,
 };
 use taprelay_core::ports::BackendError;
+pub use update_handoff::{accept_update_handoff, restart_for_update};
 use windows::{
     Win32::{
         Foundation::*,

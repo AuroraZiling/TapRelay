@@ -50,6 +50,8 @@ pub struct Options {
     pub passthrough_reverse_scroll: bool,
     pub always_admin: bool,
     pub auto_listen: bool,
+    pub auto_check_updates: bool,
+    pub skipped_update_version: Option<String>,
     pub autostart: bool,
     pub start_hidden: bool,
     pub close_to_tray: bool,
@@ -69,6 +71,8 @@ impl Default for Options {
             passthrough_reverse_scroll: false,
             always_admin: true,
             auto_listen: true,
+            auto_check_updates: true,
+            skipped_update_version: None,
             autostart: false,
             start_hidden: false,
             close_to_tray: true,
@@ -197,6 +201,13 @@ impl Config {
             "Invalid custom mapping or conflicting shortcut"
         );
         ensure!(self.wizard.page <= 3, "Invalid wizard page");
+        ensure!(
+            self.options
+                .skipped_update_version
+                .as_deref()
+                .is_none_or(crate::updates::is_stable_tag),
+            "Skipped update version must be a stable vX.Y.Z tag"
+        );
         ensure!(
             self.window.width.is_finite() && self.window.height.is_finite(),
             "Invalid window size"

@@ -45,9 +45,15 @@ version=${TAPRELAY_VERSION:-$(sed -n '/\[workspace.package\]/,/^\[/s/^version = 
 if [[ $mode == distribution ]]; then
     [[ $profile == release && $notarize == true ]] || { echo "Distribution requires a release build and --notarize" >&2; exit 1; }
     : "${TAPRELAY_NOTARY_PROFILE:?Set a notarytool Keychain profile}"
-    identity_args=(-v -p codesigning)
-    [[ -z ${TAPRELAY_SIGN_KEYCHAIN:-} ]] || identity_args+=("$TAPRELAY_SIGN_KEYCHAIN")
-    TAPRELAY_SIGN_IDENTITY=$(security find-identity "${identity_args[@]}" | /usr/bin/python3 scripts/macos-signing-identity.py "${TAPRELAY_SIGN_IDENTITY:-}")
+    keychain=${TAPRELAY_SIGN_KEYCHAIN:-}
+    if [[ -n ${TAPRELAY_NOTARY_KEYCHAIN:-} && -n $keychain && $TAPRELAY_NOTARY_KEYCHAIN != "$keychain" ]]; then
+        echo "Velopack requires the signing identities and notary profile in the same keychain" >&2; exit 1
+    fi
+    keychain=${keychain:-${TAPRELAY_NOTARY_KEYCHAIN:-}}
+    identity_args=(-v)
+    [[ -z $keychain ]] || identity_args+=("$keychain")
+    TAPRELAY_SIGN_IDENTITY=$(security find-identity -p codesigning "${identity_args[@]}" | /usr/bin/python3 scripts/macos-signing-identity.py "${TAPRELAY_SIGN_IDENTITY:-}")
+    TAPRELAY_INSTALL_IDENTITY=$(security find-identity "${identity_args[@]}" | /usr/bin/python3 scripts/macos-signing-identity.py --installer "${TAPRELAY_INSTALL_IDENTITY:-}")
 fi
 if $build; then
     args=(build --locked -p taprelay-app)
@@ -116,22 +122,31 @@ if [[ $mode == development ]]; then
     mv "$app" "$destination/TapRelay.app"
     echo "$destination/TapRelay.app"
 else
-    sign_args=(--force --sign "$TAPRELAY_SIGN_IDENTITY" --options runtime --timestamp)
-    [[ -z ${TAPRELAY_SIGN_KEYCHAIN:-} ]] || sign_args+=(--keychain "$TAPRELAY_SIGN_KEYCHAIN")
-    codesign "${sign_args[@]}" "$app"
-    codesign --verify --strict --deep --verbose=2 "$app"
-    ditto -c -k --keepParent "$app" "$staging/notary.zip"
-    notary_args=(--keychain-profile "$TAPRELAY_NOTARY_PROFILE" --wait)
-    [[ -z ${TAPRELAY_NOTARY_KEYCHAIN:-} ]] || notary_args+=(--keychain "$TAPRELAY_NOTARY_KEYCHAIN")
-    xcrun notarytool submit "$staging/notary.zip" "${notary_args[@]}"
-    xcrun stapler staple "$app"
-    xcrun stapler validate "$app"
-    codesign --verify --strict --deep --verbose=2 "$app"
-    spctl --assess --type execute --verbose=2 "$app"
-    name="TapRelay_${version}_macOS_${asset_arch}.zip"
-    ditto -c -k --keepParent "$app" "$staging/$name"
-    # Keep the previous distributable so a failed build cannot destroy it.
-    if [[ -e artifacts/$name ]]; then cp "artifacts/$name" "artifacts/$name.previous"; fi
-    mv "$staging/$name" "artifacts/$name"
+    channel="osx-$asset_arch"
+    output="$staging/releases"
+    # vpk's default entitlements relax hardened runtime for .NET/JIT, which TapRelay does not use.
+    plutil -create xml1 "$staging/TapRelay.entitlements"
+    args=(pack --packId TapRelay --packVersion "$version" --packAuthors "Artemis Li" --packDir "$app" --mainExe taprelay
+        --channel "$channel" --runtime "osx${MACOSX_DEPLOYMENT_TARGET}-$asset_arch" --outputDir "$output" --delta None --noPortable
+        --signAppIdentity "$TAPRELAY_SIGN_IDENTITY" --signInstallIdentity "$TAPRELAY_INSTALL_IDENTITY"
+        --signEntitlements "$staging/TapRelay.entitlements" --notaryProfile "$TAPRELAY_NOTARY_PROFILE" --skip-updates)
+    if [[ -n $keychain ]]; then args+=(--keychain "$keychain"); fi
+    vpk "${args[@]}"
+
+    pkg="$output/TapRelay-$channel-Setup.pkg"
+    pkgutil --check-signature "$pkg"
+    spctl --assess --type install --verbose=2 "$pkg"
+    xcrun stapler validate "$pkg"
+    pkgutil --expand-full "$pkg" "$staging/expanded"
+    packaged_app=$(find "$staging/expanded" -type d -name 'TapRelay.app' -prune)
+    codesign --verify --strict --deep --verbose=2 "$packaged_app"
+    team=$(codesign -dv --verbose=4 "$packaged_app" 2>&1 | sed -n 's/^TeamIdentifier=//p')
+    [[ -n $team && $TAPRELAY_INSTALL_IDENTITY == *" ($team)" ]] || { echo "App and installer must be signed by the same Developer ID team" >&2; exit 1; }
+    spctl --assess --type execute --verbose=2 "$packaged_app"
+    xcrun stapler validate "$packaged_app"
+
+    name="TapRelay_${version}_macOS_${asset_arch}.pkg"
+    mv "$pkg" "$output/$name"
+    mv "$output/$name" "$output/releases.$channel.json" "$output/TapRelay-$version-$channel-full.nupkg" artifacts/
     echo "$PWD/artifacts/$name"
 fi

@@ -42,8 +42,8 @@
 
 ### Windows
 
-1. Download `TapRelay_<version>_Windows_x64.zip` from [Releases](https://github.com/AuroraZiling/TapRelay/releases) and extract it to a writable folder.
-2. Run `TapRelay.exe`. TapRelay requests administrator access by default. If you cancel the request, it continues without elevation, but shortcuts may not work in applications running as administrator.
+1. Run `TapRelay_<version>_Windows_x64_Setup.exe` from [Releases](https://github.com/AuroraZiling/TapRelay/releases) to install for your user account. For a portable copy, extract the Windows ZIP to a writable folder and run `TapRelay.exe` there.
+2. Open TapRelay. The installer does not need administrator access, but the app requests it by default. If you cancel the request, it continues without elevation, but shortcuts may not work in applications running as administrator.
 3. In the setup wizard, enable the functions you need and assign shortcuts.
 4. Pair and connect the receiver to the PC in system Bluetooth settings, then select it in TapRelay.
 5. Start playback on the receiver and use **Test Play/Pause**.
@@ -52,20 +52,24 @@
 
 The macOS port is [still in progress](docs/migration-progress.md).
 
-1. Download the macOS ZIP from [Releases](https://github.com/AuroraZiling/TapRelay/releases) and choose:
+1. Download the macOS installer (`.pkg`) from [Releases](https://github.com/AuroraZiling/TapRelay/releases) and choose:
   - `arm64` for Apple Silicon (M-series) chips
   - `x64` for Intel
-2. Extract it and move `TapRelay.app` to Applications.
+2. Open the installer and choose Applications for all users or just for yourself.
 3. Open TapRelay and follow the prompts to allow Bluetooth, Accessibility and Input Monitoring.
 4. In the setup wizard, enable the functions you need and assign shortcuts.
 5. In the receiver's Bluetooth settings, pair and connect it to the Mac, then select it in TapRelay.
 6. Start playback on the receiver and use **Test Play/Pause**.
 
-To update on macOS, quit TapRelay and replace the app in Applications.
+### Check for updates
+
+TapRelay checks for stable releases shortly after startup and every 24 hours while running. Under **Settings → About**, you can turn off automatic checks or check manually at any time. When an update is offered, you can read its release notes before deciding. Only after you confirm does an installed copy download that version, save your settings and restart. A Windows portable copy opens the ZIP for that version instead; quit TapRelay before replacing the executable.
+
+**Remind me later** dismisses this offer until the next check. **Skip this version** suppresses automatic reminders for that version only; a manual check still shows it.
 
 ## ⚙️ Settings and environment
 
-- On Windows, the folder you extract TapRelay to must be writable because `config.json` and the `logs/` folder are stored beside `TapRelay.exe`.
+- On Windows, Setup installs the app in `%LOCALAPPDATA%\TapRelay`. Your `config.json` and `logs/` live in `%APPDATA%\TapRelay` and are kept when you uninstall. The portable version stores them beside `TapRelay.exe` instead.
 - On macOS, open their folders from Settings.
 - The default log level is `info`. To record more detail when troubleshooting, run `TapRelay.exe --log-level debug`. Available levels are `off`, `error`, `warn`, `info`, `debug`, and `trace`.
 - A device shown as paired or connected in system Bluetooth settings may not yet be able to receive TapRelay commands. If TapRelay reports that the session is not ready, connect to your computer from the receiver's Bluetooth settings, then check the status in TapRelay again.

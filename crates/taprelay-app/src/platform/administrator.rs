@@ -8,6 +8,21 @@ mod windows {
     pub fn wait_for_parent(pid: u32) -> Result<()> {
         Ok(taprelay_windows::administrator::wait_for_parent(pid)?)
     }
+    pub fn restart_for_update(tag: &str) -> Result<()> {
+        Ok(taprelay_windows::administrator::restart_for_update(
+            tag,
+            &crate::logging::arguments()[1],
+        )?)
+    }
+    pub fn accept_update_handoff(pid: u32, nonce: &str) -> Result<()> {
+        anyhow::ensure!(
+            crate::installation::is_installed(&std::env::current_exe()?)?,
+            "Update handoff requires an installed copy of TapRelay"
+        );
+        Ok(taprelay_windows::administrator::accept_update_handoff(
+            pid, nonce,
+        )?)
+    }
     pub fn restart() -> Result<bool> {
         let mut args = vec![
             std::ffi::OsString::from("--handoff"),

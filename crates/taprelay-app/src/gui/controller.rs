@@ -36,16 +36,19 @@ mod mappings;
 #[cfg(test)]
 mod startup_tests;
 mod sync;
+mod updates;
 
 pub(super) use desktop_shell::Shell;
 
 enum ExitIntent {
     Quit,
+    ApplyUpdate(lifecycle::UpdateExit),
     #[cfg(windows)]
     Elevate,
 }
 
 pub(super) struct Controller {
+    updates: updates::Updates,
     pub(super) mapping_draft: Option<mappings::MappingDraft>,
     pending_mappings: Option<(
         Vec<taprelay_core::mapping::CustomMapping>,
@@ -106,6 +109,7 @@ impl Controller {
         let last_remembered_device = runtime.config.remembered_device.clone();
         let now = Instant::now();
         Ok(Self {
+            updates: updates::Updates::new(now, &desktop),
             mapping_draft: None,
             pending_mappings: None,
             mapping_navigation: None,

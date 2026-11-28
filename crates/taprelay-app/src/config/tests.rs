@@ -45,6 +45,8 @@ fn invalid_options_are_rejected_instead_of_replaced_with_defaults() {
         serde_json::json!({ "passthrough_mouse_percent": 0 }),
         serde_json::json!({ "passthrough_mouse_percent": 101 }),
         serde_json::json!({ "unknown_setting": true }),
+        serde_json::json!({ "skipped_update_version": "v1.0.1-beta" }),
+        serde_json::json!({ "auto_check_updates": "false" }),
     ] {
         let mut json = serde_json::to_value(Config::default()).unwrap();
         json["options"] = options;

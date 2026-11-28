@@ -160,10 +160,21 @@ impl Transport for SnapshotTransport {
     }
 }
 
-struct StoppedTransport(Option<Snapshot>);
+#[derive(Default)]
+struct StoppedTransport {
+    snapshot: Option<Snapshot>,
+    refused_stops: usize,
+}
 impl Transport for StoppedTransport {
+    fn stop_and_wait(&mut self) -> Result<()> {
+        if self.refused_stops > 0 {
+            self.refused_stops -= 1;
+            anyhow::bail!("child has not exited");
+        }
+        Ok(())
+    }
     fn snapshot(&mut self) -> Option<Snapshot> {
-        self.0.take()
+        self.snapshot.take()
     }
     fn is_finished(&self) -> bool {
         true
@@ -181,6 +192,27 @@ impl Transport for StoppedTransport {
     fn send(&self, _: QueuedCommand) -> Result<oneshot::Receiver<Result<(), BackendError>>> {
         unreachable!()
     }
+}
+
+#[test]
+fn interrupted_update_can_restore_bluetooth_once_the_original_worker_really_exits() {
+    let mut runtime = Runtime::new(Config::default());
+    runtime.transport = Some(Box::new(StoppedTransport {
+        refused_stops: 2,
+        ..Default::default()
+    }));
+    assert!(runtime.stop_for_update().is_err());
+    assert!(
+        runtime
+            .start_bluetooth_with(|_| panic!("old owner still alive"))
+            .is_err()
+    );
+    runtime
+        .start_bluetooth_with(|_| Ok(Box::new(FakeTransport)))
+        .unwrap();
+    assert!(runtime.unconfirmed_update_stop.is_none());
+    assert!(runtime.transport.is_some());
+    runtime.stop_for_update().unwrap();
 }
 
 fn restoring_runtime() -> Runtime {
@@ -237,7 +269,10 @@ fn startup_retries_creation_and_stopped_worker_at_five_second_intervals() {
     });
     runtime.retry_startup_with(due + std::time::Duration::from_secs(5), |remembered| {
         assert!(remembered.is_some());
-        Ok(Box::new(StoppedTransport(None)))
+        Ok(Box::new(StoppedTransport {
+            refused_stops: 1,
+            ..Default::default()
+        }))
     });
     runtime.retry_startup_with(due + std::time::Duration::from_secs(10), |remembered| {
         assert!(remembered.is_some());
@@ -252,12 +287,15 @@ fn startup_retries_creation_and_stopped_worker_at_five_second_intervals() {
 fn stopped_workers_stale_ready_snapshot_does_not_complete_restore() {
     let mut runtime = restoring_runtime();
     let target = runtime.startup_restore.clone().unwrap();
-    runtime.transport = Some(Box::new(StoppedTransport(Some(Snapshot {
-        selected: Some(target.id.clone()),
-        targets: vec![target],
-        ready: true,
+    runtime.transport = Some(Box::new(StoppedTransport {
+        snapshot: Some(Snapshot {
+            selected: Some(target.id.clone()),
+            targets: vec![target],
+            ready: true,
+            ..Default::default()
+        }),
         ..Default::default()
-    }))));
+    }));
     runtime.tick();
     assert!(!runtime.state.ready);
     assert!(runtime.startup_restore.is_some());

@@ -8,9 +8,11 @@ pub(super) enum PrivilegeMode {
     Admin,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct StartupOptions {
     pub(super) handoff: Option<u32>,
+    #[cfg(windows)]
+    pub(super) confirmed_update: Option<(String, String)>,
     pub(super) privilege: PrivilegeMode,
     pub(super) log_level: logging::LogLevel,
 }
@@ -18,6 +20,8 @@ pub(super) struct StartupOptions {
 pub(super) fn parse_startup_options(args: &[String]) -> Result<StartupOptions> {
     let mut options = StartupOptions {
         handoff: None,
+        #[cfg(windows)]
+        confirmed_update: None,
         privilege: PrivilegeMode::Config,
         log_level: logging::LogLevel::INFO,
     };
@@ -47,6 +51,19 @@ pub(super) fn parse_startup_options(args: &[String]) -> Result<StartupOptions> {
                 );
                 index += 1;
             }
+            #[cfg(windows)]
+            "--confirmed-update" => {
+                let tag = args
+                    .get(index + 1)
+                    .context("Missing confirmed release tag")?;
+                anyhow::ensure!(
+                    crate::updates::is_stable_tag(tag),
+                    "Expected a stable release tag"
+                );
+                let nonce = args.get(index + 2).context("Missing update handoff ID")?;
+                options.confirmed_update = Some((tag.clone(), nonce.clone()));
+                index += 2;
+            }
             "--log-level" => {
                 let value = args
                     .get(index + 1)
@@ -65,6 +82,13 @@ pub(super) fn parse_startup_options(args: &[String]) -> Result<StartupOptions> {
         }
         index += 1;
     }
+    #[cfg(windows)]
+    anyhow::ensure!(
+        options.confirmed_update.is_none()
+            || (options.privilege == PrivilegeMode::User
+                && options.handoff.is_some_and(|pid| pid != 0)),
+        "Confirmed update requires an explicit user-mode handoff"
+    );
     Ok(options)
 }
 
@@ -93,6 +117,8 @@ mod tests {
             parse_startup_options(&args(&[])).unwrap(),
             StartupOptions {
                 handoff: None,
+                #[cfg(windows)]
+                confirmed_update: None,
                 privilege: PrivilegeMode::Config,
                 log_level: logging::LogLevel::INFO,
             }
@@ -123,10 +149,61 @@ mod tests {
             parse_startup_options(&args(&["--handoff", "1234"])).unwrap(),
             StartupOptions {
                 handoff: Some(1234),
+                #[cfg(windows)]
+                confirmed_update: None,
                 privilege: PrivilegeMode::Config,
                 log_level: logging::LogLevel::INFO,
             }
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn confirmed_update_requires_fixed_stable_tag_and_explicit_user_process_handoff() {
+        let valid = [
+            "--user",
+            "--handoff",
+            "1234",
+            "--confirmed-update",
+            "v1.2.3",
+            "nonce",
+        ];
+        let parsed = parse_startup_options(&args(&valid)).unwrap();
+        assert_eq!(
+            parsed.confirmed_update,
+            Some(("v1.2.3".into(), "nonce".into()))
+        );
+        for flags in [
+            &valid[1..],
+            &valid[..5],
+            &["--user", "--confirmed-update", "v1.2.3", "nonce"],
+            &[
+                "--admin",
+                "--handoff",
+                "1234",
+                "--confirmed-update",
+                "v1.2.3",
+                "nonce",
+            ],
+            &[
+                "--user",
+                "--handoff",
+                "0",
+                "--confirmed-update",
+                "v1.2.3",
+                "nonce",
+            ],
+            &[
+                "--user",
+                "--handoff",
+                "1234",
+                "--confirmed-update",
+                "latest",
+                "nonce",
+            ],
+        ] {
+            assert!(parse_startup_options(&args(flags)).is_err(), "{flags:?}");
+        }
     }
 
     #[test]

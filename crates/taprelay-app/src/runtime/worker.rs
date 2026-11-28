@@ -465,6 +465,9 @@ impl RuntimeHandle {
     pub fn stopped(&self) -> bool {
         self.stopped
     }
+    pub fn exited(&self) -> bool {
+        self.stopped && self.worker.is_none()
+    }
     pub fn take_notice(&mut self) -> Option<Notice> {
         self.notices.pop_front()
     }
@@ -600,6 +603,24 @@ impl RuntimeHandle {
             return Ok(());
         }
         self.enqueue(Kind::Shutdown, Box::new(|_| Ok(())))
+    }
+    pub fn stop_for_update(&mut self) -> Result<mpsc::Receiver<Result<()>>> {
+        let (done, stopped) = mpsc::channel();
+        self.update(move |runtime| {
+            let _ = done.send(runtime.stop_for_update());
+            Ok(())
+        })?;
+        Ok(stopped)
+    }
+
+    pub fn recover_after_update(&mut self, listening: bool) -> Result<()> {
+        if self.exited() {
+            *self = Self::new(self.config.clone())?;
+        }
+        self.update(move |runtime| {
+            runtime.start_bluetooth()?;
+            runtime.set_listening(listening)
+        })
     }
     pub fn resume(&mut self) -> Result<()> {
         self.update(|runtime| {

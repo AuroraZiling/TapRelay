@@ -34,23 +34,33 @@ For Apple Silicon, use `aarch64-apple-darwin`; the output directory ends in `-ar
 ## GitHub Actions release
 
 The [Desktop Release workflow](../.github/workflows/desktop-release.yml) runs when
-a `vX.Y.Z` tag is pushed. It builds, signs, notarizes, and packages arm64 and x64
-apps, then publishes their ZIPs alongside Windows after all jobs pass.
+a `vX.Y.Z` tag is pushed. It publishes a signed, notarized installer for each
+architecture, alongside its Velopack feed and full update package. The installer
+supports both `/Applications` and `~/Applications`.
 
 Add these repository secrets under **Settings → Secrets and variables → Actions**:
 
 | Secret | Value |
 | --- | --- |
-| `MACOS_CERTIFICATE_BASE64` | Base64 of the Developer ID Application certificate and private key exported as `.p12`. |
+| `MACOS_CERTIFICATE_BASE64` | Base64 of one `.p12` containing the existing Developer ID Application identity and a Developer ID Installer identity from the same team, both with their private keys. |
 | `MACOS_CERTIFICATE_PASSWORD` | Password set when exporting the `.p12`. |
 | `MACOS_NOTARY_KEY_BASE64` | Base64 of an App Store Connect team API key (`.p8`). |
 | `MACOS_NOTARY_KEY_ID` | The API key's Key ID. |
 | `MACOS_NOTARY_ISSUER` | The API key's Issuer ID. |
 
-CI resolves the signing identity from the imported P12 and signs with its SHA-1
-fingerprint. Export exactly one valid Developer ID Application identity, including
-its private key. `MACOS_SIGN_IDENTITY` is no longer needed.
+Export one identity of each type. The installer packages the existing TapRelay
+bundle (`io.github.auroraziling.taprelay`); retain the application signing team
+so macOS can recognize the app's previously granted permissions.
 
-For local distribution packaging, `TAPRELAY_SIGN_IDENTITY` accepts an exact
-certificate name or SHA-1 fingerprint. If omitted, the keychain must contain
-exactly one valid Developer ID Application identity.
+To reproduce the CI installer locally, install the workflow's pinned `vpk` tool,
+put both identities and the notarytool profile in the same keychain on the user
+keychain search list, and run:
+
+```sh
+TAPRELAY_NOTARY_PROFILE=taprelay scripts/package-macos.sh --release --notarize
+```
+
+The installer, `releases.osx-<arch>.json`, and its full `.nupkg` are written to
+`artifacts/`. To disambiguate identities, set `TAPRELAY_SIGN_IDENTITY` for the
+app or `TAPRELAY_INSTALL_IDENTITY` for the installer to an exact certificate
+name or SHA-1 fingerprint. Use `TAPRELAY_SIGN_KEYCHAIN` for a non-default keychain.

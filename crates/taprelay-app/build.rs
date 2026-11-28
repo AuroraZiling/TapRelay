@@ -52,6 +52,7 @@ BEGIN
     BEGIN
         BLOCK "040904b0"
         BEGIN
+            VALUE "CompanyName", "Artemis Li"
             VALUE "ProductName", "TapRelay"
             VALUE "FileDescription", "TapRelay"
             VALUE "FileVersion", "{windows_version}"

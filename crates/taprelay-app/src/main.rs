@@ -4,9 +4,11 @@ mod config;
 mod constants;
 mod gui;
 mod i18n;
+mod installation;
 mod logging;
 mod platform;
 mod runtime;
+mod updates;
 
 fn main() {
     if std::env::args().nth(1).as_deref() == Some("--bluetooth-worker") {
@@ -24,6 +26,7 @@ fn main() {
         };
         std::process::exit(code);
     }
+    installation::run_hooks();
     logging::install_panic_handler();
     if let Err(e) = gui::run() {
         platform::desktop::show_error(&format!("TapRelay: {e:#}"));

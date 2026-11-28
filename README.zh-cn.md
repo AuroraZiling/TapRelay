@@ -42,8 +42,8 @@
 
 ### Windows
 
-1. 从 [Releases](https://github.com/AuroraZiling/TapRelay/releases) 下载 `TapRelay_<version>_Windows_x64.zip`，解压到可写入的文件夹。
-2. 运行 `TapRelay.exe`。TapRelay 默认请求管理员权限；取消授权后仍会以普通权限运行，但快捷键可能无法用于以管理员身份运行的应用。
+1. 从 [Releases](https://github.com/AuroraZiling/TapRelay/releases) 下载并运行 `TapRelay_<version>_Windows_x64_Setup.exe`，为当前用户安装。如需便携版，下载 Windows ZIP，解压到可写入的文件夹后运行其中的 `TapRelay.exe`。
+2. 打开 TapRelay。安装不需要管理员权限，但应用启动时默认会请求管理员权限；取消授权后仍会以普通权限运行，但快捷键可能无法用于以管理员身份运行的应用。
 3. 在设置向导中启用所需功能，并设置快捷键。
 4. 在系统蓝牙设置中将接收设备与电脑配对并连接，然后在 TapRelay 中选择它。
 5. 在接收设备上开始播放，使用“测试播放/暂停”。
@@ -52,20 +52,24 @@
 
 macOS 版本[仍在迁移中](docs/migration-progress.zh-cn.md)。
 
-1. 从 [Releases](https://github.com/AuroraZiling/TapRelay/releases) 下载 macOS ZIP：
+1. 从 [Releases](https://github.com/AuroraZiling/TapRelay/releases) 下载与你的芯片匹配的 macOS 安装包（`.pkg`）：
   - Apple Silicon (M系列) 芯片选 `arm64`
   - Intel 选 `x64`
-2. 解压并将 `TapRelay.app` 放入“应用程序”。
+2. 打开安装包，将 TapRelay 安装到所有用户或自己的“应用程序”目录。
 3. 打开 TapRelay，按提示允许蓝牙、辅助功能和输入监控权限。
 4. 在设置向导中启用所需功能，并设置快捷键。
 5. 在接收设备的蓝牙设置中与 Mac 配对并连接，然后在 TapRelay 中选择它。
 6. 在接收设备上开始播放，使用“测试播放/暂停”。
 
-macOS 更新时，退出 TapRelay，再替换“应用程序”中的旧版本。
+### 检查更新
+
+TapRelay 在启动后稍作等待，再检查稳定版；持续运行时每 24 小时检查一次。可在**设置 → 关于**关闭自动检查，也可随时手动检查。收到新版提示后，可先查看更新日志，再决定是否更新。确认后，安装版才下载所选版本、保存配置并重启。Windows 便携版只打开该版本的 ZIP 下载链接；替换可执行文件前请先退出 TapRelay。
+
+**稍后提醒**会关闭本次提示，下次检查仍可提醒。**跳过此版本**只关闭这一版的自动提醒，手动检查仍能看到它。
 
 ## ⚙️ 设置与环境
 
-- Windows 解压目录需要允许写入，因为配置文件 `config.json` 和日志文件夹 `logs/` 都保存在 `TapRelay.exe` 旁。
+- Windows 安装版的程序位于 `%LOCALAPPDATA%\TapRelay`，配置文件 `config.json` 和日志文件夹 `logs/` 位于 `%APPDATA%\TapRelay`，卸载时保留。便携版的配置和日志保存在 `TapRelay.exe` 旁。
 - macOS 可在“设置”中打开相应文件夹。
 - 日志默认使用 `info` 等级。排查问题时，可运行 `TapRelay.exe --log-level debug` 记录更多细节；可选等级为 `off`、`error`、`warn`、`info`、`debug`、`trace`。
 - 系统蓝牙显示“已配对”或“已连接”，不代表接收设备已经能接收 TapRelay 的指令。如果 TapRelay 显示会话未就绪，请在接收设备的蓝牙设置中连接这台电脑，再检查 TapRelay 中的状态。

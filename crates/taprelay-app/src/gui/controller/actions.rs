@@ -33,7 +33,10 @@ impl Controller {
         if self.exit.is_some() && !matches!(name, Action::Show) {
             return Ok(());
         }
-        if !matches!(name, Action::Show | Action::Resume) {
+        if !matches!(
+            name,
+            Action::Show | Action::Resume | Action::LoadUpdateNotes
+        ) {
             self.runtime.consume_ui_input();
         }
         if (!self.passed || self.fatal.is_some())
@@ -45,6 +48,15 @@ impl Controller {
                     | Action::Retry
                     | Action::BluetoothSettings
             )
+            && !(self.fatal.is_none()
+                && matches!(
+                    name,
+                    Action::LoadUpdateNotes
+                        | Action::UpdateReleaseNotes
+                        | Action::AcceptUpdate
+                        | Action::SkipUpdate
+                        | Action::RemindUpdateLater
+                ))
         {
             return Ok(());
         }
@@ -63,6 +75,24 @@ impl Controller {
             return Ok(());
         }
         match name {
+            Action::SetAutoCheckUpdates => {
+                let enabled = action::toggle(value)?;
+                self.runtime.config.options.auto_check_updates = enabled;
+                self.updates.auto_changed(enabled, Instant::now());
+                self.save_pending = true;
+            }
+            Action::CheckUpdates => self.updates.check(true, Instant::now()),
+            Action::LoadUpdateNotes => self.updates.load_notes(),
+            Action::UpdateReleaseNotes => self.updates.open_release_notes()?,
+            Action::AcceptUpdate => self.accept_update()?,
+            Action::SkipUpdate | Action::RemindUpdateLater => {
+                if let Some(tag) = self.updates.dismiss()
+                    && name == Action::SkipUpdate
+                {
+                    self.runtime.config.options.skipped_update_version = Some(tag);
+                    self.save_pending = true;
+                }
+            }
             Action::EditMapping => {
                 self.mapping_command(ui, "edit", value)?;
             }
@@ -137,13 +167,9 @@ impl Controller {
             Action::ThirdPartyNotices => desktop::open(
                 "https://github.com/AuroraZiling/TapRelay/blob/main/THIRD_PARTY_NOTICES.md",
             )?,
-            Action::DataFolder => desktop::open(
-                &self
-                    .path
-                    .parent()
-                    .context("Missing data folder")?
-                    .to_string_lossy(),
-            )?,
+            Action::AppFolder => {
+                desktop::open(&crate::installation::app_directory()?.to_string_lossy())?
+            }
             Action::LogsFolder => {
                 desktop::open(&crate::logging::log_directory(&self.path)?.to_string_lossy())?
             }

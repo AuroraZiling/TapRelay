@@ -3,7 +3,7 @@ use crate::config::Config;
 use crate::runtime::Runtime;
 use taprelay_core::state::Snapshot;
 
-fn controller(state: Snapshot) -> (Controller, tempfile::TempDir) {
+pub(super) fn controller(state: Snapshot) -> (Controller, tempfile::TempDir) {
     let folder = tempfile::tempdir().unwrap();
     let mut config = Config::default();
     config.options.language = Language::from_name("en").unwrap();
@@ -43,7 +43,7 @@ fn controller(state: Snapshot) -> (Controller, tempfile::TempDir) {
     (controller, folder)
 }
 
-fn ready() -> Snapshot {
+pub(super) fn ready() -> Snapshot {
     Snapshot {
         adapter: true,
         peripheral: true,

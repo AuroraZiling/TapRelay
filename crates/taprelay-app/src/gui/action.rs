@@ -20,9 +20,12 @@ actions! {
     InputMonitoringSettings => "input-monitoring-settings",
     BluetoothPermissions => "bluetooth-permissions",
     NotificationSettings => "notification-settings",
-    DataFolder => "data-folder", LogsFolder => "logs-folder",
+    AppFolder => "app-folder", LogsFolder => "logs-folder",
     Repository => "repository", Homepage => "homepage",
     License => "license", ThirdPartyNotices => "third-party-notices",
+    CheckUpdates => "check-updates", SetAutoCheckUpdates => "set-auto-check-updates",
+    LoadUpdateNotes => "load-update-notes", UpdateReleaseNotes => "update-release-notes",
+    AcceptUpdate => "accept-update", SkipUpdate => "skip-update", RemindUpdateLater => "remind-update-later",
     // Payload: the device id the row was built from.
     Device => "device",
     PairDevice => "pair-device", DisconnectDevice => "disconnect-device",

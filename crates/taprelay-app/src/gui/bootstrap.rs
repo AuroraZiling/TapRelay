@@ -27,6 +27,13 @@ pub fn run() -> Result<()> {
     }
     logging::configure_level(startup.log_level)?;
     if let Some(pid) = startup.handoff {
+        #[cfg(windows)]
+        if let Some((_, nonce)) = &startup.confirmed_update {
+            administrator::accept_update_handoff(pid, nonce)?;
+        } else {
+            administrator::wait_for_parent(pid)?;
+        }
+        #[cfg(not(windows))]
         administrator::wait_for_parent(pid)?;
     } else if desktop::activate_existing() {
         return Ok(());
@@ -87,6 +94,10 @@ pub fn run() -> Result<()> {
         selected => selected.locale(),
     };
     let geometry = config.window.clone();
+    #[cfg(windows)]
+    let show_update = startup.confirmed_update.is_some();
+    #[cfg(not(windows))]
+    let show_update = false;
     // GPUI creates its NSApplication subclass before native menus/status items.
     // Creating a tray item earlier would instantiate plain NSApplication.
     let make_controller = move || -> Result<Controller> {
@@ -99,7 +110,15 @@ pub fn run() -> Result<()> {
             status,
             startup_error,
         )?;
+        if show_update {
+            controller.startup_pending = false;
+            controller.hidden = false;
+        }
         if controller.fatal.is_none() {
+            #[cfg(windows)]
+            if let Some((tag, _)) = &startup.confirmed_update {
+                controller.resume_confirmed_update(tag);
+            }
             controller.runtime.start_bluetooth()?;
         }
         Ok(controller)
@@ -150,8 +169,8 @@ pub fn run() -> Result<()> {
                 ..TitleBar::title_bar_options()
             }),
             window_min_size: Some(size(px(Geometry::MIN_WIDTH), px(Geometry::MIN_HEIGHT))),
-            show: false,
-            focus: false,
+            show: show_update,
+            focus: show_update,
             app_id: Some("TapRelay".into()),
             ..TitleBar::window_options()
         };

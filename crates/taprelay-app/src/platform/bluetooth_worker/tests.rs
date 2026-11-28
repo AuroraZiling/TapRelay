@@ -16,6 +16,7 @@ fn closed_watch_preserves_terminal_error_and_revokes_ready() {
         revision,
         stopping: Arc::new(AtomicBool::new(false)),
         worker: None,
+        unconfirmed: None,
     };
     tx.send_replace(Snapshot {
         ready: true,
@@ -279,19 +280,20 @@ impl Harness {
             .unwrap()
     }
 
-    fn stop(&mut self) {
+    fn stop(&mut self) -> Result<()> {
         self.handle.link.end();
         self.handle.stopping.store(true, Ordering::Release);
         let _ = self.resume.try_send(Duration::ZERO);
         if let Some(worker) = self.handle.worker.take() {
-            worker.join().unwrap();
+            return worker.join().unwrap().map_err(|unstopped| unstopped.error);
         }
+        Ok(())
     }
 }
 
 impl Drop for Harness {
     fn drop(&mut self) {
-        self.stop();
+        let _ = self.stop();
     }
 }
 
@@ -1065,7 +1067,7 @@ fn shutdown_retires_queued_and_pending_requests_without_sending_queued_input() {
             result: Ok(()),
         },
     );
-    h.stop();
+    h.stop().unwrap();
     assert!(matches!(
         pending.try_recv().unwrap(),
         Err(BackendError::Stale)
@@ -1143,7 +1145,7 @@ fn disconnect_cannot_publish_full_and_restart_completes_when_advertising() {
 
 #[test]
 fn failure_to_stop_old_process_never_starts_a_new_service_owner() {
-    let h = Harness::new();
+    let mut h = Harness::new();
     h.connected();
     let current = h.current();
     h.state.lock().unwrap().workers[current].stop_error = true;
@@ -1152,6 +1154,16 @@ fn failure_to_stop_old_process_never_starts_a_new_service_owner() {
     assert_eq!(h.current(), current);
     assert!(!h.snapshot().ready);
     assert!(h.snapshot().last_error.unwrap().contains("stop failure"));
+    assert!(
+        h.handle
+            .stop_and_wait()
+            .unwrap_err()
+            .to_string()
+            .contains("stop failure")
+    );
+    h.state.lock().unwrap().workers[current].stop_error = false;
+    h.handle.stop_and_wait().unwrap();
+    assert!(matches!(h.state.lock().unwrap().calls.last(), Some(Call::Stop(id)) if *id == current));
 }
 
 #[test]

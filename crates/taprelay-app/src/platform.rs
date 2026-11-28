@@ -45,6 +45,9 @@ pub trait InputSource {
     }
 }
 pub trait Transport {
+    fn stop_and_wait(&mut self) -> Result<()> {
+        Ok(())
+    }
     fn input_link(&self) -> Option<taprelay_core::passthrough::InputLink> {
         None
     }

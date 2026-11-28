@@ -33,6 +33,29 @@ GPUI Kit UI tests render production views in headless windows and exercise real 
 
 The default development profile prioritizes incremental builds and disk usage. Use `--profile debugging` for full project and dependency symbols. See [build profiles and measurements](docs/build-performance.md) for details.
 
+## Signing a desktop release
+
+The [Desktop Release workflow](.github/workflows/desktop-release.yml) builds
+and publishes Windows and macOS packages when you push a stable `vX.Y.Z` tag.
+Before the first signed release:
+
+- Restrict creation, movement and deletion of release tags to trusted maintainers.
+  Create the GitHub Environment `windows-signing`, allow deployment only from
+  those tags, and add the environment secrets `CERTUM_EMAIL` and `CERTUM_OTP`
+  (the long-lived SimplySign TOTP seed, not a six-digit code). Never put the seed
+  in a command line or build artifact. The signing step reuses a session on one
+  runner; it must not be cached between runs.
+- Have the certificate holder try the pinned `ssign` on a disposable executable
+  and check the result with `signtool verify /pa /v /tw`. For macOS, configure
+  [both Developer ID identities and the notary profile](docs/macos.md#github-actions-release).
+
+The workflow uploads four user downloads and three feed/full-package pairs to a
+draft. Restart a failed upload while the release is still a draft. Once published,
+ship corrections under a new version; do not replace the binaries for an existing
+tag. For Store or WinGet submissions, use the versioned
+`/releases/download/vX.Y.Z/TapRelay_X.Y.Z_Windows_x64_Setup.exe` URL, never
+`/releases/latest/download/`.
+
 ## Conduct and licensing
 
 Follow the [Code of conduct](CODE_OF_CONDUCT.md). Submit only work you have permission to contribute. Contributions to TapRelay's original code use the project's [GNU GPL version 3 only license](LICENSE) (`GPL-3.0-only`). Preserve license notices for code and assets from other projects.

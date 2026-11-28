@@ -27,6 +27,8 @@ impl Controller {
     }
 
     pub(in crate::gui) fn sync(&mut self, ui: &mut Presentation) {
+        self.updates.present(ui);
+        ui.auto_check_updates = self.runtime.config.options.auto_check_updates;
         if self.last_system_poll.elapsed() >= Duration::from_secs(1) {
             self.system_theme = desktop::system_dark();
             self.system_language = desktop::system_locale_id();
@@ -97,13 +99,11 @@ impl Controller {
             ui.input_permissions_ready = ready;
         }
         ui.app_version = crate::constants::VERSION.into();
-        ui.data_directory = self
-            .path
-            .parent()
-            .unwrap()
-            .to_string_lossy()
-            .as_ref()
-            .into();
+        ui.app_directory = crate::installation::app_directory()
+            .ok()
+            .or_else(|| self.path.parent().map(std::path::Path::to_path_buf))
+            .map(|dir| dir.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let s = &self.runtime.state;
         let flags = [s.adapter, s.peripheral, s.service, s.broadcasting];
         ui.bluetooth_available = s.adapter_state == taprelay_core::devices::AdapterState::Available;

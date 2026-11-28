@@ -29,6 +29,8 @@ lru = { version = "0.19.0", default-features = false }
 rust-i18n = "4.2.4"
 gpui-kit = "=0.9.1"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
+semver = "1.0.28"
+velopack = { version = "=1.2.161", features = ["public-utils"] }
 
 [build-dependencies]
 serde_json = "1.0.154"
@@ -37,6 +39,7 @@ embed-resource = "3.0.12"
 [dev-dependencies]
 gpui-kit = { version = "=0.9.1", features = ["test-support"] }
 time = { version = "0.3.55", features = ["macros"] }
+zip = { version = "8.6.0", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 raw-window-handle = "0.6.2"

@@ -1,6 +1,7 @@
 pub(crate) mod input;
 pub(crate) mod receiver;
 pub(crate) mod startup;
+pub(crate) mod updates;
 
 use crate::config::Geometry;
 
@@ -208,8 +209,12 @@ pub(super) struct Presentation {
     pub input_count: u64,
     pub progress_message: String,
     pub state_color: i32,
-    pub data_directory: String,
+    pub app_directory: String,
     pub app_version: String,
+    pub auto_check_updates: bool,
+    pub update_status: updates::UpdateStatus,
+    pub update_offer: Option<updates::UpdateOffer>,
+    pub update_dialog_open: bool,
     pub auto_listen: bool,
     pub passthrough_overlay: bool,
     pub passthrough_reverse_scroll: bool,

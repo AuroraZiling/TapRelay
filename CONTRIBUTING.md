@@ -29,6 +29,8 @@ cargo test --workspace --locked
 cargo build --workspace --locked
 ```
 
+[Dependency checks](.github/workflows/dependency-check.yml) run these commands on Windows x64 and both macOS architectures for pull requests that change dependencies, the toolchain or CI. They do not sign or publish packages.
+
 GPUI Kit UI tests render production views in headless windows and exercise real control events. They do not start Bluetooth, install input hooks, or validate real hardware. No UI code generation environment variable is required.
 
 The default development profile prioritizes incremental builds and disk usage. Use `--profile debugging` for full project and dependency symbols. See [build profiles and measurements](docs/build-performance.md) for details.
@@ -40,14 +42,16 @@ and publishes Windows and macOS packages when you push a stable `vX.Y.Z` tag.
 Before the first signed release:
 
 - Restrict creation, movement and deletion of release tags to trusted maintainers.
-  Create the GitHub Environment `windows-signing`, allow deployment only from
-  those tags, and add the environment secrets `CERTUM_EMAIL` and `CERTUM_OTP`
-  (the long-lived SimplySign TOTP seed, not a six-digit code). Never put the seed
-  in a command line or build artifact. The signing step reuses a session on one
-  runner; it must not be cached between runs.
+  Create the GitHub Environments `windows-signing` and `macos-signing`, allow
+  deployment only from `v*` tags, and add the environment secrets `CERTUM_EMAIL`
+  and `CERTUM_OTP` (the long-lived SimplySign TOTP seed, not a six-digit code)
+  to `windows-signing`. Never put the seed in a command line or build artifact.
+  The signing step reuses a session on one runner; it must not be cached between
+  runs.
 - Have the certificate holder try the pinned `ssign` on a disposable executable
-  and check the result with `signtool verify /pa /v /tw`. For macOS, configure
-  [both Developer ID identities and the notary profile](docs/macos.md#github-actions-release).
+  and check the result with `signtool verify /pa /v /tw`. For macOS, add
+  [both Developer ID identities and the notary profile](docs/macos.md#github-actions-release)
+  to the `macos-signing` environment.
 
 The workflow uploads four user downloads and three feed/full-package pairs to a
 draft. Restart a failed upload while the release is still a draft. Once published,

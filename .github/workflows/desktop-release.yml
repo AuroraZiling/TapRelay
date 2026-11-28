@@ -21,20 +21,11 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: nightly-2026-09-20
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-        with:
-          shared-key: windows-check
-      - run: cargo fmt --all -- --check
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - run: cargo test --workspace --locked
+      - uses: ./.github/actions/check-workspace
 
   build:
     name: Windows x64
@@ -47,13 +38,11 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       artifact-id: ${{ steps.artifact.outputs.artifact-id }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: nightly-2026-09-20
+      - run: rustup toolchain install --no-self-update
       - name: Set release version from tag
         id: version
         shell: python
@@ -84,11 +73,15 @@ jobs:
         with:
           shared-key: windows-release
       - run: cargo rustc --release --locked -p taprelay-app -- -C target-feature=+crt-static
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
+        with:
+          dotnet-version: '10.0.x'
       - name: Install pinned packaging tools
         shell: pwsh
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
           dotnet tool install vpk --version $env:VELOPACK_VERSION --tool-path "$env:RUNNER_TEMP/vpk"
+          & "$env:RUNNER_TEMP/vpk/vpk" --version
           "$env:RUNNER_TEMP/vpk" >> $env:GITHUB_PATH
           $zip = "$env:RUNNER_TEMP/ssign-windows-x86_64.zip"
           Invoke-WebRequest 'https://github.com/Le-Syl21/ssign/releases/download/v0.1.11/ssign-windows-x86_64.zip' -OutFile $zip
@@ -138,28 +131,18 @@ jobs:
             target: x86_64-apple-darwin
             runner: macos-26-intel
     runs-on: ${{ matrix.runner }}
+    environment: macos-signing
     timeout-minutes: 90
     permissions:
       contents: read
     env:
       MACOSX_DEPLOYMENT_TARGET: '13.0'
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: nightly-2026-09-20
-          components: rustfmt, clippy
-          targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-        with:
-          shared-key: macos-${{ matrix.arch }}
-      - run: cargo fmt --all -- --check
-      - run: cargo build --workspace --locked
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - run: cargo test --workspace --locked
+      - uses: ./.github/actions/check-workspace
       - name: Set release version from tag
         shell: python
         env:
@@ -184,10 +167,14 @@ jobs:
               out.write(f"TAPRELAY_VERSION={version}\n")
       - name: Build release
         run: cargo build --release --locked -p taprelay-app --target "${{ matrix.target }}"
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
+        with:
+          dotnet-version: '10.0.x'
       - name: Prepare Velopack
         run: |
           python3 -m unittest discover -s scripts/tests -p test_macos_signing_identity.py
           dotnet tool install vpk --version "$VELOPACK_VERSION" --tool-path "$RUNNER_TEMP/taprelay-vpk"
+          "$RUNNER_TEMP/taprelay-vpk/vpk" --version
           echo "$RUNNER_TEMP/taprelay-vpk" >> "$GITHUB_PATH"
       - name: Sign, notarize and package
         id: signing
@@ -282,7 +269,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -301,7 +288,7 @@ jobs:
           name: macos-x64-release
           path: release-assets
       - name: Publish GitHub Release
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           TAG_NAME: ${{ github.ref_name }}
           VERSION: ${{ needs.build.outputs.version }}
